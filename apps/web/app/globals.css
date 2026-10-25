@@ -1,0 +1,39 @@
+@import './tokens.css';
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+}
+a { color: var(--color-primary); }
+main { max-width: 440px; margin: 0 auto; padding: var(--space-xxl) var(--space-lg); }
+main.wide { max-width: 720px; }
+h1 { font-size: var(--font-size-headline); margin: 0 0 var(--space-xl); }
+h2 { font-size: var(--font-size-title); margin: var(--space-xl) 0 var(--space-md); }
+.brand { font-weight: 700; letter-spacing: -0.02em; color: var(--color-primary); text-decoration: none; font-size: var(--font-size-title); }
+header.top { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.stack { display: flex; flex-direction: column; gap: var(--space-lg); }
+.field { display: flex; flex-direction: column; gap: var(--space-xs); }
+.field span { font-weight: 500; }
+.field small { color: var(--color-text-muted); }
+input {
+  font: inherit; padding: var(--space-md); border-radius: var(--radius-md);
+  border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
+}
+input:focus-visible, .btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.btn {
+  font: inherit; font-weight: 500; border: 0; cursor: pointer; padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-md); background: var(--color-primary); color: var(--color-on-primary);
+}
+.btn[disabled] { opacity: 0.6; cursor: progress; }
+.btn.quiet { background: var(--color-surface-muted); color: var(--color-text); }
+.error { color: var(--color-danger); margin: 0; }
+.muted { color: var(--color-text-muted); }
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: var(--space-lg); }
+.row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-md); padding: var(--space-md) 0; border-bottom: 1px solid var(--color-border); }
+.row:last-child { border-bottom: 0; }
+.pill { font-size: var(--font-size-caption); padding: 2px var(--space-sm); border-radius: var(--radius-pill); background: var(--color-surface-muted); }

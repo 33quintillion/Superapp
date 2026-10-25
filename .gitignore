@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.next/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+apps/mobile/build/
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins*

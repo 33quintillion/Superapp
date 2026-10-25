@@ -1,0 +1,29 @@
+# Local development dependencies only. Never reuse these credentials outside your machine.
+name: nexa-dev
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: superapp
+      POSTGRES_PASSWORD: superapp_dev
+      POSTGRES_DB: superapp_dev
+    ports: ['127.0.0.1:5432:5432']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U superapp']
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:7.4-alpine
+    ports: ['127.0.0.1:6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+  # Catches all outgoing email locally. Web UI on http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.20
+    ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
+volumes:
+  pgdata:

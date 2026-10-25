@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-and-web:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: superapp
+          POSTGRES_PASSWORD: superapp_dev
+          POSTGRES_DB: superapp_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U superapp" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Design tokens are up to date
+        run: pnpm --filter @nexa/design-tokens test
+      - name: Type-check
+        run: pnpm -r lint
+      - name: API tests (real Postgres + Redis)
+        run: pnpm --filter @nexa/api test
+      - name: Build
+        run: pnpm -r build
+      - name: Web unit tests
+        run: pnpm --filter @nexa/web test
+      - name: Create e2e database
+        run: PGPASSWORD=superapp_dev psql -h localhost -U superapp -d superapp_test -c 'CREATE DATABASE superapp_e2e'
+      - name: Install Chromium for e2e
+        run: pnpm --filter @nexa/web exec playwright install --with-deps chromium
+      - name: Web end-to-end (browser → Next → API → Postgres/Redis/SMTP)
+        run: pnpm --filter @nexa/web test:e2e
+
+  mobile:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
