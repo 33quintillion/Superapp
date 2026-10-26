@@ -1,11 +1,11 @@
-import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 import { APP_CONFIG, AppConfig } from '../config/config';
 
 export type Queryable = Pick<PoolClient, 'query'>;
 
 @Injectable()
-export class DatabaseService implements OnModuleDestroy {
+export class DatabaseService implements OnApplicationShutdown {
   readonly pool: Pool;
 
   constructor(@Inject(APP_CONFIG) config: AppConfig) {
@@ -37,7 +37,8 @@ export class DatabaseService implements OnModuleDestroy {
     }
   }
 
-  async onModuleDestroy() {
+  /** After every module's onModuleDestroy, so sockets can still clean up while closing. */
+  async onApplicationShutdown() {
     await this.pool.end();
   }
 }
