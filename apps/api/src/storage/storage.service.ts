@@ -5,6 +5,7 @@ import {
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
+  PutBucketCorsCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -49,6 +50,22 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
     } catch {
       await this.internal.send(new CreateBucketCommand({ Bucket: this.bucket }));
       this.logger.log(`Created bucket ${this.bucket}`);
+    }
+    // Browsers upload straight to the bucket, so it has to allow the web origins. In
+    // staging and production this is set by infrastructure, like the bucket itself.
+    const origins = this.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+    if (origins.length === 0) return;
+    try {
+      await this.internal.send(
+        new PutBucketCorsCommand({
+          Bucket: this.bucket,
+          CORSConfiguration: {
+            CORSRules: [{ AllowedOrigins: origins, AllowedMethods: ['PUT', 'GET'], AllowedHeaders: ['*'], MaxAgeSeconds: 600 }],
+          },
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(`Could not set CORS on bucket ${this.bucket}: ${(err as Error).name}`);
     }
   }
 

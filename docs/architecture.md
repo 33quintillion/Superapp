@@ -12,7 +12,7 @@ The repository held only a one-line `README.md` when this work began. It had no 
  Browser ──> Next.js web (server layer) ──────────────┘           │                ──> Redis 7 (rate limits, presence, pub/sub fan-out)
    │          holds tokens in httpOnly cookies                    └──> SMTP provider (Mailpit locally)
    ├── WebSocket to the API with a one-time ticket
-   └── presigned PUT/GET ──> S3-compatible object storage (MinIO locally) <── API signs URLs, checks uploads
+   └── presigned PUT/GET ──> S3-compatible object storage (SeaweedFS locally) <── API signs URLs, checks uploads
 ```
 
 There is one modular backend, not microservices. Modules have clear boundaries (their own tables and services) so that a module can be split out later if load or team size calls for it. The modules are:
@@ -57,7 +57,7 @@ These are written up as ADRs in `docs/adr/`:
 | TypeScript | 5.9.3 |
 | ws (WebSocket server) | 8.21.2 |
 | AWS SDK for JavaScript (S3) | 3.1140.0 |
-| MinIO (local and CI object storage) | RELEASE.2025-04-22T22-12-26Z |
+| SeaweedFS (local and CI object storage) | 3.97 |
 | web_socket_channel (Flutter) | 3.0.3 |
 
 Newer majors were available (NestJS 12, Next 16). We chose the most recent majors with a long track record. Upgrading later is routine work.

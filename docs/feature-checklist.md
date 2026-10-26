@@ -51,7 +51,7 @@ Last full run (2026-10-26): API 105 tests passed; web e2e all steps passed; Flut
 | Mobile on a real device or emulator | 🟡 | Not run (no emulator here); `flutter analyze` is clean |
 
 ## Stage 3: Messaging and media
-Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Postgres, Redis and S3-compatible storage (MinIO in CI).
+Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Postgres, Redis and S3-compatible storage (SeaweedFS in CI).
 
 | Item | Status | Evidence / blocker |
 | --- | --- | --- |

@@ -12,7 +12,7 @@ for db in superapp_dev superapp_test superapp_e2e; do sudo -u postgres createdb 
 redis-server --daemonize yes
 ```
 
-For media, run MinIO as a binary (`minio server ~/minio-data`), or any S3-compatible service, and set the `S3_*` variables. The tests expect one on `http://localhost:9000` with the `minioadmin` credentials; override with `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID` and `TEST_S3_SECRET_ACCESS_KEY`. If MinIO isn't available, moto's S3 server works for local runs (`pip install 'moto[server]' && moto_server -p 9000`), but CI uses real MinIO because moto doesn't check signatures.
+For media, run any S3-compatible service and set the `S3_*` variables. docker-compose starts SeaweedFS (Apache-2.0) with the credentials in `infra/seaweedfs/s3.json`. The tests expect one on `http://localhost:9000` with the `minioadmin`/`minioadmin` credentials; override with `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID` and `TEST_S3_SECRET_ACCESS_KEY`. Without Docker, moto's S3 server works for local runs (`pip install 'moto[server]' && moto_server -p 9000`), but CI uses SeaweedFS because moto doesn't check signatures. MinIO no longer publishes its server image, so it is not used here. With `S3_AUTO_CREATE_BUCKET=true` the API creates the bucket and allows `CORS_ORIGINS` on it, because browsers upload to it directly.
 
 For email, run Mailpit as a binary (https://mailpit.axllent.org), or point `SMTP_URL` at any SMTP server you control.
 
