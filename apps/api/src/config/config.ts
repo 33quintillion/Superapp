@@ -31,6 +31,22 @@ const schema = z.object({
   PUBLIC_WEB_URL: z.url().default('http://localhost:3001'),
 
   RATE_LIMIT_DISABLED: z.stringbool().default(false),
+
+  /** S3-compatible object storage for media (MinIO locally, any S3 provider in staging/prod). */
+  S3_ENDPOINT: z.url().optional(),
+  /** Endpoint that clients use for presigned URLs, if it differs from the one the API uses. */
+  S3_PUBLIC_ENDPOINT: z.url().optional(),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'S3_BUCKET must be a valid bucket name'),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  S3_FORCE_PATH_STYLE: z.stringbool().default(true),
+  /** Creates the bucket at startup. For local development and tests only. */
+  S3_AUTO_CREATE_BUCKET: z.stringbool().default(false),
+
+  /** How often an open WebSocket re-checks that its session is still valid. */
+  WS_SESSION_RECHECK_SECONDS: z.coerce.number().int().positive().default(30),
+  WS_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(25),
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -51,6 +67,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.RATE_LIMIT_DISABLED && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
     throw new Error('RATE_LIMIT_DISABLED cannot be set in staging or production');
+  }
+  if (cfg.S3_AUTO_CREATE_BUCKET && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
+    throw new Error('S3_AUTO_CREATE_BUCKET cannot be set in staging or production; provision the bucket instead');
   }
   return cfg;
 }

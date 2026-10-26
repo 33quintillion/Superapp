@@ -4,13 +4,15 @@ import '../api/api_client.dart';
 import 'session_store.dart';
 
 class Profile {
-  Profile({required this.username, required this.displayName, required this.email, required this.emailVerified});
+  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified});
   factory Profile.fromJson(Map<String, dynamic> j) => Profile(
+        id: j['id'] as String? ?? '',
         username: j['username'] as String? ?? '',
         displayName: j['displayName'] as String? ?? '',
         email: j['email'] as String? ?? '',
         emailVerified: j['emailVerified'] as bool? ?? false,
       );
+  final String id;
   final String username;
   final String displayName;
   final String email;
@@ -67,6 +69,38 @@ class AuthController extends ChangeNotifier {
     });
     await _adopt(TokenPair.fromJson(res!));
   }
+
+  /// Calls the API as the signed-in user. Access tokens last 15 minutes, so a 401 is
+  /// answered by rotating the refresh token once and retrying; if that fails too, the
+  /// session really has ended and the user is signed out.
+  Future<Map<String, dynamic>?> authed(String method, String path, {Object? body}) async {
+    try {
+      return await api.send(method, path, body: body, accessToken: _accessToken);
+    } on ApiException catch (e) {
+      if (e.status != 401) rethrow;
+      if (!await _refresh()) {
+        await signOut();
+        rethrow;
+      }
+      return api.send(method, path, body: body, accessToken: _accessToken);
+    }
+  }
+
+  Future<bool>? _refreshing;
+  Future<bool> _refresh() => _refreshing ??= () async {
+        try {
+          final refresh = await store.readRefreshToken();
+          if (refresh == null) return false;
+          final pair = TokenPair.fromJson((await api.send('POST', '/v1/auth/refresh', body: {'refreshToken': refresh}))!);
+          _accessToken = pair.accessToken;
+          await store.writeRefreshToken(pair.refreshToken);
+          return true;
+        } on ApiException {
+          return false;
+        } finally {
+          _refreshing = null;
+        }
+      }();
 
   Future<void> signOut() async {
     final token = _accessToken;

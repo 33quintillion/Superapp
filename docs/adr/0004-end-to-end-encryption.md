@@ -1,6 +1,13 @@
-# ADR 0004: End-to-end encryption (planned for Stage 3)
+# ADR 0004: End-to-end encryption
 
-**Status:** proposed. Nothing in the code is end-to-end encrypted yet.
+**Status:** proposed, and **blocked on the licence review below**. Stage 3 messaging shipped without end-to-end encryption (see "Stage 3 as shipped"). Nothing in the code is end-to-end encrypted.
+
+## Stage 3 as shipped (2026-10-26)
+- Messages, reactions and media are encrypted **in transit** (TLS, set up at deployment) and stored **readable by the server** in Postgres and object storage. Encryption at rest depends on the database volume and the bucket's own encryption settings. **None of this is end-to-end encryption**, and the apps say "Not end-to-end encrypted yet".
+- We did not add libsignal, because its AGPL-3.0 licence still needs legal review (open question 1). We will not substitute a home-grown scheme.
+- Some features currently depend on the server reading content: server-side search, reply previews, and the file-signature check on uploads. When E2EE lands, these move to the client: search runs over the local store, previews are built from decrypted messages, and the server can check only sizes and limits, never content.
+- The sync design does not depend on content. Per-conversation counters, `clientId` deduplication, receipts and the change feed work unchanged on opaque ciphertext envelopes. E2EE will add per-device envelopes (one ciphertext per recipient device) alongside the existing message row.
+- Account deletion wipes the user's messages for everyone. Under E2EE, the server will delete the ciphertext it holds, but copies already on recipients' devices stay there. The app must say so.
 
 ## Decision (proposed)
 - One-to-one and small-group messages will use the **Signal protocol** (X3DH or PQXDH key agreement plus the Double Ratchet) through **libsignal**, the audited reference implementation. We will not write our own cryptography.

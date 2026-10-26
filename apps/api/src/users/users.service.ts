@@ -3,6 +3,8 @@ import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
 import { verifyPassword } from '../auth/password';
+import { MediaService } from '../media/media.service';
+import { MessagingService } from '../messaging/messaging.service';
 
 interface UserRow {
   id: string;
@@ -44,6 +46,8 @@ export class UsersService {
   constructor(
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
+    private readonly messaging: MessagingService,
+    private readonly media: MediaService,
   ) {}
 
   async me(userId: string) {
@@ -108,13 +112,15 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
       this.db.query('SELECT blocked_id, created_at FROM blocks WHERE blocker_id = $1', [userId]),
       this.db.query('SELECT id, subject_type, subject_id, reason, details, status, created_at FROM reports WHERE reporter_id = $1', [userId]),
       this.db.query('SELECT action, host(ip) AS ip, created_at FROM audit_log WHERE actor_id = $1 ORDER BY created_at', [userId]),
+      this.messaging.exportFor(userId),
+      this.db.query(`SELECT id, kind, content_type, byte_size, file_name, state, created_at FROM media WHERE owner_id = $1 ORDER BY created_at`, [userId]),
     ]);
     await this.audit.record({ actorId: userId, action: 'account.exported' });
     return {
@@ -126,6 +132,9 @@ export class UsersService {
       blocks: blocks.rows,
       reportsFiled: reports.rows,
       securityLog: audit.rows,
+      // Messages you sent. Files are listed; download them from the app while signed in.
+      messagesSent: messages,
+      mediaUploaded: media.rows,
     };
   }
 
@@ -141,11 +150,13 @@ export class UsersService {
   /**
    * Deletion scrubs personal data immediately and keeps only a tombstone row (id, state,
    * deleted_at) so foreign keys from audit and safety records stay valid. Reports the
-   * user filed are kept for safety review with the reporter detached. See docs/security-privacy.md.
+   * user filed are kept for safety review with the reporter detached. Messages they sent
+   * are wiped for everyone and their files deleted. See docs/security-privacy.md.
    */
   async deleteAccount(userId: string, password: string) {
     await this.confirmPassword(userId, password);
-    await this.db.tx(async (tx) => {
+    const mediaIds = await this.db.tx(async (tx) => {
+      const sentMedia = await this.messaging.scrubUser(userId, tx);
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),
            email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL,
@@ -162,7 +173,11 @@ export class UsersService {
       await this.db.query('UPDATE reports SET reporter_id = NULL WHERE reporter_id = $1', [userId], tx);
       await this.db.query('UPDATE audit_log SET ip = NULL WHERE actor_id = $1', [userId], tx);
       await this.audit.record({ actorId: userId, action: 'account.deleted' }, tx);
+      const owned = await this.db.query<{ id: string }>(`SELECT id FROM media WHERE owner_id = $1`, [userId], tx);
+      return [...new Set([...sentMedia, ...owned.rows.map((r) => r.id)])];
     });
+    // Stored files go once nothing references them (a forwarded copy keeps its own reference).
+    for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);
   }
 
   private async confirmPassword(userId: string, password: string) {

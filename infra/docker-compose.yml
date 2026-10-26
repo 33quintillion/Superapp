@@ -21,9 +21,19 @@ services:
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
+  # S3-compatible storage for chat media. Console on http://localhost:9001
+  # S3-compatible object storage (Apache-2.0). S3 API on http://localhost:9000
+  s3:
+    image: chrislusf/seaweedfs:3.97
+    command: server -s3 -s3.port=9000 -s3.config=/etc/seaweedfs/s3.json
+    ports: ['127.0.0.1:9000:9000']
+    volumes:
+      - s3data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
   # Catches all outgoing email locally. Web UI on http://localhost:8025
   mailpit:
     image: axllent/mailpit:v1.20
     ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
 volumes:
   pgdata:
+  s3data:

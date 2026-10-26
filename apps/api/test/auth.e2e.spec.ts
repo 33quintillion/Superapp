@@ -24,7 +24,7 @@ describe('health', () => {
     expect((await req(ctx.app, 'GET', '/health/live')).status).toBe(200);
     const ready = await req(ctx.app, 'GET', '/health/ready');
     expect(ready.status).toBe(200);
-    expect(ready.body.checks).toEqual({ database: 'ok', redis: 'ok' });
+    expect(ready.body.checks).toEqual({ database: 'ok', redis: 'ok', storage: 'ok' });
   });
 
   it('returns a structured 404 with a request id', async () => {

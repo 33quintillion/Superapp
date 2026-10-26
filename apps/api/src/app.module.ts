@@ -12,6 +12,13 @@ import { MailService } from './mail/mail.service';
 import { RedisService } from './redis/redis.service';
 import { SafetyController } from './safety/safety.controller';
 import { SafetyService } from './safety/safety.service';
+import { MediaController } from './media/media.controller';
+import { MediaService } from './media/media.service';
+import { MessagingController } from './messaging/messaging.controller';
+import { MessagingService } from './messaging/messaging.service';
+import { RealtimeBus } from './realtime/realtime-bus.service';
+import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
+import { StorageService } from './storage/storage.service';
 import { UsersController } from './users/users.controller';
 import { UsersService } from './users/users.service';
 
@@ -21,7 +28,16 @@ export class AppModule {
   static forConfig(config: AppConfig): DynamicModule {
     return {
       module: AppModule,
-      controllers: [HealthController, AuthController, SessionsController, UsersController, SafetyController],
+      controllers: [
+        HealthController,
+        AuthController,
+        SessionsController,
+        UsersController,
+        SafetyController,
+        MessagingController,
+        MediaController,
+        RealtimeController,
+      ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
         DatabaseService,
@@ -34,6 +50,11 @@ export class AppModule {
         AuthService,
         UsersService,
         SafetyService,
+        StorageService,
+        MediaService,
+        RealtimeBus,
+        MessagingService,
+        RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],
     };

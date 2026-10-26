@@ -31,6 +31,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Start SeaweedFS (S3-compatible storage that checks signatures, for media tests)
+        run: |
+          docker run -d --name s3 -p 9000:9000 -v "$PWD/infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:3.97 server -s3 -s3.port=9000 -s3.config=/etc/seaweedfs/s3.json
+          for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:9000/ && exit 0; sleep 1; done
+          docker logs s3; exit 1
       - run: pnpm install --frozen-lockfile
       - name: Design tokens are up to date
         run: pnpm --filter @nexa/design-tokens test
