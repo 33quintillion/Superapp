@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
+import '../chat/chat_controller.dart';
+import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
+import 'chat_screens.dart';
 
 /// Shared scaffold for the signed-out forms: one column, max 420 px, scrolls on small screens.
 class _FormPage extends StatelessWidget {
@@ -144,12 +149,33 @@ class _RegisterScreenState extends State<RegisterScreen> with _Submitting {
       ]);
 }
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.auth});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key, required this.auth, this.connectSocket});
   final AuthController auth;
+  final SocketFactory? connectSocket;
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  late final ChatController chat = ChatController(auth: widget.auth, wsBase: wsBaseFor(widget.auth.api.baseUrl), connect: widget.connectSocket);
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(chat.start().catchError((_) {}));
+  }
+
+  @override
+  void dispose() {
+    chat.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final auth = widget.auth;
     final p = auth.profile!;
     return Scaffold(
       appBar: AppBar(title: const Text('Nexa'), actions: [
@@ -164,10 +190,23 @@ class HomeScreen extends StatelessWidget {
         if (!p.emailVerified)
           const ListTile(leading: Icon(Icons.mark_email_unread_outlined), title: Text('Check your inbox to confirm your email address.')),
         const Divider(),
+        ListenableBuilder(
+          listenable: chat,
+          builder: (context, _) {
+            final unread = chat.conversations.fold<int>(0, (n, c) => n + c.unreadCount);
+            return ListTile(
+              key: const Key('open-chats'),
+              leading: const Icon(Icons.chat_bubble_outline),
+              title: const Text('Chats'),
+              subtitle: const Text('Not end-to-end encrypted yet'),
+              trailing: unread > 0 ? Badge(label: Text('$unread')) : const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatListScreen(chat: chat))),
+            );
+          },
+        ),
         const ListTile(
           leading: Icon(Icons.construction_outlined),
-          title: Text('Chats, calls and the feed arrive in later stages.'),
-          subtitle: Text('This build covers accounts and sign-in only.'),
+          title: Text('Calls and the feed arrive in later stages.'),
         ),
       ]),
     );
