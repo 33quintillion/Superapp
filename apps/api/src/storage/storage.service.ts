@@ -73,12 +73,20 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
     await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }));
   }
 
-  /** Content type and length are signed, so the client must upload exactly what it declared. */
-  presignPut(key: string, contentType: string, size: number, expiresIn: number) {
-    return getSignedUrl(this.signer, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType, ContentLength: size }), {
-      expiresIn,
-      signableHeaders: new Set(['content-type', 'content-length']),
-    });
+  /**
+   * Content type, length and (if given) disposition are signed, so the client must upload
+   * exactly what it declared. The disposition is stored with the object because not every
+   * S3-compatible server honours the response override on presigned GETs.
+   */
+  presignPut(key: string, contentType: string, size: number, expiresIn: number, contentDisposition?: string) {
+    return getSignedUrl(
+      this.signer,
+      new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType, ContentLength: size, ContentDisposition: contentDisposition }),
+      {
+        expiresIn,
+        signableHeaders: new Set(['content-type', 'content-length', ...(contentDisposition ? ['content-disposition'] : [])]),
+      },
+    );
   }
 
   presignGet(key: string, expiresIn: number, opts: { downloadName?: string; contentType?: string } = {}) {
@@ -126,7 +134,7 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
 }
 
 /** RFC 6266 attachment header with an ASCII fallback and a UTF-8 filename*. */
-function contentDisposition(name: string) {
+export function contentDisposition(name: string) {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }

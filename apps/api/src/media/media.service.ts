@@ -3,7 +3,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppError, Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
-import { StorageService } from '../storage/storage.service';
+import { contentDisposition, StorageService } from '../storage/storage.service';
 import { ALLOWED_TYPES, MAX_BYTES, MAX_VOICE_MS, MediaKind, matchesSignature, SNIFF_BYTES } from './media-types';
 
 export interface MediaRow {
@@ -75,10 +75,17 @@ export class MediaService {
       // The key never contains anything the client chose.
       [userId, r.kind, r.contentType, r.byteSize, r.fileName, `media/${userId}/${randomUUID()}`, r.durationMs ?? null, r.width ?? null, r.height ?? null],
     );
-    const url = await this.storage.presignPut(m!.object_key, r.contentType, r.byteSize, UPLOAD_URL_TTL);
+    // Documents are always downloaded, never rendered by the browser.
+    const disposition = r.kind === 'file' ? contentDisposition(r.fileName || 'file') : undefined;
+    const url = await this.storage.presignPut(m!.object_key, r.contentType, r.byteSize, UPLOAD_URL_TTL, disposition);
     return {
       media: mediaDto(m!),
-      upload: { method: 'PUT', url, headers: { 'content-type': r.contentType }, expiresIn: UPLOAD_URL_TTL },
+      upload: {
+        method: 'PUT',
+        url,
+        headers: { 'content-type': r.contentType, ...(disposition ? { 'content-disposition': disposition } : {}) },
+        expiresIn: UPLOAD_URL_TTL,
+      },
     };
   }
 
