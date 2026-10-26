@@ -8,7 +8,7 @@ export default async function Home() {
   return (
     <main className="stack">
       <h1>Messaging, social and services in one place.</h1>
-      <p className="muted">This early build supports accounts: sign-up, sign-in, two-step verification, and device management.</p>
+      <p className="muted">This early build supports accounts and one-to-one chats with photos, files and voice notes. Chats are not end-to-end encrypted yet.</p>
       <Link className="btn" href="/register" style={{ textAlign: 'center', textDecoration: 'none' }}>
         Create an account
       </Link>

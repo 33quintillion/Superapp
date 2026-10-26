@@ -25,6 +25,12 @@ const env = {
   PORT: String(API_PORT),
   LOG_LEVEL: 'warn',
   TRUST_PROXY: 'true',
+  CORS_ORIGINS: WEB,
+  S3_ENDPOINT: process.env.E2E_S3_ENDPOINT ?? 'http://127.0.0.1:9000',
+  S3_BUCKET: 'nexa-e2e',
+  S3_ACCESS_KEY_ID: process.env.E2E_S3_ACCESS_KEY_ID ?? 'minioadmin',
+  S3_SECRET_ACCESS_KEY: process.env.E2E_S3_SECRET_ACCESS_KEY ?? 'minioadmin',
+  S3_AUTO_CREATE_BUCKET: 'true',
 };
 
 const procs = [];
@@ -45,15 +51,126 @@ async function waitFor(url) {
 }
 function assert(cond, msg) { if (!cond) throw new Error(`Assertion failed: ${msg}`); }
 
+// Smallest valid PNG (1x1).
+const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
+
+/** Two people chatting in two browsers: live delivery, receipts, typing, offline recovery, media, search. */
+async function chatFlow(browser, API, tag, step) {
+  const people = [];
+  for (const name of ['ana', 'ben']) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'chat passphrase 789', displayName: name === 'ana' ? 'Ana' : 'Ben' };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${people.length + 10}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    if (process.env.E2E_DEBUG) {
+      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
+      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
+    }
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', u.email);
+    await page.fill('input[name=password]', u.password);
+    await page.click('button[type=submit]');
+    await page.waitForURL(`${WEB}/account`);
+    people.push({ ...u, ctx, page });
+  }
+  const [ana, ben] = people;
+  const bubble = (page, body) => page.locator(`[data-testid=msg][data-body="${body}"]`);
+
+  await ana.page.goto(`${WEB}/chats`);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await ana.page.fill('input[name=username]', ben.username);
+  await ana.page.click('form.new-chat button');
+  await ana.page.waitForSelector(`[data-testid="peer-name"]:has-text("Ben")`);
+  await ben.page.goto(`${WEB}/chats`);
+  await ben.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await ben.page.waitForSelector(`[data-testid="peer-name"]:has-text("Ana")`);
+  step('chat opened by username; both browsers connected over WebSocket');
+
+  await ben.page.waitForSelector('[data-testid=presence]:has-text("online")');
+  await ana.page.type('input[name=message]', 'hello from ana');
+  await ben.page.waitForSelector('[data-testid=typing]');
+  step('presence and typing indicator shown live');
+
+  await ana.page.press('input[name=message]', 'Enter');
+  await bubble(ben.page, 'hello from ana').waitFor();
+  // Ben has the chat open, so it's marked read and Ana's ticks turn to "read".
+  await bubble(ana.page, 'hello from ana').locator('[data-testid=ticks].read').waitFor();
+  step('message delivered live and read receipt returned');
+
+  await ben.page.fill('input[name=message]', 'hi ana');
+  await ben.page.press('input[name=message]', 'Enter');
+  await bubble(ana.page, 'hi ana').waitFor();
+  step('reply delivered the other way');
+
+  // Ben drops offline. Ana keeps sending; Ben sends too (queued in the outbox).
+  await ben.ctx.setOffline(true);
+  await ben.page.waitForSelector('[data-testid=conn]:has-text("Offline")');
+  for (const body of ['missed one', 'missed two']) {
+    await ana.page.fill('input[name=message]', body);
+    await ana.page.press('input[name=message]', 'Enter');
+    await bubble(ana.page, body).locator('[data-testid=ticks]:not(:has-text("sending"))').waitFor();
+  }
+  await ben.page.fill('input[name=message]', 'sent while offline');
+  await ben.page.press('input[name=message]', 'Enter');
+  await bubble(ben.page, 'sent while offline').locator('[data-testid=ticks]:has-text("sending")').waitFor();
+  await ben.ctx.setOffline(false);
+  await ben.page.waitForSelector('[data-testid=conn]:has-text("Connected")', { timeout: 20000 });
+  await bubble(ben.page, 'missed one').waitFor();
+  await bubble(ben.page, 'missed two').waitFor();
+  await bubble(ana.page, 'sent while offline').waitFor();
+  const benBodies = await ben.page.locator('[data-testid=msg]').evaluateAll((els) => els.map((e) => e.dataset.body));
+  assert(
+    JSON.stringify(benBodies) === JSON.stringify(['hello from ana', 'hi ana', 'missed one', 'missed two', 'sent while offline']),
+    `order after reconnect: ${benBodies}`,
+  );
+  assert((await bubble(ana.page, 'sent while offline').count()) === 1, 'queued message arrives exactly once');
+  step('offline device catches up in order; queued send delivered once after reconnect');
+
+  const reactTarget = bubble(ben.page, 'hello from ana');
+  await reactTarget.locator('.actions summary').click();
+  await reactTarget.locator('button[aria-label="React 👍"]').click();
+  await bubble(ana.page, 'hello from ana').locator('[data-testid=reactions]:has-text("👍")').waitFor();
+  step('reaction shows up for the sender');
+
+  await ana.page.setInputFiles('[data-testid=file-input]', { name: 'dot.png', mimeType: 'image/png', buffer: PNG });
+  const img = ben.page.locator('[data-testid=media-image]');
+  await img.waitFor();
+  await ben.page.waitForFunction(() => document.querySelector('[data-testid=media-image]')?.naturalWidth === 1);
+  step('photo uploaded straight to object storage and shown to the other person');
+
+  await ben.page.fill('input[name=q]', 'missed');
+  await ben.page.press('input[name=q]', 'Enter');
+  await ben.page.waitForSelector('[data-testid=search-results] >> text=missed one');
+  step('message search');
+
+  const proxied = await ana.page.evaluate(async () => (await fetch('/api/chat/me/export')).status);
+  assert(proxied === 404, 'chat proxy only exposes messaging endpoints');
+  const csrf = await fetch(`${WEB}/api/chat/conversations/direct`, { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });
+  assert(csrf.status === 403, 'cross-site writes through the proxy are refused');
+  step('chat proxy is limited to messaging and refuses cross-site writes');
+
+  for (const p of people) await p.ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
 let browser;
 let failed = false;
 try {
   await exec('node', ['dist/src/database/migrate.cli.js'], { cwd: apiDir, env });
+  // Start each run with empty rate-limit counters, as CI does.
+  const Redis = createRequire(join(apiDir, 'package.json'))('ioredis');
+  const redis = new Redis(env.REDIS_URL);
+  await redis.flushdb();
+  await redis.quit();
   run('node', ['dist/src/main.js'], { cwd: apiDir, env });
   run('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], {
     cwd: join(here, '..'),
-    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, NODE_ENV: 'production' },
+    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, NODE_ENV: 'production' },
   });
   await waitFor(`http://127.0.0.1:${API_PORT}/health/ready`);
   await waitFor(`${WEB}/sign-in`);
@@ -151,6 +268,8 @@ try {
   await page.waitForURL(`${WEB}/account`);
   assert(await page.isVisible('text=On'), 'account shows two-step on');
   step('two-step sign-in: wrong code refused, right code accepted');
+
+  await chatFlow(browser, API, tag, step);
 
   console.log('\nWeb e2e: all checks passed');
 } catch (err) {

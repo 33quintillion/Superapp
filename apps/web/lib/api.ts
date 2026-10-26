@@ -63,3 +63,17 @@ async function forwardedFor(): Promise<string | null> {
     return null; // outside a request scope
   }
 }
+
+/** Passes a request body through unchanged (used by the chat proxy). Returns the raw response. */
+export async function forwardToApi(method: string, path: string, accessToken: string, body?: string) {
+  const reqHeaders: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${accessToken}` };
+  if (body) reqHeaders['content-type'] = 'application/json';
+  const clientIp = await forwardedFor();
+  if (clientIp) reqHeaders['x-forwarded-for'] = clientIp;
+  try {
+    const res = await fetch(`${API_URL}${path}`, { method, headers: reqHeaders, body: body || undefined, cache: 'no-store' });
+    return { status: res.status, body: await res.text() };
+  } catch {
+    return { status: 503, body: JSON.stringify({ error: { code: 'api_unreachable', message: 'The service is unavailable right now.' } }) };
+  }
+}
