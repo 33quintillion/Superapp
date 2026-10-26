@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-26): API 149 tests passed; web e2e all steps passed. Flutter was not changed in Stage 4 (8 tests passed and `flutter analyze` clean at the end of Stage 3).
+Last full run (2026-10-26, Stage 5): API 184 tests passed; web e2e all steps passed; Flutter 11 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -56,7 +56,7 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Item | Status | Evidence / blocker |
 | --- | --- | --- |
 | One-to-one conversations (one per pair, symmetric) | ✅ | `messaging.e2e › direct conversations` |
-| Group chats with admins and member permissions | ⬜ | Schema has roles; creation and admin rules are Stage 5 |
+| Group chats with admins and member permissions | ✅ | Built in Stage 5, see below |
 | Text messages, replies, mentions | ✅ | `messaging.e2e › validates content, replies and mentions` |
 | Reactions (one per person, change or remove) | ✅ | `messaging.e2e › keeps one reaction per person…`; web e2e; Flutter `chat_test` |
 | Edit (sender, 15 min) and delete for everyone (sender, 48 h) or for me | ✅ | `messaging.e2e › editing, deleting…` |
@@ -114,5 +114,34 @@ Push services are exercised against local servers that speak the real protocols 
 | Durable outbox (survives app restart) and background sync on mobile | ⬜ | Planned |
 | Queue metrics and alerting | ⬜ | Stage 10 monitoring |
 
-## Stages 5 to 10
-Not started. See `plan.md`. Calls, social, business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.
+## Stage 5: Social
+Who can see a post, story, comment, community or file is decided in Postgres by shared SQL functions (`can_view_post`, `can_view_story`, `can_view_community` and friends in `migrations/0004_social.sql`), so every list, single read and media download applies the same rules. People who blocked each other never see each other's posts, stories, comments or likes.
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| Group chats: create (up to 256), title and description, owner/admin/member roles | ✅ | `groups.e2e › creates a group…`, `› validates the title…`; web e2e; Flutter `social_test › groups` |
+| "Who can add me to groups" privacy setting (everyone, people I follow, nobody) and blocks respected when adding | ✅ | `groups.e2e › respects who can add me to groups, and blocks`; Flutter shows the refusal |
+| New members only see messages from when they joined | ✅ | `groups.e2e › shows people added later only what was sent after they joined` |
+| Admins-only messaging, admins-only info editing, who can add people | ✅ | `groups.e2e › enforces admins-only…`, `› lets only admins add…`; web e2e (composer closes live); Flutter `social_test` |
+| Role hierarchy for promote, demote and remove; ownership passes on when the owner leaves or deletes their account | ✅ | `groups.e2e › applies the role hierarchy…`, `› passes ownership on…`, `› removes a deleted account…` |
+| Group notices ("Ada added Ben") and live updates to members; removed people are told | ✅ | `groups.e2e › announces changes…`; web e2e; Flutter `social_test` |
+| Follow and unfollow; private accounts approve follow requests | ✅ | `social.e2e › follows`; web e2e approves a request from the account page |
+| Posts with audiences (everyone, followers, only me), photos, likes, comments, shares that never widen the original audience | ✅ | `social.e2e › posts and the feed`; web e2e (followers-only photo post, like, comment, non-follower can't see it); Flutter `social_test › feed` (text posts) |
+| Retry-safe posting (clientId) | ✅ | `social.e2e › is idempotent on clientId…` |
+| Home feed (own posts, people you follow, communities you joined), newest first with stable paging | ✅ | `social.e2e › builds the feed…` |
+| Stories: text and photo, 24-hour expiry with a sweep that deletes files, followers-only option, view tracking visible only to the author | ✅ | `social.e2e › stories`; web e2e; Flutter `social_test › feed` (text stories, marked seen) |
+| Communities and channels: public or private, join and request to join, approve, ban, roles, admins-only posting in channels, owner hand-over and deletion | ✅ | `social.e2e › communities and channels`; web e2e; Flutter `social_test › communities` |
+| Community moderation: remove posts and comments with a reason (audited), ban, rank checks | ✅ | `social.e2e › moderates…`; web e2e (moderator removes a post) |
+| Reports on posts, comments, stories and communities | ✅ (user side) | `social.e2e › accepts reports…`; Flutter reports a post. The review queue is the Stage 7 admin dashboard |
+| Spam protection: per-person rate limits on posts (30/h), comments (120/h), likes (600/h), stories (50/day), follows (200/day), community creation (5/day) and joins (100/day), group creation (20/h) | 🟡 | Limits are wired through the shared limiter, which `auth.e2e › rate limiting` tests; the social limits themselves have no dedicated test yet. No spam classifier |
+| Export and account deletion include all social data; deactivated accounts' posts are hidden | ✅ | `social.e2e › exports social data…`, `› hides a deactivated account’s posts` |
+| Web: groups, feed, profiles with follow, stories, communities, privacy settings | ✅ for the flows in the browser test | `apps/web/e2e/run.mjs › socialFlow` |
+| Flutter: groups, feed, stories, comments, posting, communities | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/social_test.dart` |
+| Flutter: attach photos to posts and photo stories | ⬜ | The app shows a photo count and text; picking photos needs the same file-picker work as chat attachments |
+| Notifications for follows, likes, comments and requests; live feed updates | ⬜ | Feed refreshes on pull; chat push is unaffected |
+| Moderation dashboard for reports | ⬜ | Stage 7 |
+| Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |
+| Feed performance at scale (fan-out on write, caching) | ⬜ | Fan-out on read today; measure in Stage 9 |
+
+## Stages 6 to 10
+Not started. See `plan.md`. Calls, business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.

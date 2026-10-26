@@ -2,7 +2,7 @@
 
 Nexa is a working codename for a messaging, social, services and payments app for Android, iOS and the web. Its brand, interface and code are all original. Run a trademark search before using the name in public.
 
-**Status: Stages 1 to 3 are in place: foundation, accounts, and one-to-one chats with media. Stage 4 push notifications work in browsers; iPhone and Android need Apple and Firebase credentials ([`docs/push.md`](docs/push.md)).** Chats are **not end-to-end encrypted** yet (blocked on a licence review, see ADR 0004). Group chats, calls, social, business, payments and mini-apps are not built yet. [`docs/feature-checklist.md`](docs/feature-checklist.md) shows what is implemented, what is tested, and what is blocked.
+**Status: Stages 1 to 3 are in place: foundation, accounts, and chats with media. Stage 4 push notifications work in browsers; iPhone and Android need Apple and Firebase credentials ([`docs/push.md`](docs/push.md)). Stage 5 adds group chats, follows, a feed with posts and stories, and communities with moderation.** Chats are **not end-to-end encrypted** yet (blocked on a licence review, see ADR 0004). Calls, business, payments and mini-apps are not built yet. [`docs/feature-checklist.md`](docs/feature-checklist.md) shows what is implemented, what is tested, and what is blocked.
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ Sent emails show up in Mailpit at http://localhost:8025. To work without Docker,
 ## Tests
 
 ```bash
-pnpm --filter @nexa/api test        # 149 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
+pnpm --filter @nexa/api test        # 184 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
 pnpm --filter @nexa/web test        # cookie/secret-exposure guards
 pnpm --filter @nexa/web test:e2e    # Chromium → Next → API → Postgres/Redis/SMTP/S3, including two people chatting (needs both apps built)
 pnpm --filter @nexa/design-tokens test
