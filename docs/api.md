@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3000` locally. Requests and responses are JSON. Authenticated routes need `Authorization: Bearer <accessToken>`.
 
-Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `unauthorized` / `invalid_credentials` (401), `not_found` (404), `email_taken` / `username_taken` (409), `rate_limited` (429, with a `Retry-After` header).
+Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` (403), `not_found` (404), `email_taken` / `username_taken` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` (409), `rate_limited` (429, with a `Retry-After` header).
 
 A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 
@@ -10,7 +10,7 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/health/live` | Process is up |
-| GET | `/health/ready` | `{ status, checks: { database, redis } }`, 503 if degraded |
+| GET | `/health/ready` | `{ status, checks: { database, redis, storage } }`, 503 if degraded |
 
 ## Auth
 | Method | Path | Auth | Body → Response |
@@ -53,3 +53,49 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | POST | `/v1/blocks` | ✓ | `{ userId }` → 204 |
 | DELETE | `/v1/blocks/:userId` | ✓ | 204 |
 | POST | `/v1/reports` | ✓ | `{ subjectType, subjectId, reason, details? }` → 201 |
+
+## Conversations
+Messages are **not end-to-end encrypted** yet; see [ADR 0004](adr/0004-end-to-end-encryption.md). Sync rules (ordering, retries, receipts) are in [`realtime.md`](realtime.md). Every route returns 404 for conversations you are not in.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/conversations` | ✓ | `?archived=false&limit=30&cursor=` → `{ conversations, nextCursor }`, newest activity first |
+| POST | `/v1/conversations/direct` | ✓ | `{ userId }` → the one direct chat with that user (created if needed). 404 if the user doesn't exist or either has blocked the other |
+| GET | `/v1/conversations/:id` | ✓ | `{ id, kind, lastSeq, lastMessage, unreadCount, mutedUntil, archived, peerId, members: [{ userId, username, displayName, role, lastDeliveredSeq, lastReadSeq }] }` |
+| PATCH | `/v1/conversations/:id` | ✓ | Your own settings: `{ mutedUntil?: ISO date \| null, archived?: boolean }` |
+| GET | `/v1/conversations/:id/messages` | ✓ | `?before=<seq>` (history, default newest) or `?after=<seq>` (catch-up), `limit` ≤ 100 → `{ messages (oldest first), hasMore }` |
+| POST | `/v1/conversations/:id/messages` | ✓ | `{ clientId, kind?: text\|image\|video\|audio\|voice\|file, body?, mediaId?, replyToId?, mentions?: [userId] }` → 201 `{ message, duplicate: false }`, or 200 `{ message, duplicate: true }` for a repeated `clientId`. 403 `cannot_message` if blocked, or if the recipient only accepts messages from people they've replied to |
+| GET | `/v1/conversations/:id/changes` | ✓ | `?since=<counter>&limit=200` → `{ changes, nextSince, hasMore }` |
+| GET | `/v1/conversations/:id/pins` | ✓ | Pinned messages, newest pin first |
+| POST | `/v1/conversations/:id/receipts` | ✓ | `{ kind: delivered\|read, seq }` → your positions (they only move forward) |
+
+A message looks like `{ id, conversationId, seq, changeSeq, senderId, clientId, kind, body (null once deleted), media, replyTo: { id, seq, senderId, kind, preview, deleted }, forwarded, mentions, reactions: [{ userId, emoji }], editedAt, deletedAt, pinnedAt, pinnedBy, createdAt }`.
+
+## Messages
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| PATCH | `/v1/messages/:id` | ✓ | `{ body }`. Sender only, within 15 minutes (409 `edit_window_passed`) |
+| DELETE | `/v1/messages/:id` | ✓ | Delete for everyone. Sender only, within 48 hours. Clears the text, media, reactions and pin |
+| POST | `/v1/messages/:id/hide` | ✓ | Delete for me → 204 |
+| PUT | `/v1/messages/:id/reaction` | ✓ | `{ emoji }` (one emoji) or `{ emoji: null }` to remove. One reaction per person |
+| PUT | `/v1/messages/:id/pin` | ✓ | `{ pinned }`. At most 10 per chat (409 `too_many_pins`) |
+| POST | `/v1/messages/:id/forward` | ✓ | `{ conversationIds: [≤5], clientId }` → `{ messages }`, marked `forwarded` |
+| GET | `/v1/messages/search` | ✓ | `?q=&conversationId=&limit=20&cursor=` → `{ results, nextCursor }`. Word-prefix match in your own chats, skipping deleted and hidden messages |
+| GET | `/v1/presence` | ✓ | `?userIds=a,b` → `[{ userId, online, lastSeenAt }]`. `null` values when hidden (see `realtime.md`) |
+
+## Media
+Files go straight from the client to object storage. The API never handles the bytes.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/media/uploads` | ✓ | `{ kind, contentType, byteSize, fileName?, durationMs? (required for voice), width?, height? }` → 201 `{ media, upload: { method: "PUT", url, headers, expiresIn } }`. PUT exactly `byteSize` bytes with those headers within 15 minutes |
+| POST | `/v1/media/:id/complete` | ✓ | Uploader only. Checks the stored size and the file signature against `contentType` → the media, `state: ready`. Mismatches are deleted (400 `media_rejected`). 409 `upload_missing` if nothing was uploaded |
+| GET | `/v1/media/:id` | ✓ | `{ media, url, expiresIn: 300 }` for the uploader, or for members of a chat where it was sent (and not deleted). Otherwise 404 |
+
+Allowed types: images (JPEG, PNG, GIF, WebP, HEIC, ≤ 20 MB), video (MP4, QuickTime, WebM, ≤ 100 MB), audio and voice notes (MP3, M4A/AAC, Ogg, WebM, WAV; audio ≤ 50 MB, voice ≤ 16 MB and ≤ 15 minutes), and files (PDF, plain text, ZIP, Word, Excel, PowerPoint, ≤ 100 MB). SVG, HTML and executables are refused.
+
+## Realtime
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/realtime/tickets` | ✓ | `{ ticket, expiresIn: 60, path }`. Single use |
+| GET (WebSocket) | `/v1/realtime?ticket=` | ticket | See [`realtime.md`](realtime.md) for frames and events |

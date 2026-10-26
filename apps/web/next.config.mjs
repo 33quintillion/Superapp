@@ -8,7 +8,6 @@ const securityHeaders = [
 
 export default {
   poweredByHeader: false,
-  productionBrowserSourceMaps: !!process.env.SOURCEMAPS,
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

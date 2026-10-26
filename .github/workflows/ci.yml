@@ -31,6 +31,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Start MinIO (S3-compatible storage for media tests)
+        run: |
+          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && exit 0; sleep 1; done; exit 1
       - run: pnpm install --frozen-lockfile
       - name: Design tokens are up to date
         run: pnpm --filter @nexa/design-tokens test

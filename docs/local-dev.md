@@ -12,6 +12,8 @@ for db in superapp_dev superapp_test superapp_e2e; do sudo -u postgres createdb 
 redis-server --daemonize yes
 ```
 
+For media, run MinIO as a binary (`minio server ~/minio-data`), or any S3-compatible service, and set the `S3_*` variables. The tests expect one on `http://localhost:9000` with the `minioadmin` credentials; override with `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID` and `TEST_S3_SECRET_ACCESS_KEY`. If MinIO isn't available, moto's S3 server works for local runs (`pip install 'moto[server]' && moto_server -p 9000`), but CI uses real MinIO because moto doesn't check signatures.
+
 For email, run Mailpit as a binary (https://mailpit.axllent.org), or point `SMTP_URL` at any SMTP server you control.
 
 ## Environment

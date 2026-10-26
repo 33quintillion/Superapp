@@ -4,6 +4,8 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
+Last full run (2026-10-26): API 105 tests passed; web e2e all steps passed; Flutter 8 tests passed and `flutter analyze` clean.
+
 ## Stage 1: Foundation
 | Item | Status | Evidence |
 | --- | --- | --- |
@@ -30,8 +32,8 @@ Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run
 | Optional TOTP two-step, replay protection | ✅ | `auth.e2e › two-step verification`; RFC vectors in `unit.spec.ts` |
 | Rate limits (register, login per IP and account, reset, MFA, reports) | ✅ | `auth.e2e › rate limiting`, `registration rate limit` |
 | Profile: display name, bio, status, locale | ✅ | `users.e2e › profile` |
-| Profile photo upload | ⬜ | Needs object storage (Stage 3) |
-| Privacy settings (discoverability, who can message, receipts, online) | ✅ (storage and lookup) | `users.e2e`; messaging will enforce "who can message" in Stage 3 |
+| Profile photo upload | ⬜ | Object storage now exists (Stage 3); avatar endpoint not built yet |
+| Privacy settings (discoverability, who can message, receipts, online) | ✅ | `users.e2e`; enforced in messaging by `messaging.e2e › permissions`, `› receipts` and `realtime.e2e › presence` |
 | Blocking (hides profiles in both directions) | ✅ | `users.e2e › blocking` |
 | Reporting | ✅ (user side) | `users.e2e`; moderation queue is part of the admin dashboard (Stage 7) |
 | Data export | ✅ | `users.e2e › exports…` |
@@ -45,7 +47,46 @@ Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run
 | Localisation framework | 🟡 | `locale` stored per user; UI strings not yet extracted |
 | Web: sign-in, register, two-step, verify, forgot and reset, devices, sign-out | ✅ | `apps/web/e2e/run.mjs` |
 | Mobile: sign-in, register, two-step, profile, sign-out, secure token storage | ✅ (widget tests with HTTP stubbed) | `apps/mobile/test/auth_flow_test.dart` |
+| Mobile: refresh an expired access token once and retry | ✅ | `chat_test.dart › an expired access token…` |
 | Mobile on a real device or emulator | 🟡 | Not run (no emulator here); `flutter analyze` is clean |
 
-## Stages 3 to 10
-Not started. See `plan.md`. Nothing for messaging, calls, social, business, payments, subscriptions, mini-apps or the admin dashboard is implemented. The app does not pretend otherwise: the home screen says these are coming in later stages.
+## Stage 3: Messaging and media
+Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Postgres, Redis and S3-compatible storage (MinIO in CI).
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| One-to-one conversations (one per pair, symmetric) | ✅ | `messaging.e2e › direct conversations` |
+| Group chats with admins and member permissions | ⬜ | Schema has roles; creation and admin rules are Stage 5 |
+| Text messages, replies, mentions | ✅ | `messaging.e2e › validates content, replies and mentions` |
+| Reactions (one per person, change or remove) | ✅ | `messaging.e2e › keeps one reaction per person…`; web e2e; Flutter `chat_test` |
+| Edit (sender, 15 min) and delete for everyone (sender, 48 h) or for me | ✅ | `messaging.e2e › editing, deleting…` |
+| Pinning (10 per chat) and forwarding | ✅ | `messaging.e2e › pins…`, `› forwards…` |
+| Search (word prefix, own chats only, skips deleted and hidden) | ✅ | `messaging.e2e › finds words by prefix…`; web e2e |
+| History pagination (before/after) and change feed for sync | ✅ | `messaging.e2e › history and sync` |
+| Ordering under concurrency (gap-free per-chat counter) | ✅ | `messaging.e2e › gives concurrent sends unique, gap-free sequence numbers` |
+| Retry deduplication by clientId (including concurrent retries) | ✅ | `messaging.e2e › treats a retry…`, `realtime.e2e › a resend after a lost ack…`, Flutter `chat_test` |
+| Offline catch-up on reconnect | ✅ | `realtime.e2e › a device that was offline catches up…`; web e2e (browser offline and back); Flutter `chat_test` |
+| Delivery and read receipts, with reciprocal privacy | ✅ | `messaging.e2e › receipts`, `realtime.e2e › withholds read positions…`; web e2e |
+| Typing indicators (not across blocks) | ✅ | `realtime.e2e › relays typing…`; web e2e; Flutter `chat_test` |
+| Online presence and last seen (peers only, reciprocal setting) | ✅ | `realtime.e2e › presence` |
+| Authenticated WebSocket (single-use tickets, origin check, session re-check) | ✅ | `realtime.e2e › connecting` |
+| Fan-out across API instances (Redis) | ✅ | `realtime.e2e › fans out across API instances…` |
+| Permissions: outsiders get 404 everywhere; blocks and "who can message" enforced | ✅ | `messaging.e2e › keeps outsiders out…`, `› permissions` |
+| Mute and archive (per person) | ✅ | `messaging.e2e › lists conversations…` |
+| Image, video, audio and file sharing via presigned uploads to object storage | ✅ (API, web) | `media.e2e`; web e2e uploads a photo. **Flutter can show photos but cannot pick or send files yet** |
+| Voice notes | ✅ API, 🟡 web | `media.e2e › sends a voice note…`. Web records with MediaRecorder, but the browser test does not exercise the microphone. Flutter recording not built |
+| Upload checks: type allow-list, size limits, file signature, uploader-only completion | ✅ | `media.e2e`, `unit.spec › media signatures` |
+| Media access only for uploader and chat members; file removed when no message uses it | ✅ | `media.e2e › uploads straight to storage…`, `› deletes the stored file…` |
+| Malware scanning and known-CSAM hash matching | ⛔ | Needs a scanning service and a child-safety partner. **Media must not be opened to the public before this** |
+| Thumbnails and video transcoding | ⬜ | Planned with the media pipeline |
+| Account deletion wipes sent messages and files; export includes sent messages | ✅ | `messaging.e2e › account deletion and export` |
+| Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ for the flows in the browser test; 🟡 for the rest | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, photo, search and proxy limits. Edit, pin, forward and voice are in the UI but not browser-tested |
+| Web chat proxy limited to messaging; refuses cross-site writes | ✅ | web e2e |
+| Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
+| Message notifications | ⛔ | Push needs APNs and FCM credentials (Stage 4). In-app unread badges work |
+| End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
+| Durable outbox (survives app restart) | ⬜ | Outboxes are in memory today |
+| Load test of fan-out and presence | ⬜ | Stage 9 |
+
+## Stages 4 to 10
+Not started. See `plan.md`. Calls, social, business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.

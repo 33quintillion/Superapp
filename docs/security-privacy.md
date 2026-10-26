@@ -1,6 +1,6 @@
 # Security and privacy
 
-This describes the system **as built today** (Stages 1 and 2). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
+This describes the system **as built today** (Stages 1 to 3). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
 
 ## Data we hold
 
@@ -14,10 +14,17 @@ This describes the system **as built today** (Stages 1 and 2). Update it with ev
 | Blocks | `blocks` | | Deleted with either account |
 | Reports | `reports` | | Kept for safety review; the reporter is detached on deletion |
 | Audit log (action, actor id, IP, time) | `audit_log` | Append-only from the app; holds no secrets | IP removed on deletion; uuid-only records kept |
+| Conversations and membership (who talks to whom, when, read and delivered positions, mute and archive) | `conversations`, `conversation_members` | TLS in transit. **Readable by the server.** | Kept while either person has the account. The deleted person shows as "Deleted account" |
+| Message text, replies, mentions, reactions, pins, edit and delete times | `messages`, `message_reactions`, `message_hides` | TLS in transit. **Readable by the server; not end-to-end encrypted.** | "Delete for everyone" clears the text immediately and keeps a tombstone (id, sender, times). Account deletion does the same for every message the person sent |
+| Photos, videos, voice notes and files | Object storage (`media/<owner>/<random id>`), metadata in `media` | Private bucket. Short-lived presigned URLs (15 min upload, 5 min download), issued after an access check. **Readable by the server and the storage provider.** | Deleted from storage when the last message using the file is deleted, or when the uploader's account is deleted. Uploads never completed still need a cleanup job |
+| Presence (online, last seen) and typing | Redis | Not persisted to Postgres. Typing is never stored | Presence expires about 75 s after the last heartbeat; last seen is kept 90 days |
+| One-time WebSocket tickets | Redis (SHA-256 of the ticket) | Single use | 60 s |
 
-**End-to-end encryption:** none yet. Nothing in the system today is end-to-end encrypted, and the product must not say otherwise until Stage 3 ships and is verified (ADR 0004). Server-side encryption of TOTP seeds is *not* E2EE.
+**End-to-end encryption:** none. Stage 3 messaging is **not** end-to-end encrypted. The server and anyone with database or bucket access can read messages and files. The apps say this, and nothing may describe chats as end-to-end encrypted until ADR 0004 is implemented and verified. TLS and server-side encryption of TOTP seeds are *not* E2EE.
 
-**External processors today:** the SMTP email provider receives recipient addresses and the text of verification and reset emails. No analytics, crash reporting or advertising SDKs are included.
+**What the server can see today:** everything listed above, including message content, files, who talks to whom and when, IP addresses, and read and online state (subject to each person's privacy settings for what *other users* see; the server itself always sees it). Administrators have no hidden reading tool. The admin app (Stage 7) will work from user reports, and this table will be updated when it does.
+
+**External processors today:** the SMTP email provider receives recipient addresses and the text of verification and reset emails. The object-storage provider (whatever S3-compatible service is configured) stores uploaded files. No analytics, crash reporting or advertising SDKs are included.
 
 ## Controls in place
 - Argon2id passwords, with timing equalised for unknown accounts.
@@ -30,12 +37,19 @@ This describes the system **as built today** (Stages 1 and 2). Update it with ev
 - Mobile refresh tokens in the platform keystore. No secrets are compiled into the app.
 - Secrets come only from the environment. Weak or missing secrets stop the app from starting, and `.env*` files are git-ignored.
 - Logs redact authorization headers, cookies, passwords and tokens.
-- Account export, deactivation and deletion are self-service and need the password.
+- Account export, deactivation and deletion are self-service and need the password. The export includes messages the person sent and a list of their uploads.
+- Messaging permissions: only members can read or write a conversation, and outsiders get 404. Blocks stop messages, reactions, pins and typing in both directions. "Who can message me" (`contacts` or `nobody`) refuses chats from strangers until the person replies.
+- Read receipts and online status are shared only when both people allow it.
+- Uploads: the type is chosen from an allow-list (no SVG, HTML or executables), with size limits per kind. The signed upload URL fixes the content type and length, and the stored file's signature is checked against its declared type before it can be sent. Object keys never contain user input.
+- WebSockets authenticate with single-use 60-second tickets, never access tokens in URLs. Browser origins are checked, and sessions are re-checked while the socket is open. There are frame-size and frame-rate limits.
+- The web chat reaches the API only through a server-side proxy limited to messaging endpoints, and the proxy refuses cross-site writes.
 
 ## Before production (not done yet)
 - Secret manager (AWS Secrets Manager, GCP Secret Manager or Vault) and a key-rotation procedure for `JWT_ACCESS_SECRET` and `DATA_ENCRYPTION_KEY`.
 - Database encryption at rest, encrypted backups, restore drills.
 - WAF and bot protection on sign-up; breached-password check.
 - Privacy policy, terms, cookie notice, records of processing, DPIA, and data processing agreements with providers (**legal**).
-- Age gating and a child-safety programme before user-generated media launches (**legal and trust & safety**).
+- **Before media sharing is opened to the public:** known-CSAM hash matching (for example PhotoDNA, or an equivalent from a child-safety partner), malware scanning of uploads, a moderation queue for reported messages and media, and NCMEC/IWF reporting procedures. Media sharing works today but **must not launch publicly without these** (**legal and trust & safety**).
+- Age gating and a child-safety programme (**legal and trust & safety**).
+- Bucket-level encryption at rest and lifecycle rules (expire incomplete uploads) on the production bucket.
 - Penetration test (Stage 9).
