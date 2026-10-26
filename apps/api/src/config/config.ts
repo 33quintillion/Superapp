@@ -47,6 +47,46 @@ const schema = z.object({
   /** How often an open WebSocket re-checks that its session is still valid. */
   WS_SESSION_RECHECK_SECONDS: z.coerce.number().int().positive().default(30),
   WS_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(25),
+
+  /** Runs the push delivery loop in this process. Turn off on instances that should only serve requests. */
+  PUSH_WORKER_ENABLED: z.stringbool().default(true),
+  PUSH_WORKER_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),
+  PUSH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(8),
+  /** A notification not delivered within this long is dropped; it would only be noise by then. */
+  PUSH_TTL_SECONDS: z.coerce.number().int().positive().max(28 * 24 * 3600).default(24 * 3600),
+
+  /** Apple Push Notification service, token-based auth (.p8 key). All four or none. */
+  APNS_KEY_ID: z.string().optional(),
+  APNS_TEAM_ID: z.string().optional(),
+  APNS_BUNDLE_ID: z.string().optional(),
+  /** Contents of the .p8 file (PEM). "\n" escapes are accepted for single-line env files. */
+  APNS_PRIVATE_KEY: z.string().optional(),
+  /** Overrides the Apple host for every device. Tests only; refused in staging and production. */
+  APNS_ENDPOINT: z.url().optional(),
+
+  /** Firebase Cloud Messaging HTTP v1: the service account JSON, raw or base64. */
+  FCM_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  /** Overrides https://fcm.googleapis.com. Tests only; refused in staging and production. */
+  FCM_ENDPOINT: z.url().optional(),
+
+  /** Web Push (VAPID, RFC 8292). Generate with `pnpm --filter @nexa/api vapid-keys`. */
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  /** Contact for push services: mailto:you@example.com or an https URL. */
+  VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/, 'VAPID_SUBJECT must start with mailto: or https://').optional(),
+  /**
+   * Hosts that Web Push subscriptions may point at (suffix match). The API sends requests
+   * to these URLs, so only real browser push services are allowed by default.
+   */
+  WEBPUSH_ALLOWED_HOSTS: z
+    .string()
+    .default('fcm.googleapis.com,updates.push.services.mozilla.com,push.apple.com,notify.windows.com')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean),
+    ),
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -70,6 +110,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.S3_AUTO_CREATE_BUCKET && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
     throw new Error('S3_AUTO_CREATE_BUCKET cannot be set in staging or production; provision the bucket instead');
+  }
+  const deployed = cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging';
+  const apns = [cfg.APNS_KEY_ID, cfg.APNS_TEAM_ID, cfg.APNS_BUNDLE_ID, cfg.APNS_PRIVATE_KEY].filter(Boolean).length;
+  if (apns !== 0 && apns !== 4) {
+    throw new Error('APNs needs all of APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID and APNS_PRIVATE_KEY, or none of them');
+  }
+  const vapid = [cfg.VAPID_PUBLIC_KEY, cfg.VAPID_PRIVATE_KEY, cfg.VAPID_SUBJECT].filter(Boolean).length;
+  if (vapid !== 0 && vapid !== 3) {
+    throw new Error('Web Push needs all of VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT, or none of them');
+  }
+  for (const [name, url] of [
+    ['APNS_ENDPOINT', cfg.APNS_ENDPOINT],
+    ['FCM_ENDPOINT', cfg.FCM_ENDPOINT],
+  ] as const) {
+    if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }
   return cfg;
 }
