@@ -1,0 +1,7 @@
+packages:
+  - apps/api
+  - apps/web
+  - packages/*
+onlyBuiltDependencies:
+  - argon2
+  - '@nestjs/core'

@@ -1,0 +1,11 @@
+{
+  "name": "@nexa/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single source of brand tokens; generates CSS variables for web and a Dart file for Flutter.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs --check",
+    "lint": "node build.mjs --check"
+  }
+}

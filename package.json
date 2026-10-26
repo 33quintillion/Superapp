@@ -1,0 +1,12 @@
+{
+  "name": "nexa-superapp",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "tokens": "pnpm --filter @nexa/design-tokens build"
+  }
+}
