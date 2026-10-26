@@ -18,7 +18,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </Link>
           {signedIn && (
             <nav className="top-nav">
+              <Link href="/feed">Feed</Link>
               <Link href="/chats">Chats</Link>
+              <Link href="/communities">Communities</Link>
               <Link href="/account">Account</Link>
             </nav>
           )}

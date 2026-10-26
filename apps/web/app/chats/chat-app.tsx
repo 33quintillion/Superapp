@@ -6,11 +6,13 @@ import {
   chatApi,
   ConnectionState,
   Conversation,
+  GroupRole,
   kindForFile,
   Media,
   Message,
   newClientId,
   RealtimeClient,
+  SystemEvent,
   uploadMedia,
 } from '@/lib/chat-client';
 
@@ -32,7 +34,33 @@ function sortConversations(list: Conversation[]) {
 }
 
 function peerOf(c: Conversation | undefined, me: string) {
-  return c?.members.find((m) => m.userId !== me);
+  return c?.kind === 'direct' ? c.members.find((m) => m.userId !== me) : undefined;
+}
+
+function titleOf(c: Conversation | undefined, me: string) {
+  if (!c) return 'Chat';
+  return c.kind === 'group' ? c.title || 'Group' : (peerOf(c, me)?.displayName ?? 'Chat');
+}
+
+/** One sentence for a group notice, from the viewer's point of view. */
+export function describeSystem(e: SystemEvent, actorId: string, me: string, names: Record<string, string>) {
+  const who = (id: string) => (id === me ? 'You' : (names[id] ?? 'Someone'));
+  const whom = (id: string) => (id === me ? 'you' : (names[id] ?? 'someone'));
+  const actor = who(actorId);
+  switch (e.type) {
+    case 'group_created':
+      return `${actor} created the group “${e.title}”`;
+    case 'members_added':
+      return `${actor} added ${e.userIds.map(whom).join(', ')}`;
+    case 'member_removed':
+      return `${actor} removed ${whom(e.userId)}`;
+    case 'member_left':
+      return `${actor} left`;
+    case 'role_changed':
+      return e.role === 'owner' ? `${who(e.userId)} now own${e.userId === me ? '' : 's'} the group` : e.role === 'admin' ? `${actor} made ${whom(e.userId)} an admin` : `${actor} removed ${whom(e.userId)} as admin`;
+    case 'group_updated':
+      return e.title !== undefined ? `${actor} renamed the group to “${e.title}”` : `${actor} changed the group settings`;
+  }
 }
 
 export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; initial: Conversation[]; wsBase: string; initialActiveId?: string }) {
@@ -46,6 +74,7 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [showInfo, setShowInfo] = useState(false);
 
   const synced = useRef<Record<string, number>>({});
   const loaded = useRef(new Set<string>());
@@ -160,7 +189,13 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
           setPresence((p) => ({ ...p, [d.userId]: { online: d.online, lastSeenAt: d.lastSeenAt } }));
           break;
         case 'conversation.updated':
+        case 'conversation.changed':
           void refreshConversation(d.id);
+          break;
+        case 'conversation.removed':
+          setConvs((prev) => prev.filter((c) => c.id !== d.id));
+          setActiveId((id) => (id === d.id ? null : id));
+          loaded.current.delete(d.id);
           break;
       }
     },
@@ -225,6 +260,7 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
         replyTo: null,
         forwarded: false,
         mentions: [],
+        system: null,
         reactions: [],
         editedAt: null,
         deletedAt: null,
@@ -284,10 +320,16 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
             setActiveId(c.id);
           }}
         />
-        <Search
-          onPick={(m) => setActiveId(m.conversationId)}
-          nameFor={(cid) => peerOf(convs.find((c) => c.id === cid), me.id)?.displayName ?? 'Chat'}
+        <NewGroup
+          onCreate={async (title, usernames) => {
+            const ids = [];
+            for (const u of usernames) ids.push((await chatApi<{ id: string }>('GET', `users/${encodeURIComponent(u.toLowerCase())}`)).id);
+            const c = await chatApi<Conversation>('POST', 'conversations/groups', { title, memberIds: ids });
+            setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]));
+            setActiveId(c.id);
+          }}
         />
+        <Search onPick={(m) => setActiveId(m.conversationId)} nameFor={(cid) => titleOf(convs.find((c) => c.id === cid), me.id)} />
         <ul className="conv-items">
           {convs
             .filter((c) => !c.archived)
@@ -295,11 +337,12 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
               const p = peerOf(c, me.id);
               return (
                 <li key={c.id}>
-                  <button className={`conv ${c.id === activeId ? 'active' : ''}`} data-testid={`conv-${p?.username}`} onClick={() => setActiveId(c.id)}>
+                  <button className={`conv ${c.id === activeId ? 'active' : ''}`} data-testid={c.kind === 'group' ? `conv-group` : `conv-${p?.username}`} onClick={() => setActiveId(c.id)}>
                     <span className="conv-name">
-                      {p?.displayName ?? 'Chat'} {c.mutedUntil && Date.parse(c.mutedUntil) > now && <small title="Muted">🔕</small>}
+                      {c.kind === 'group' && '👥 '}
+                      {titleOf(c, me.id)} {c.mutedUntil && Date.parse(c.mutedUntil) > now && <small title="Muted">🔕</small>}
                     </span>
-                    <span className="conv-preview muted">{preview(c.lastMessage)}</span>
+                    <span className="conv-preview muted">{preview(c.lastMessage, c, me.id)}</span>
                     {c.unreadCount > 0 && c.id !== activeId && (
                       <span className="badge" data-testid="unread">
                         {c.unreadCount}
@@ -320,10 +363,12 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
           <>
             <header className="chat-head">
               <div>
-                <strong data-testid="peer-name">{peer?.displayName}</strong>
+                <strong data-testid="peer-name">{titleOf(active, me.id)}</strong>
                 <div className="muted small" data-testid="presence">
                   {typingNow.length ? (
-                    <span data-testid="typing">typing…</span>
+                    <span data-testid="typing">{active.kind === 'group' ? `${typingNow.map((m) => m.displayName).join(', ')} typing…` : 'typing…'}</span>
+                  ) : active.kind === 'group' ? (
+                    `${active.members.length} members`
                   ) : peerPresence?.online ? (
                     'online'
                   ) : peerPresence?.lastSeenAt ? (
@@ -334,6 +379,11 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
                 </div>
               </div>
               <div className="chat-head-actions">
+                {active.kind === 'group' && (
+                  <button className="btn quiet small" data-testid="group-info-toggle" onClick={() => setShowInfo((v) => !v)}>
+                    {showInfo ? 'Close info' : 'Group info'}
+                  </button>
+                )}
                 <button
                   className="btn quiet small"
                   onClick={() =>
@@ -351,6 +401,19 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
                 </button>
               </div>
             </header>
+            {active.kind === 'group' && showInfo && (
+              <GroupPanel
+                conversation={active}
+                me={me.id}
+                onChanged={(c) => setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]))}
+                onLeft={() => {
+                  setConvs((prev) => prev.filter((c) => c.id !== active.id));
+                  setActiveId(null);
+                  setShowInfo(false);
+                }}
+                onError={setError}
+              />
+            )}
             <PinnedBar messages={activeMsgs.filter((m) => m.pinnedAt && !m.deletedAt)} />
             <Thread
               me={me.id}
@@ -367,6 +430,11 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
               onReply={(m) => setReplyTo(m)}
               onHide={(m) => act(() => chatApi('POST', `messages/${m.id}/hide`).then(() => upsert(active.id, [], [m.id])))}
             />
+            {active.group?.sendPolicy === 'admins' && active.group.myRole === 'member' ? (
+              <p className="composer muted small" data-testid="admins-only">
+                Only admins can send messages in this group.
+              </p>
+            ) : (
             <Composer
               key={active.id}
               replyTo={replyTo?.conversationId === active.id ? replyTo : null}
@@ -378,6 +446,7 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
               }}
               onError={setError}
             />
+            )}
           </>
         )}
         {error && (
@@ -390,11 +459,15 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   );
 }
 
-function preview(m: Message | null) {
+function preview(m: Message | null, c?: Conversation, me = '') {
   if (!m) return 'No messages yet';
   if (m.deletedAt) return 'Message deleted';
-  if (m.kind === 'text') return m.body ?? '';
-  return { image: '📷 Photo', video: '🎬 Video', audio: '🎵 Audio', voice: '🎤 Voice note', file: '📄 File' }[m.kind] + (m.body ? ` ${m.body}` : '');
+  if (m.kind === 'system') return m.system && c ? describeSystem(m.system, m.senderId, me, Object.fromEntries(c.members.map((x) => [x.userId, x.displayName]))) : 'Group updated';
+  if (m.kind === 'text') return c?.kind === 'group' && m.senderId !== me ? `${c.members.find((x) => x.userId === m.senderId)?.displayName ?? 'Someone'}: ${m.body ?? ''}` : (m.body ?? '');
+  const label = { image: '📷 Photo', video: '🎬 Video', audio: '🎵 Audio', voice: '🎤 Voice note', file: '📄 File' }[m.kind];
+  const text = label + (m.body ? ` ${m.body}` : '');
+  if (c?.kind === 'group' && m.senderId !== me) return `${c.members.find((x) => x.userId === m.senderId)?.displayName ?? 'Someone'}: ${text}`;
+  return text;
 }
 
 function NewChat({ onOpen }: { onOpen: (username: string) => Promise<void> }) {
@@ -466,7 +539,7 @@ function ArchivedList({ convs, me, onOpen }: { convs: Conversation[]; me: string
       <summary className="muted small">Archived ({convs.length})</summary>
       {convs.map((c) => (
         <button key={c.id} className="conv" onClick={() => onOpen(c.id)}>
-          <span className="conv-name">{peerOf(c, me)?.displayName}</span>
+          <span className="conv-name">{titleOf(c, me)}</span>
         </button>
       ))}
     </details>
@@ -513,6 +586,11 @@ function Thread({
   }, [last?.id]);
   const peer = peerOf(conversation, me);
   const names = Object.fromEntries(conversation.members.map((m) => [m.userId, m.displayName]));
+  const others = conversation.members.filter((m) => m.userId !== me);
+  const group = conversation.kind === 'group';
+  // In groups a tick turns "read" once everyone who shares read receipts has read it.
+  const readBy = (seq: number) => (group ? others.length > 0 && others.every((o) => o.lastReadSeq === null || o.lastReadSeq >= seq) && others.some((o) => o.lastReadSeq !== null) : peer?.lastReadSeq != null && peer.lastReadSeq >= seq);
+  const deliveredTo = (seq: number) => (group ? others.every((o) => o.lastDeliveredSeq >= seq) : (peer?.lastDeliveredSeq ?? 0) >= seq);
 
   return (
     <div className="thread" data-testid="thread">
@@ -521,12 +599,21 @@ function Thread({
           Load earlier messages
         </button>
       )}
-      {messages.map((m) => {
+      {messages.map((m, i) => {
+        if (m.kind === 'system') {
+          return (
+            <div key={m.id} className="system-note small muted" data-testid="system-note">
+              {m.system ? describeSystem(m.system, m.senderId, me, names) : 'Group updated'}
+            </div>
+          );
+        }
         const mine = m.senderId === me;
-        const ticks = !mine || m.pending ? null : peer?.lastReadSeq != null && peer.lastReadSeq >= m.seq ? 'read' : (peer?.lastDeliveredSeq ?? 0) >= m.seq ? 'delivered' : 'sent';
+        const ticks = !mine || m.pending ? null : readBy(m.seq) ? 'read' : deliveredTo(m.seq) ? 'delivered' : 'sent';
+        const showName = group && !mine && messages[i - 1]?.senderId !== m.senderId;
         return (
           <div key={m.id} className={`msg ${mine ? 'mine' : ''}`} data-testid="msg" data-body={m.body ?? ''}>
             <div className="bubble">
+              {showName && <strong className="small sender">{names[m.senderId] ?? 'Former member'}</strong>}
               {m.forwarded && <div className="muted small">↪ Forwarded</div>}
               {m.replyTo && (
                 <div className="quote small">
@@ -643,7 +730,7 @@ function MessageActions({
             <option value="">Forward to…</option>
             {others.map((c) => (
               <option key={c.id} value={c.id}>
-                {peerOf(c, me)?.displayName}
+                {titleOf(c, me)}
               </option>
             ))}
           </select>
@@ -796,5 +883,195 @@ function Composer({
         </button>
       </div>
     </form>
+  );
+}
+
+function NewGroup({ onCreate }: { onCreate: (title: string, usernames: string[]) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [people, setPeople] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  if (!open) {
+    return (
+      <div className="new-chat">
+        <button className="btn quiet small" data-testid="new-group" onClick={() => setOpen(true)}>
+          New group
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="new-chat"
+      data-testid="new-group-form"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setErr(null);
+        const usernames = people
+          .split(/[\s,]+/)
+          .map((u) => u.replace(/^@/, ''))
+          .filter(Boolean);
+        try {
+          await onCreate(title.trim(), usernames);
+          setTitle('');
+          setPeople('');
+          setOpen(false);
+        } catch (x) {
+          setErr(
+            x instanceof ChatApiError && x.status === 404
+              ? 'One of those usernames doesn’t exist'
+              : x instanceof ChatApiError && x.code === 'cannot_add'
+                ? 'Some of those people don’t allow you to add them to groups'
+                : 'Could not create the group',
+          );
+        }
+      }}
+    >
+      <input name="groupTitle" placeholder="Group name" value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={100} aria-label="Group name" />
+      <input name="groupMembers" placeholder="Usernames, separated by commas" value={people} onChange={(e) => setPeople(e.target.value)} aria-label="People to add" />
+      <button className="btn small" type="submit">
+        Create
+      </button>
+      <button className="btn quiet small" type="button" onClick={() => setOpen(false)}>
+        Cancel
+      </button>
+      {err && <small className="error">{err}</small>}
+    </form>
+  );
+}
+
+const ROLE_LABEL: Record<GroupRole, string> = { owner: 'Owner', admin: 'Admin', member: '' };
+
+/** Members, roles and settings. Buttons only appear for what the server will allow. */
+function GroupPanel({
+  conversation: c,
+  me,
+  onChanged,
+  onLeft,
+  onError,
+}: {
+  conversation: Conversation;
+  me: string;
+  onChanged: (c: Conversation) => void;
+  onLeft: () => void;
+  onError: (e: string) => void;
+}) {
+  const g = c.group!;
+  const isAdmin = g.myRole !== 'member';
+  const canEdit = isAdmin || g.infoPolicy === 'everyone';
+  const canAdd = isAdmin || g.addPolicy === 'everyone';
+  const [adding, setAdding] = useState('');
+  const run = async (fn: () => Promise<Conversation | void>) => {
+    try {
+      const r = await fn();
+      if (r) onChanged(r);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Something went wrong');
+    }
+  };
+  const patch = (body: Record<string, unknown>) => run(() => chatApi<Conversation>('PATCH', `conversations/${c.id}/group`, body));
+  return (
+    <div className="group-panel" data-testid="group-panel">
+      {g.description && <p className="small">{g.description}</p>}
+      {canEdit && (
+        <button
+          className="btn quiet small"
+          onClick={() => {
+            const title = window.prompt('Group name', c.title);
+            if (title && title.trim() && title !== c.title) void patch({ title: title.trim() });
+          }}
+        >
+          Rename
+        </button>
+      )}
+      {isAdmin && (
+        <div className="group-policies small">
+          <label>
+            <input type="checkbox" name="adminsOnlySend" checked={g.sendPolicy === 'admins'} onChange={(e) => patch({ sendPolicy: e.target.checked ? 'admins' : 'everyone' })} /> Only admins can send
+          </label>
+          <label>
+            <input type="checkbox" checked={g.addPolicy === 'everyone'} onChange={(e) => patch({ addPolicy: e.target.checked ? 'everyone' : 'admins' })} /> Anyone can add people
+          </label>
+          <label>
+            <input type="checkbox" checked={g.infoPolicy === 'everyone'} onChange={(e) => patch({ infoPolicy: e.target.checked ? 'everyone' : 'admins' })} /> Anyone can edit the name
+          </label>
+        </div>
+      )}
+      <ul className="group-members">
+        {c.members.map((m) => {
+          const canPromote = isAdmin && m.role === 'member';
+          const canDemote = g.myRole === 'owner' && m.role === 'admin';
+          const canRemove = m.userId !== me && m.role !== 'owner' && (g.myRole === 'owner' || (g.myRole === 'admin' && m.role === 'member'));
+          return (
+            <li key={m.userId} data-testid="group-member" data-username={m.username ?? ''}>
+              <span>
+                {m.userId === me ? 'You' : m.displayName} {ROLE_LABEL[m.role] && <span className="pill">{ROLE_LABEL[m.role]}</span>}
+              </span>
+              {m.userId !== me && (
+                <span className="group-member-actions">
+                  {canPromote && (
+                    <button className="link-btn small" onClick={() => run(() => chatApi('PATCH', `conversations/${c.id}/members/${m.userId}`, { role: 'admin' }))}>
+                      Make admin
+                    </button>
+                  )}
+                  {canDemote && (
+                    <button className="link-btn small" onClick={() => run(() => chatApi('PATCH', `conversations/${c.id}/members/${m.userId}`, { role: 'member' }))}>
+                      Remove admin
+                    </button>
+                  )}
+                  {canRemove && (
+                    <button
+                      className="link-btn small"
+                      onClick={() =>
+                        window.confirm(`Remove ${m.displayName} from the group?`) &&
+                        run(async () => {
+                          await chatApi('DELETE', `conversations/${c.id}/members/${m.userId}`);
+                          return chatApi<Conversation>('GET', `conversations/${c.id}`);
+                        })
+                      }
+                    >
+                      Remove
+                    </button>
+                  )}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {canAdd && (
+        <form
+          className="new-chat"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const name = adding.trim().replace(/^@/, '');
+            if (!name) return;
+            void run(async () => {
+              const u = await chatApi<{ id: string }>('GET', `users/${encodeURIComponent(name.toLowerCase())}`);
+              const r = await chatApi<Conversation>('POST', `conversations/${c.id}/members`, { userIds: [u.id] });
+              setAdding('');
+              return r;
+            });
+          }}
+        >
+          <input name="addMember" placeholder="Add by username" value={adding} onChange={(e) => setAdding(e.target.value)} aria-label="Add someone by username" />
+          <button className="btn small" type="submit">
+            Add
+          </button>
+        </form>
+      )}
+      <button
+        className="btn quiet small danger"
+        onClick={() =>
+          window.confirm('Leave this group?') &&
+          run(async () => {
+            await chatApi('DELETE', `conversations/${c.id}/members/${me}`);
+            onLeft();
+          })
+        }
+      >
+        Leave group
+      </button>
+    </div>
   );
 }

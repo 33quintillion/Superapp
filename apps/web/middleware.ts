@@ -3,6 +3,43 @@ import { ACCESS_COOKIE, cookieOpts, REFRESH_COOKIE, REFRESH_MAX_AGE } from './li
 
 const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';
 
+type Pair = { accessToken: string; refreshToken: string; expiresIn: number };
+type Outcome = Pair | 'invalid' | 'transient';
+
+/**
+ * A page often fires several requests at once (link prefetches, client fetches) right
+ * after the access cookie expires. They all carry the same refresh token, and the API
+ * treats a second use of a rotated token as theft and ends the session. So concurrent
+ * refreshes with one token share a single API call, and its answer is reused briefly.
+ */
+const SHARE_MS = 30_000;
+const recent = new Map<string, { at: number; outcome: Promise<Outcome> }>();
+
+function refreshOnce(refreshToken: string): Promise<Outcome> {
+  const now = Date.now();
+  for (const [k, v] of recent) if (now - v.at > SHARE_MS) recent.delete(k);
+  const hit = recent.get(refreshToken);
+  if (hit) return hit.outcome;
+  const outcome = (async (): Promise<Outcome> => {
+    try {
+      const res = await fetch(`${API_URL}/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+        cache: 'no-store',
+      });
+      if (res.ok) return (await res.json()) as Pair;
+      return res.status === 401 ? 'invalid' : 'transient';
+    } catch {
+      return 'transient';
+    }
+  })();
+  recent.set(refreshToken, { at: now, outcome });
+  // Transient failures are not shared, so the next request tries again.
+  void outcome.then((o) => o === 'transient' && recent.delete(refreshToken));
+  return outcome;
+}
+
 /**
  * When the short-lived access cookie has expired but a refresh cookie exists, rotate
  * the refresh token once here so pages and server actions always see a fresh token.
@@ -10,19 +47,9 @@ const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';
 export async function middleware(req: NextRequest) {
   if (req.cookies.get(ACCESS_COOKIE) || !req.cookies.get(REFRESH_COOKIE)) return NextResponse.next();
 
-  let pair: { accessToken: string; refreshToken: string; expiresIn: number } | null = null;
-  try {
-    const res = await fetch(`${API_URL}/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ refreshToken: req.cookies.get(REFRESH_COOKIE)!.value }),
-      cache: 'no-store',
-    });
-    if (res.ok) pair = await res.json();
-    else if (res.status !== 401) return NextResponse.next(); // transient: keep the cookie, try next request
-  } catch {
-    return NextResponse.next();
-  }
+  const outcome = await refreshOnce(req.cookies.get(REFRESH_COOKIE)!.value);
+  if (outcome === 'transient') return NextResponse.next(); // keep the cookie, try next request
+  const pair = outcome === 'invalid' ? null : outcome;
 
   if (!pair) {
     const res = NextResponse.next();
