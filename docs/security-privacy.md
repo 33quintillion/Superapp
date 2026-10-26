@@ -1,6 +1,6 @@
 # Security and privacy
 
-This describes the system **as built today** (Stages 1 to 3). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
+This describes the system **as built today** (Stages 1 to 3, and Stage 4 push notifications). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
 
 ## Data we hold
 
@@ -19,12 +19,15 @@ This describes the system **as built today** (Stages 1 to 3). Update it with eve
 | Photos, videos, voice notes and files | Object storage (`media/<owner>/<random id>`), metadata in `media` | Private bucket. Short-lived presigned URLs (15 min upload, 5 min download), issued after an access check. **Readable by the server and the storage provider.** | Deleted from storage when the last message using the file is deleted, or when the uploader's account is deleted. Uploads never completed still need a cleanup job |
 | Presence (online, last seen) and typing | Redis | Not persisted to Postgres. Typing is never stored | Presence expires about 75 s after the last heartbeat; last seen is kept 90 days |
 | One-time WebSocket tickets | Redis (SHA-256 of the ticket) | Single use | 60 s |
+| Push registrations (provider, device token or browser subscription URL and keys, last delivery time) | `push_devices` | Tied to one session. Tokens are never returned by the API or included in exports | Deleted when the session ends (within a minute), when the provider reports the token dead, on deactivation, and with the account |
+| Notification settings (on/off, preview level, quiet hours and time zone) | `notification_settings` | | Deleted with the account |
+| Notification queue (recipient, device, message id, state, attempts, error) | `push_jobs` | Holds message ids only, never text; the text is read at send time | Finished jobs deleted after 7 days; deleted with the device, message or account |
 
 **End-to-end encryption:** none. Stage 3 messaging is **not** end-to-end encrypted. The server and anyone with database or bucket access can read messages and files. The apps say this, and nothing may describe chats as end-to-end encrypted until ADR 0004 is implemented and verified. TLS and server-side encryption of TOTP seeds are *not* E2EE.
 
 **What the server can see today:** everything listed above, including message content, files, who talks to whom and when, IP addresses, and read and online state (subject to each person's privacy settings for what *other users* see; the server itself always sees it). Administrators have no hidden reading tool. The admin app (Stage 7) will work from user reports, and this table will be updated when it does.
 
-**External processors today:** the SMTP email provider receives recipient addresses and the text of verification and reset emails. The object-storage provider (whatever S3-compatible service is configured) stores uploaded files. No analytics, crash reporting or advertising SDKs are included.
+**External processors today:** the SMTP email provider receives recipient addresses and the text of verification and reset emails. The object-storage provider (whatever S3-compatible service is configured) stores uploaded files. When push is configured, Apple (APNs), Google (FCM) and browser vendors' push services receive device tokens and notification payloads: by default the sender's name and the message text, or less if the person chooses a smaller preview. Web Push payloads are encrypted for the browser, so the browser vendor relays only ciphertext; APNs and FCM payloads are protected only in transit. No analytics, crash reporting or advertising SDKs are included.
 
 ## Controls in place
 - Argon2id passwords, with timing equalised for unknown accounts.
@@ -42,7 +45,8 @@ This describes the system **as built today** (Stages 1 to 3). Update it with eve
 - Read receipts and online status are shared only when both people allow it.
 - Uploads: the type is chosen from an allow-list (no SVG, HTML or executables), with size limits per kind. The signed upload URL fixes the content type and length, and the stored file's signature is checked against its declared type before it can be sent. Object keys never contain user input.
 - WebSockets authenticate with single-use 60-second tickets, never access tokens in URLs. Browser origins are checked, and sessions are re-checked while the socket is open. There are frame-size and frame-rate limits.
-- The web chat reaches the API only through a server-side proxy limited to messaging endpoints, and the proxy refuses cross-site writes.
+- The web chat reaches the API only through a server-side proxy limited to messaging and notification endpoints, and the proxy refuses cross-site writes.
+- Push: registrations are bound to a session and stop the moment it ends. Web Push subscription URLs are accepted only on known browser push services, so the API cannot be aimed at internal hosts. Notifications are re-checked at send time against blocks, mutes, deletions and read state. Push credentials come only from the environment, are validated at startup, and test-only endpoint overrides are refused in staging and production.
 
 ## Before production (not done yet)
 - Secret manager (AWS Secrets Manager, GCP Secret Manager or Vault) and a key-rotation procedure for `JWT_ACCESS_SECRET` and `DATA_ENCRYPTION_KEY`.

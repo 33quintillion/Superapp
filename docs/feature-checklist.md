@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-26): API 105 tests passed; web e2e all steps passed; Flutter 8 tests passed and `flutter analyze` clean.
+Last full run (2026-10-26): API 149 tests passed; web e2e all steps passed. Flutter was not changed in Stage 4 (8 tests passed and `flutter analyze` clean at the end of Stage 3).
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -83,10 +83,36 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ for the flows in the browser test; 🟡 for the rest | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, photo, search and proxy limits. Edit, pin, forward and voice are in the UI but not browser-tested |
 | Web chat proxy limited to messaging; refuses cross-site writes | ✅ | web e2e |
 | Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
-| Message notifications | ⛔ | Push needs APNs and FCM credentials (Stage 4). In-app unread badges work |
+| Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
 | End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
 | Durable outbox (survives app restart) | ⬜ | Outboxes are in memory today |
 | Load test of fan-out and presence | ⬜ | Stage 9 |
 
-## Stages 4 to 10
+## Stage 4: Push, offline and sync
+Push services are exercised against local servers that speak the real protocols and check our signatures (`apps/api/test/push-fakes.ts`): HTTP/2 for APNs, OAuth plus HTTP v1 for FCM, and encrypted Web Push that the test decrypts like a browser. No Apple or Google account was used. See [`push.md`](push.md).
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| Device registration per session (APNs, FCM, Web Push), token moves between accounts, removal, no tokens in responses | ✅ | `push.e2e › registration` |
+| Web Push endpoints limited to real browser push services (no server-side request forgery) | ✅ | `push.e2e › only accepts Web Push endpoints on known push services` |
+| Notification settings: on/off, preview level (full, sender, none), quiet hours in the person's time zone | ✅ | `push.e2e › respects the preview setting`, `› sends quietly during quiet hours`, `› validates notification settings`; `push.unit › quiet hours`; web e2e |
+| Per-chat mute and "push off" stop notifications | ✅ | `push.e2e › sends nothing for muted chats…` |
+| Transactional outbox: notification queued in the same transaction as the message | ✅ | `push.e2e › delivers a new message…` |
+| Re-check at send time: read elsewhere, deleted, muted, blocked, signed out | ✅ | `push.e2e › drops a notification that is no longer useful…`, `› drops queued notifications after a block or sign-out` |
+| Retries with exponential backoff and Retry-After; give up after 8 attempts | ✅ | `push.e2e › retries with backoff…`, `› gives up after the maximum attempts`; `push.unit › backs off…` |
+| Dead tokens disabled; re-registering re-enables | ✅ | `push.e2e › disables an expired subscription…` |
+| Crash recovery (lease expiry) and no double sends across API instances | ✅ | `push.e2e › recovers a job claimed by a worker that crashed…`, `› never sends a job twice when several API instances run workers` |
+| Worker wakes immediately on a new message | ✅ | `push.e2e › runs on its own and wakes as soon as a message is sent` |
+| Web Push encryption (RFC 8291) and VAPID (RFC 8292) | ✅ | `push.unit › matches the RFC test vector`, `› VAPID` |
+| APNs provider (HTTP/2, ES256 provider token, error mapping, token refresh) | ✅ against a local stand-in, ⛔ against Apple | `push.unit › APNs provider`, `push.e2e › reaches every signed-in device…`. **Needs an Apple Developer account and a .p8 key** |
+| FCM provider (HTTP v1, service-account OAuth, error mapping) | ✅ against a local stand-in, ⛔ against Google | `push.unit › FCM provider`, `push.e2e › reaches every signed-in device…`. **Needs a Firebase project and service account** |
+| Test notification to the current device | ✅ | `push.e2e › sends a test notification…` |
+| Export lists devices and settings (no tokens); deactivation and deletion remove them | ✅ | `push.e2e › account lifecycle` |
+| Web: notification settings, turn browser notifications on and off, service worker shows the notification, reports "delivered", opens the chat on click | ✅ settings and service worker, 🟡 subscribing and click | Web e2e `notificationsFlow` saves settings and hands the service worker a push (via Chrome DevTools Protocol), checking the notification and the delivered receipt. Subscribing needs a real browser push service, so the "Turn on" button and opening the chat from a click are not browser-tested; the API side of subscribing is |
+| iPhone and Android: permission prompt, token registration, tap handling | ⛔ | Needs the APNs key and Firebase project above, then Flutter work |
+| Clear notifications on other devices after reading | ⬜ | Planned |
+| Durable outbox (survives app restart) and background sync on mobile | ⬜ | Planned |
+| Queue metrics and alerting | ⬜ | Stage 10 monitoring |
+
+## Stages 5 to 10
 Not started. See `plan.md`. Calls, social, business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.

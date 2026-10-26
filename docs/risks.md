@@ -28,3 +28,5 @@ Ranked roughly by how much harm each could do and how hard it would be to undo.
 - Contacts discovery is not implemented. It will be opt-in only, with hashed identifiers and rate limits, and we know hashing alone does not anonymise phone numbers.
 - Account deletion scrubs personal data immediately. A scheduled purge of tombstone rows and backups (backup retention) is not built yet.
 - Simultaneous refreshes from two browser tabs can sign the user out (see ADR 0002).
+- Push notifications show message text through Apple's and Google's push services by default, because chats are not end-to-end encrypted yet. People can choose "sender only" or "nothing". Revisit the default when E2EE ships.
+- iPhone and Android do not receive notifications yet: the server side is built, but it needs APNs and FCM credentials and the apps still have to register for push.

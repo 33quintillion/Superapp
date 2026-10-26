@@ -1,5 +1,6 @@
 import { authed } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
+import { NotificationSettings } from './notifications';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +47,9 @@ export default async function AccountPage() {
           </button>
         </form>
       )}
+
+      <h2>Notifications</h2>
+      <NotificationSettings />
 
       <h2>Signed-in devices</h2>
       <div className="card" data-testid="sessions">

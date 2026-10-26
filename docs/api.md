@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3000` locally. Requests and responses are JSON. Authenticated routes need `Authorization: Bearer <accessToken>`.
 
-Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` (403), `not_found` (404), `email_taken` / `username_taken` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` (409), `rate_limited` (429, with a `Retry-After` header).
+Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` (403), `not_found` (404), `email_taken` / `username_taken` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` / `push_not_configured` (409), `rate_limited` (429, with a `Retry-After` header).
 
 A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 
@@ -99,3 +99,19 @@ Allowed types: images (JPEG, PNG, GIF, WebP, HEIC, ≤ 20 MB), video (MP4, Quick
 | --- | --- | --- | --- |
 | POST | `/v1/realtime/tickets` | ✓ | `{ ticket, expiresIn: 60, path }`. Single use |
 | GET (WebSocket) | `/v1/realtime?ticket=` | ticket | See [`realtime.md`](realtime.md) for frames and events |
+
+## Push notifications
+See [`push.md`](push.md) for how delivery works and how to configure each provider.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/push/config` | ✓ | `{ providers: { apns, fcm, webpush }, vapidPublicKey }`. Which services this server can deliver through, and the key browsers subscribe with (`null` when Web Push is not set up) |
+| PUT | `/v1/push/devices/current` | ✓ | Registers this session's device, replacing any earlier one. One of `{ provider: "apns", token (hex), environment: "sandbox" \| "production" }`, `{ provider: "fcm", token }`, `{ provider: "webpush", endpoint, keys: { p256dh, auth } }` (the browser's `PushSubscription.toJSON()`). Web Push endpoints must be on a known browser push service. → the device. 30 per hour |
+| DELETE | `/v1/push/devices/current` | ✓ | 204. Stops notifications to this device |
+| POST | `/v1/push/devices/current/test` | ✓ | 202 `{ jobId }`. Queues a test notification to this device. 404 if not registered, 409 `push_not_configured` if the server lacks that provider's credentials. 5 per 10 minutes |
+| GET | `/v1/push/devices` | ✓ | `[{ id, provider, deviceName, current, deliverable, disabledReason, lastDeliveredAt, registeredAt, updatedAt }]`. Tokens are never returned. `deliverable` is false when the token died or the server has no credentials for that provider |
+| DELETE | `/v1/push/devices/:id` | ✓ | 204. Own devices only (404 otherwise) |
+| GET | `/v1/me/notifications` | ✓ | `{ pushEnabled, preview: "full" \| "sender" \| "none", quietHours: { start: "HH:MM", end: "HH:MM", timeZone } \| null }` |
+| PATCH | `/v1/me/notifications` | ✓ | Any of the fields above. `timeZone` is an IANA name; `start` and `end` must differ and may wrap past midnight |
+
+Per-chat mute (`PATCH /v1/conversations/:id` with `mutedUntil`) also stops notifications for that chat.
