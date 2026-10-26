@@ -4,7 +4,9 @@ import { Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService } from '../database/database.service';
 
-export type ReportInput = { subjectType: 'user' | 'message' | 'post' | 'business' | 'mini_app'; subjectId: string; reason: string; details: string };
+export type ReportInput = {
+  subjectType: 'user' | 'message' | 'post' | 'comment' | 'story' | 'community' | 'business' | 'mini_app';
+  subjectId: string; reason: string; details: string };
 
 @Injectable()
 export class SafetyService {
@@ -18,7 +20,15 @@ export class SafetyService {
     if (blockerId === blockedId) throw Errors.validation([{ path: 'userId', message: 'You cannot block yourself' }]);
     const target = await this.db.one(`SELECT 1 FROM users WHERE id = $1 AND state <> 'deleted'`, [blockedId]);
     if (!target) throw Errors.notFound('User');
-    await this.db.query('INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [blockerId, blockedId]);
+    await this.db.tx(async (tx) => {
+      await this.db.query('INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [blockerId, blockedId], tx);
+      // A block ends following (and pending requests) in both directions.
+      await this.db.query(
+        'DELETE FROM follows WHERE (follower_id = $1 AND followee_id = $2) OR (follower_id = $2 AND followee_id = $1)',
+        [blockerId, blockedId],
+        tx,
+      );
+    });
     await this.audit.record({ actorId: blockerId, action: 'safety.block', targetType: 'user', targetId: blockedId });
   }
 

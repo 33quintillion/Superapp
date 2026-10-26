@@ -23,6 +23,8 @@ const PrivacyPatch = z
     whoCanMessage: z.enum(['everyone', 'contacts', 'nobody']),
     showOnlineStatus: z.boolean(),
     showReadReceipts: z.boolean(),
+    privateAccount: z.boolean(),
+    whoCanAddToGroups: z.enum(['everyone', 'following', 'nobody']),
   })
   .partial()
   .strict();

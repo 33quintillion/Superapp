@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { decodeCursor, encodeCursor } from '../common/cursor';
 import { AppError, Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
@@ -8,7 +9,7 @@ import { PushService } from '../push/push.service';
 import { RealtimeBus } from '../realtime/realtime-bus.service';
 import { SafetyService } from '../safety/safety.service';
 
-export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'voice' | 'file';
+export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'voice' | 'file' | 'system';
 
 export interface SendInput {
   clientId: string;
@@ -27,6 +28,9 @@ export const MAX_PINS = 10;
 export const MAX_BODY = 4000;
 
 const cannotMessage = () => new AppError(HttpStatus.FORBIDDEN, 'cannot_message', 'You can’t message this person');
+const systemMessage = () => Errors.conflict('system_message', 'Group updates cannot be changed');
+
+export type GroupPolicy = 'everyone' | 'admins';
 
 interface MessageRow {
   id: string;
@@ -44,6 +48,7 @@ interface MessageRow {
   pinned_at: Date | null;
   pinned_by: string | null;
   created_at: Date;
+  system_event: Record<string, unknown> | null;
   hidden: boolean;
   media: Record<string, unknown> | null;
   reply_to: Record<string, unknown> | null;
@@ -56,6 +61,7 @@ interface MemberRow {
   display_name: string;
   state: string;
   role: string;
+  joined_at: Date;
   last_delivered_seq: string;
   last_read_seq: string;
   show_read_receipts: boolean | null;
@@ -64,7 +70,7 @@ interface MemberRow {
 /** One SELECT shape for every message read, so REST, the change feed and events agree. */
 const MESSAGE_SELECT = `
   SELECT m.id, m.conversation_id, m.seq, m.change_seq, m.sender_id, m.client_id, m.kind, m.body, m.forwarded,
-         m.mentions, m.edited_at, m.deleted_at, m.pinned_at, m.pinned_by, m.created_at,
+         m.mentions, m.edited_at, m.deleted_at, m.pinned_at, m.pinned_by, m.created_at, m.system_event,
          EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1) AS hidden,
          CASE WHEN md.id IS NULL THEN NULL ELSE json_build_object(
            'id', md.id, 'kind', md.kind, 'contentType', md.content_type, 'byteSize', md.byte_size,
@@ -92,6 +98,7 @@ function messageDto(m: MessageRow) {
     replyTo: m.reply_to,
     forwarded: m.forwarded,
     mentions: m.mentions,
+    system: m.deleted_at ? null : m.system_event,
     reactions: m.reactions,
     editedAt: m.edited_at,
     deletedAt: m.deleted_at,
@@ -102,8 +109,11 @@ function messageDto(m: MessageRow) {
 }
 export type MessageDto = ReturnType<typeof messageDto>;
 
+/** Messages from before the viewer joined a group stay hidden from them ($1 is the viewer). */
+const SINCE_JOINED = `AND m.seq > (SELECT vm.visible_from_seq FROM conversation_members vm WHERE vm.conversation_id = m.conversation_id AND vm.user_id = $1)`;
+
 /** Fixed viewer for event payloads, which go to every member: nobody's hides apply. */
-const NO_VIEWER = '00000000-0000-0000-0000-000000000000';
+export const NO_VIEWER = '00000000-0000-0000-0000-000000000000';
 
 @Injectable()
 export class MessagingService {
@@ -178,8 +188,13 @@ export class MessagingService {
       muted_until: Date | null;
       archived_at: Date | null;
       last_read_seq: string;
+      description: string;
+      send_policy: GroupPolicy;
+      info_policy: GroupPolicy;
+      add_policy: GroupPolicy;
     }>(
-      `SELECT c.id, c.kind, c.title, c.last_seq, c.last_message_at, c.created_at, cm.muted_until, cm.archived_at, cm.last_read_seq
+      `SELECT c.id, c.kind, c.title, c.last_seq, c.last_message_at, c.created_at, cm.muted_until, cm.archived_at, cm.last_read_seq,
+              c.description, c.send_policy, c.info_policy, c.add_policy
          FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2
         WHERE c.id = $1`,
       [conversationId, userId],
@@ -189,14 +204,14 @@ export class MessagingService {
     const [members, last, unread] = await Promise.all([
       this.members(conversationId, db),
       this.db.one<MessageRow>(
-        `${MESSAGE_SELECT} WHERE m.conversation_id = $2
+        `${MESSAGE_SELECT} WHERE m.conversation_id = $2 ${SINCE_JOINED}
             AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1)
           ORDER BY m.seq DESC LIMIT 1`,
         [userId, conversationId],
         db,
       ),
       this.db.one<{ n: string }>(
-        `SELECT count(*) AS n FROM messages m WHERE m.conversation_id = $1 AND m.seq > $3 AND m.sender_id <> $2 AND m.deleted_at IS NULL
+        `SELECT count(*) AS n FROM messages m WHERE m.conversation_id = $1 AND m.seq > $3 AND m.sender_id <> $2 AND m.deleted_at IS NULL AND m.kind <> 'system'
             AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $2)`,
         [conversationId, userId, c.last_read_seq],
         db,
@@ -215,6 +230,10 @@ export class MessagingService {
       archived: !!c.archived_at,
       createdAt: c.created_at,
       peerId: c.kind === 'direct' ? (members.find((m) => m.user_id !== userId)?.user_id ?? null) : null,
+      group:
+        c.kind === 'group'
+          ? { description: c.description, sendPolicy: c.send_policy, infoPolicy: c.info_policy, addPolicy: c.add_policy, myRole: me?.role ?? 'member' }
+          : null,
       members: members.map((m) => this.memberDto(m, me)),
     };
   }
@@ -292,7 +311,7 @@ export class MessagingService {
   /** Newest-first history paging (before) or catch-up paging (after), returned oldest-first. */
   async listMessages(userId: string, conversationId: string, opts: { before?: number; after?: number; limit: number }) {
     await this.requireMember(userId, conversationId);
-    const hidden = `AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1)`;
+    const hidden = `AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1) ${SINCE_JOINED}`;
     let rows: MessageRow[];
     if (opts.after !== undefined) {
       rows = (
@@ -325,7 +344,7 @@ export class MessagingService {
     const head = await this.db.one<{ last_seq: string }>('SELECT last_seq FROM conversations WHERE id = $1', [conversationId]);
     const lastSeq = Number(head!.last_seq);
     const { rows } = await this.db.query<MessageRow>(
-      `${MESSAGE_SELECT} WHERE m.conversation_id = $2 AND m.change_seq > $3 AND m.change_seq <= $4 ORDER BY m.change_seq ASC LIMIT $5`,
+      `${MESSAGE_SELECT} WHERE m.conversation_id = $2 AND m.change_seq > $3 AND m.change_seq <= $4 ${SINCE_JOINED} ORDER BY m.change_seq ASC LIMIT $5`,
       [userId, conversationId, since, lastSeq, limit + 1],
     );
     const hasMore = rows.length > limit;
@@ -340,6 +359,7 @@ export class MessagingService {
 
   async edit(userId: string, messageId: string, body: string) {
     return this.mutate(userId, messageId, async (m, tx, seq) => {
+      if (m.kind === 'system') throw systemMessage();
       if (m.sender_id !== userId) throw Errors.forbidden('Only the sender can edit a message');
       if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
       if (Date.now() - m.created_at.getTime() > EDIT_WINDOW_MS) throw Errors.conflict('edit_window_passed', 'Messages can only be edited for 15 minutes');
@@ -351,6 +371,7 @@ export class MessagingService {
   async deleteForEveryone(userId: string, messageId: string) {
     const released: { mediaId: string | null } = { mediaId: null };
     const out = await this.mutate(userId, messageId, async (m, tx, seq) => {
+      if (m.kind === 'system') throw systemMessage();
       if (m.sender_id !== userId) throw Errors.forbidden('Only the sender can delete a message for everyone');
       if (m.deleted_at) return;
       if (Date.now() - m.created_at.getTime() > DELETE_WINDOW_MS) throw Errors.conflict('delete_window_passed', 'Messages can only be deleted for everyone for 48 hours');
@@ -388,6 +409,7 @@ export class MessagingService {
 
   async react(userId: string, messageId: string, emoji: string | null) {
     return this.mutate(userId, messageId, async (m, tx, seq) => {
+      if (m.kind === 'system') throw systemMessage();
       if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
       await this.assertNotBlocked(userId, m.conversation_id, tx);
       if (emoji === null) await this.db.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2', [m.id, userId], tx);
@@ -405,6 +427,7 @@ export class MessagingService {
 
   async pin(userId: string, messageId: string, pinned: boolean) {
     return this.mutate(userId, messageId, async (m, tx, seq) => {
+      if (m.kind === 'system') throw systemMessage();
       if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
       await this.assertNotBlocked(userId, m.conversation_id, tx);
       if (pinned && !m.pinned_at) {
@@ -422,7 +445,7 @@ export class MessagingService {
   async pinned(userId: string, conversationId: string) {
     await this.requireMember(userId, conversationId);
     const { rows } = await this.db.query<MessageRow>(
-      `${MESSAGE_SELECT} WHERE m.conversation_id = $2 AND m.pinned_at IS NOT NULL ORDER BY m.pinned_at DESC`,
+      `${MESSAGE_SELECT} WHERE m.conversation_id = $2 AND m.pinned_at IS NOT NULL ${SINCE_JOINED} ORDER BY m.pinned_at DESC`,
       [userId, conversationId],
     );
     return rows.map(messageDto);
@@ -431,6 +454,7 @@ export class MessagingService {
   /** Copies a message the user can see into other chats, marked as forwarded. */
   async forward(userId: string, messageId: string, conversationIds: string[], clientId: string) {
     const src = await this.requireVisibleMessage(userId, messageId);
+    if (src.kind === 'system') throw systemMessage();
     if (src.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
     const results = [];
     for (const conversationId of conversationIds) {
@@ -464,7 +488,7 @@ export class MessagingService {
     const { rows } = await this.db.query<MessageRow>(
       `${MESSAGE_SELECT}
          JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1
-        WHERE m.deleted_at IS NULL AND to_tsvector('simple', m.body) @@ to_tsquery('simple', $2)
+        WHERE m.deleted_at IS NULL AND m.seq > cm.visible_from_seq AND to_tsvector('simple', m.body) @@ to_tsquery('simple', $2)
           AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1) ${extra}
         ORDER BY m.created_at DESC, m.id DESC LIMIT $3`,
       params,
@@ -509,8 +533,10 @@ export class MessagingService {
     const members = await this.members(conversationId);
     if (!members.some((m) => m.user_id === userId)) throw Errors.notFound('Conversation');
     const others = members.filter((m) => m.user_id !== userId).map((m) => m.user_id);
-    for (const o of others) if (await this.safety.isBlockedEitherWay(userId, o)) return;
-    await this.bus.publish(others, { type: 'typing', data: { conversationId, userId, typing } });
+    // In groups, people who blocked each other just don't see each other typing.
+    const visible = [];
+    for (const o of others) if (!(await this.safety.isBlockedEitherWay(userId, o))) visible.push(o);
+    await this.bus.publish(visible, { type: 'typing', data: { conversationId, userId, typing } });
   }
 
   /** People this user shares a chat with (and is not blocked with), for presence. */
@@ -607,9 +633,9 @@ export class MessagingService {
 
   // ---------------------------------------------------------------- internals
 
-  private async members(conversationId: string, db?: Queryable) {
+  async members(conversationId: string, db?: Queryable) {
     const { rows } = await this.db.query<MemberRow>(
-      `SELECT cm.user_id, u.username, u.display_name, u.state, cm.role, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
+      `SELECT cm.user_id, u.username, u.display_name, u.state, cm.role, cm.joined_at, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id LEFT JOIN privacy_settings p ON p.user_id = cm.user_id
         WHERE cm.conversation_id = $1 ORDER BY cm.joined_at, cm.user_id`,
       [conversationId],
@@ -636,16 +662,17 @@ export class MessagingService {
   }
 
   /** Takes the conversation's next counter value. Holds the row lock until the transaction ends. */
-  private async nextSeq(conversationId: string, tx: Queryable): Promise<number> {
+  async nextSeq(conversationId: string, tx: Queryable): Promise<number> {
     const r = await this.db.one<{ last_seq: string }>('UPDATE conversations SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq', [conversationId], tx);
     return Number(r!.last_seq);
   }
 
+  /** Direct chats only: a block between two people in a group doesn't stop the group. */
   private async assertNotBlocked(userId: string, conversationId: string, db: Queryable) {
     const blocked = await this.db.one(
-      `SELECT 1 FROM conversation_members cm JOIN blocks b
+      `SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id JOIN blocks b
            ON (b.blocker_id = $2 AND b.blocked_id = cm.user_id) OR (b.blocker_id = cm.user_id AND b.blocked_id = $2)
-        WHERE cm.conversation_id = $1 AND cm.user_id <> $2 LIMIT 1`,
+        WHERE c.id = $1 AND c.kind = 'direct' AND cm.user_id <> $2 LIMIT 1`,
       [conversationId, userId],
       db,
     );
@@ -658,6 +685,14 @@ export class MessagingService {
    * chats from strangers (there is no contact list yet, so "contacts" means people you replied to).
    */
   private async assertCanSend(userId: string, conversationId: string, members: MemberRow[], tx: Queryable) {
+    const c = await this.db.one<{ kind: string; send_policy: GroupPolicy }>('SELECT kind, send_policy FROM conversations WHERE id = $1', [conversationId], tx);
+    if (c!.kind === 'group') {
+      const me = members.find((m) => m.user_id === userId)!;
+      if (c!.send_policy === 'admins' && me.role === 'member') {
+        throw new AppError(HttpStatus.FORBIDDEN, 'admins_only', 'Only admins can send messages in this group');
+      }
+      return;
+    }
     await this.assertNotBlocked(userId, conversationId, tx);
     for (const other of members.filter((m) => m.user_id !== userId)) {
       if (other.state === 'deleted') throw cannotMessage();
@@ -700,7 +735,7 @@ export class MessagingService {
     return r ? messageDto(r) : null;
   }
 
-  private async loadOne(viewerId: string, messageId: string, db?: Queryable) {
+  async loadOne(viewerId: string, messageId: string, db?: Queryable) {
     const r = await this.db.one<MessageRow>(`${MESSAGE_SELECT} WHERE m.id = $2`, [viewerId, messageId], db);
     return r ? messageDto(r) : null;
   }
@@ -719,7 +754,7 @@ export class MessagingService {
     }>(
       `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.media_id, m.deleted_at, m.pinned_at, m.created_at FROM messages m
          JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $2
-        WHERE m.id = $1`,
+        WHERE m.id = $1 AND m.seq > cm.visible_from_seq`,
       [messageId, userId],
       db,
     );
@@ -752,7 +787,7 @@ export class MessagingService {
     return dto;
   }
 
-  private async publishToMembers(conversationId: string, event: { type: string; data: unknown }) {
+  async publishToMembers(conversationId: string, event: { type: string; data: unknown }) {
     const members = await this.members(conversationId);
     await this.bus.publish(
       members.map((m) => m.user_id),
@@ -765,16 +800,4 @@ class NoChange extends Error {
   constructor(readonly conversationId: string) {
     super('no change');
   }
-}
-
-function encodeCursor(ts: Date, id: string) {
-  return Buffer.from(`${ts.toISOString()}|${id}`).toString('base64url');
-}
-
-function decodeCursor(c: string): [string, string] {
-  const [ts, id] = Buffer.from(c, 'base64url').toString().split('|');
-  if (!ts || !id || Number.isNaN(Date.parse(ts)) || !/^[0-9a-f-]{36}$/.test(id)) {
-    throw Errors.validation([{ path: 'cursor', message: 'Invalid cursor' }]);
-  }
-  return [ts, id];
 }

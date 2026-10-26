@@ -48,6 +48,9 @@ const schema = z.object({
   WS_SESSION_RECHECK_SECONDS: z.coerce.number().int().positive().default(30),
   WS_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(25),
 
+  /** How often expired stories (and their files) are deleted. 0 turns the sweep off on this instance. */
+  STORY_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(300),
+
   /** Runs the push delivery loop in this process. Turn off on instances that should only serve requests. */
   PUSH_WORKER_ENABLED: z.stringbool().default(true),
   PUSH_WORKER_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),

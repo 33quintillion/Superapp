@@ -21,6 +21,7 @@ export const TEST_ENV = {
   S3_AUTO_CREATE_BUCKET: 'true',
   // Push tests drive the worker by hand; the rest don't need it polling.
   PUSH_WORKER_ENABLED: 'false',
+  STORY_SWEEP_INTERVAL_SECONDS: '0',
 };
 
 export function testConfig(overrides: Record<string, string> = {}): AppConfig {

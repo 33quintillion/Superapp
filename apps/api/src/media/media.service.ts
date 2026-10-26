@@ -114,13 +114,19 @@ export class MediaService {
     return mediaDto(done!);
   }
 
-  /** A short-lived download URL, for the owner or a member of a chat where it was shared. */
+  /**
+   * A short-lived download URL, for the owner, a chat member who can see a message carrying
+   * it, or anyone who can see a post or story carrying it (same rules as the feed).
+   */
   async download(userId: string, mediaId: string) {
     const m = await this.db.one<MediaRow>(
       `SELECT m.* FROM media m WHERE m.id = $1 AND m.state = 'ready' AND (
-         m.owner_id = $2 OR EXISTS (
+         m.owner_id = $2
+         OR EXISTS (
            SELECT 1 FROM messages msg JOIN conversation_members cm ON cm.conversation_id = msg.conversation_id
-            WHERE msg.media_id = m.id AND msg.deleted_at IS NULL AND cm.user_id = $2))`,
+            WHERE msg.media_id = m.id AND msg.deleted_at IS NULL AND cm.user_id = $2 AND msg.seq > cm.visible_from_seq)
+         OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id AND can_view_post($2, pm.post_id))
+         OR EXISTS (SELECT 1 FROM stories s WHERE s.media_id = m.id AND can_view_story($2, s.id)))`,
       [mediaId, userId],
     );
     // 404 rather than 403 so ids cannot be probed.
@@ -140,11 +146,13 @@ export class MediaService {
     return m;
   }
 
-  /** Deletes the stored object once no remaining message uses it. */
+  /** Deletes the stored object once no remaining message, post or story uses it. */
   async releaseIfUnused(mediaId: string) {
     const m = await this.db.one<{ object_key: string }>(
       `UPDATE media SET state = 'deleted' WHERE id = $1 AND state IN ('ready', 'pending')
-         AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id = $1) RETURNING object_key`,
+         AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id = $1)
+         AND NOT EXISTS (SELECT 1 FROM post_media WHERE media_id = $1)
+         AND NOT EXISTS (SELECT 1 FROM stories WHERE media_id = $1) RETURNING object_key`,
       [mediaId],
     );
     if (m) await this.storage.delete(m.object_key);
