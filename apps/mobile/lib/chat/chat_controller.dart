@@ -72,6 +72,53 @@ class ChatController extends ChangeNotifier {
     return c.id;
   }
 
+  Future<String> createGroup(String title, List<String> usernames) async {
+    final ids = <String>[];
+    for (final u in usernames) {
+      ids.add((await auth.authed('GET', '/v1/users/${Uri.encodeComponent(u.trim().replaceFirst('@', '').toLowerCase())}'))!['id'] as String);
+    }
+    final c = Conversation.fromJson((await auth.authed('POST', '/v1/conversations/groups', body: {'title': title.trim(), 'memberIds': ids}))!);
+    _adopt(c);
+    return c.id;
+  }
+
+  Future<void> addToGroup(String cid, String username) async {
+    final u = await auth.authed('GET', '/v1/users/${Uri.encodeComponent(username.trim().replaceFirst('@', '').toLowerCase())}');
+    _adopt(Conversation.fromJson((await auth.authed('POST', '/v1/conversations/$cid/members', body: {'userIds': [u!['id']]}))!));
+  }
+
+  Future<void> setRole(String cid, String userId, String role) async {
+    _adopt(Conversation.fromJson((await auth.authed('PATCH', '/v1/conversations/$cid/members/$userId', body: {'role': role}))!));
+  }
+
+  Future<void> updateGroup(String cid, Map<String, dynamic> patch) async {
+    _adopt(Conversation.fromJson((await auth.authed('PATCH', '/v1/conversations/$cid/group', body: patch))!));
+  }
+
+  /// Removes someone, or leaves when [userId] is this user.
+  Future<void> removeFromGroup(String cid, String userId) async {
+    await auth.authed('DELETE', '/v1/conversations/$cid/members/$userId');
+    if (userId == me) {
+      _forget(cid);
+    } else {
+      await _refreshOne(cid);
+    }
+    notifyListeners();
+  }
+
+  void _adopt(Conversation c) {
+    conversations = [...conversations.where((x) => x.id != c.id), c];
+    _sortList();
+    notifyListeners();
+  }
+
+  void _forget(String cid) {
+    conversations = conversations.where((c) => c.id != cid).toList();
+    _loaded.remove(cid);
+    _messages.remove(cid);
+    if (activeId == cid) activeId = null;
+  }
+
   /// Opens a chat (screens call this from initState, so it does not notify before its first await).
   Future<void> open(String cid) async {
     activeId = cid;
@@ -256,8 +303,10 @@ class ChatController extends ChangeNotifier {
         } else {
           _typingUntil.remove(key);
         }
-      case 'conversation.updated':
+      case 'conversation.updated' || 'conversation.changed':
         unawaited(_refreshOne(d['id'] as String));
+      case 'conversation.removed':
+        _forget(d['id'] as String);
     }
     notifyListeners();
   }

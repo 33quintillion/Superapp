@@ -18,7 +18,10 @@ class ChatListScreen extends StatelessWidget {
         builder: (context, _) {
           final visible = chat.conversations.where((c) => !c.archived).toList();
           return Scaffold(
-            appBar: AppBar(title: const Text('Chats'), actions: [_StatusChip(status: chat.status)]),
+            appBar: AppBar(title: const Text('Chats'), actions: [
+              IconButton(key: const Key('new-group'), tooltip: 'New group', icon: const Icon(Icons.group_add_outlined), onPressed: () => _newGroup(context)),
+              _StatusChip(status: chat.status),
+            ]),
             floatingActionButton: FloatingActionButton(
               key: const Key('new-chat'),
               tooltip: 'New chat',
@@ -34,10 +37,10 @@ class ChatListScreen extends StatelessWidget {
                       final c = visible[i];
                       final peer = c.peer(chat.me);
                       return ListTile(
-                        key: Key('conv-${peer?.username}'),
-                        leading: CircleAvatar(child: Text(_initial(peer?.displayName))),
-                        title: Text(peer?.displayName ?? 'Chat'),
-                        subtitle: Text(c.lastMessage?.preview ?? 'No messages yet', maxLines: 1, overflow: TextOverflow.ellipsis),
+                        key: c.isGroup ? ValueKey('conv-${c.id}') : Key('conv-${peer?.username}'),
+                        leading: CircleAvatar(child: c.isGroup ? const Icon(Icons.group_outlined) : Text(_initial(peer?.displayName))),
+                        title: Text(c.titleFor(chat.me)),
+                        subtitle: Text(c.previewFor(chat.me), maxLines: 1, overflow: TextOverflow.ellipsis),
                         trailing: c.unreadCount > 0 ? Badge(label: Text('${c.unreadCount}')) : null,
                         onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: c.id))),
                       );
@@ -68,6 +71,36 @@ class ChatListScreen extends StatelessWidget {
     } on ApiException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.status == 404 ? 'No one with that username' : e.message)));
+    }
+  }
+
+  Future<void> _newGroup(BuildContext context) async {
+    final title = TextEditingController();
+    final people = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New group'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(key: const Key('group-title'), controller: title, autofocus: true, maxLength: 100, decoration: const InputDecoration(labelText: 'Group name')),
+          TextField(key: const Key('group-members'), controller: people, decoration: const InputDecoration(labelText: 'Usernames, separated by commas')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(key: const Key('create-group'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Create')),
+        ],
+      ),
+    );
+    if (ok != true || title.text.trim().isEmpty || !context.mounted) return;
+    final usernames = people.text.split(RegExp(r'[\s,]+')).where((u) => u.isNotEmpty).toList();
+    try {
+      final id = await chat.createGroup(title.text, usernames);
+      if (!context.mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: id)));
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      final text = e.status == 404 ? 'One of those usernames doesn’t exist' : (e.code == 'cannot_add' ? 'Some of those people don’t allow you to add them to groups' : e.message);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
     }
   }
 }
@@ -148,14 +181,27 @@ class _ChatScreenState extends State<ChatScreen> {
           final c = chat.conversation(cid);
           final peer = c?.peer(chat.me);
           final msgs = chat.messagesFor(cid);
-          final typing = peer != null && chat.isTyping(cid, peer.userId);
+          final typing = c != null && c.members.any((m) => m.userId != chat.me && chat.isTyping(cid, m.userId));
+          final canSend = c?.group?.canSend ?? true;
           return Scaffold(
             appBar: AppBar(
               title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(peer?.displayName ?? 'Chat'),
-                if (typing) Text('typing…', key: const Key('typing'), style: Theme.of(context).textTheme.labelSmall),
+                Text(c?.titleFor(chat.me) ?? 'Chat'),
+                if (typing)
+                  Text('typing…', key: const Key('typing'), style: Theme.of(context).textTheme.labelSmall)
+                else if (c?.isGroup ?? false)
+                  Text('${c!.members.length} members', style: Theme.of(context).textTheme.labelSmall),
               ]),
-              actions: [_StatusChip(status: chat.status)],
+              actions: [
+                if (c?.isGroup ?? false)
+                  IconButton(
+                    key: const Key('group-info'),
+                    tooltip: 'Group info',
+                    icon: const Icon(Icons.info_outline),
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => GroupInfoScreen(chat: chat, conversationId: cid))),
+                  ),
+                _StatusChip(status: chat.status),
+              ],
             ),
             body: Column(children: [
               Expanded(
@@ -169,10 +215,45 @@ class _ChatScreenState extends State<ChatScreen> {
                       return TextButton(onPressed: () => chat.loadEarlier(cid), child: const Text('Load earlier messages'));
                     }
                     final m = msgs[msgs.length - 1 - i];
-                    return _Bubble(chat: chat, m: m, peerDelivered: peer?.lastDeliveredSeq ?? 0, peerRead: peer?.lastReadSeq);
+                    if (m.kind == 'system') {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: NexaSpace.xs),
+                          child: Text(
+                            m.system == null || c == null ? 'Group updated' : describeSystem(m.system!, m.senderId, chat.me, c.nameOf),
+                            key: Key('system-${m.id}'),
+                            style: Theme.of(context).textTheme.labelSmall,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      );
+                    }
+                    final prev = i + 1 < msgs.length ? msgs[msgs.length - 2 - i] : null;
+                    final others = c?.members.where((x) => x.userId != chat.me).toList() ?? const <ChatMember>[];
+                    // In groups a message counts as delivered or read once everyone has it.
+                    final delivered = c?.isGroup ?? false ? others.fold<int>(1 << 52, (n, x) => x.lastDeliveredSeq < n ? x.lastDeliveredSeq : n) : peer?.lastDeliveredSeq ?? 0;
+                    final read = c?.isGroup ?? false
+                        ? (others.any((x) => x.lastReadSeq != null) ? others.fold<int>(1 << 52, (n, x) => x.lastReadSeq != null && x.lastReadSeq! < n ? x.lastReadSeq! : n) : null)
+                        : peer?.lastReadSeq;
+                    return _Bubble(
+                      chat: chat,
+                      m: m,
+                      peerDelivered: delivered,
+                      peerRead: read,
+                      senderName: (c?.isGroup ?? false) && m.senderId != chat.me && prev?.senderId != m.senderId ? c!.nameOf(m.senderId) : null,
+                    );
                   },
                 ),
               ),
+              if (!canSend)
+                const SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: EdgeInsets.all(NexaSpace.md),
+                    child: Text('Only admins can send messages in this group.', key: Key('admins-only')),
+                  ),
+                )
+              else
               SafeArea(
                 top: false,
                 child: Padding(
@@ -199,11 +280,12 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.chat, required this.m, required this.peerDelivered, required this.peerRead});
+  const _Bubble({required this.chat, required this.m, required this.peerDelivered, required this.peerRead, this.senderName});
   final ChatController chat;
   final ChatMessage m;
   final int peerDelivered;
   final int? peerRead;
+  final String? senderName;
 
   @override
   Widget build(BuildContext context) {
@@ -228,6 +310,7 @@ class _Bubble extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: NexaSpace.md, vertical: NexaSpace.sm),
           decoration: BoxDecoration(color: mine ? scheme.primaryContainer : scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(NexaRadius.lg)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            if (senderName != null) Text(senderName!, style: Theme.of(context).textTheme.labelMedium?.copyWith(color: scheme.primary)),
             if (m.forwarded) Text('Forwarded', style: Theme.of(context).textTheme.labelSmall),
             if (m.replyPreview != null) Text('↩ ${m.replyPreview}', style: Theme.of(context).textTheme.labelSmall),
             if (m.deletedAt != null)
@@ -333,4 +416,94 @@ class _MediaViewState extends State<_MediaView> {
       Flexible(child: Text(label)),
     ]);
   }
+}
+
+/// Members, roles and settings. Actions are offered only where the server will allow them.
+class GroupInfoScreen extends StatelessWidget {
+  const GroupInfoScreen({super.key, required this.chat, required this.conversationId});
+  final ChatController chat;
+  final String conversationId;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: chat,
+        builder: (context, _) {
+          final c = chat.conversation(conversationId);
+          final g = c?.group;
+          if (c == null || g == null) return const Scaffold(body: Center(child: Text('You’re no longer in this group.')));
+          Future<void> run(Future<void> Function() fn) async {
+            try {
+              await fn();
+            } on ApiException catch (e) {
+              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+            }
+          }
+
+          return Scaffold(
+            appBar: AppBar(title: Text(c.titleFor(chat.me))),
+            body: ListView(children: [
+              if (g.description.isNotEmpty) ListTile(title: Text(g.description)),
+              if (g.isAdmin)
+                SwitchListTile(
+                  key: const Key('admins-only-switch'),
+                  title: const Text('Only admins can send'),
+                  value: g.sendPolicy == 'admins',
+                  onChanged: (v) => run(() => chat.updateGroup(c.id, {'sendPolicy': v ? 'admins' : 'everyone'})),
+                ),
+              if (g.isAdmin)
+                SwitchListTile(
+                  title: const Text('Anyone can add people'),
+                  value: g.addPolicy == 'everyone',
+                  onChanged: (v) => run(() => chat.updateGroup(c.id, {'addPolicy': v ? 'everyone' : 'admins'})),
+                ),
+              if (g.canAdd)
+                ListTile(
+                  key: const Key('add-member'),
+                  leading: const Icon(Icons.person_add_alt),
+                  title: const Text('Add people'),
+                  onTap: () async {
+                    final ctrl = TextEditingController();
+                    final name = await showDialog<String>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Add to group'),
+                        content: TextField(key: const Key('add-username'), controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Username')),
+                        actions: [FilledButton(key: const Key('add-confirm'), onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Add'))],
+                      ),
+                    );
+                    if (name != null && name.trim().isNotEmpty) await run(() => chat.addToGroup(c.id, name));
+                  },
+                ),
+              const Divider(),
+              for (final m in c.members)
+                ListTile(
+                  key: Key('member-${m.userId}'),
+                  title: Text(m.userId == chat.me ? 'You' : m.displayName),
+                  subtitle: m.role == 'member' ? null : Text(m.role == 'owner' ? 'Owner' : 'Admin'),
+                  trailing: m.userId == chat.me
+                      ? null
+                      : PopupMenuButton<String>(
+                          onSelected: (a) => run(() => a == 'remove' ? chat.removeFromGroup(c.id, m.userId) : chat.setRole(c.id, m.userId, a)),
+                          itemBuilder: (_) => [
+                            if (g.isAdmin && m.role == 'member') const PopupMenuItem(value: 'admin', child: Text('Make admin')),
+                            if (g.myRole == 'owner' && m.role == 'admin') const PopupMenuItem(value: 'member', child: Text('Remove admin')),
+                            if (m.role != 'owner' && (g.myRole == 'owner' || (g.myRole == 'admin' && m.role == 'member')))
+                              const PopupMenuItem(value: 'remove', child: Text('Remove from group')),
+                          ],
+                        ),
+                ),
+              const Divider(),
+              ListTile(
+                key: const Key('leave-group'),
+                leading: Icon(Icons.logout, color: Theme.of(context).colorScheme.error),
+                title: Text('Leave group', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                onTap: () async {
+                  await run(() => chat.removeFromGroup(c.id, chat.me));
+                  if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+                },
+              ),
+            ]),
+          );
+        },
+      );
 }

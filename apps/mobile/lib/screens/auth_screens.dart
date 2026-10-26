@@ -8,6 +8,7 @@ import '../chat/chat_controller.dart';
 import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
 import 'chat_screens.dart';
+import 'social_screens.dart';
 
 /// Shared scaffold for the signed-out forms: one column, max 420 px, scrolls on small screens.
 class _FormPage extends StatelessWidget {
@@ -204,9 +205,23 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           },
         ),
+        ListTile(
+          key: const Key('open-feed'),
+          leading: const Icon(Icons.dynamic_feed_outlined),
+          title: const Text('Feed and stories'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FeedScreen(auth: auth))),
+        ),
+        ListTile(
+          key: const Key('open-communities'),
+          leading: const Icon(Icons.groups_outlined),
+          title: const Text('Communities'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommunitiesScreen(auth: auth))),
+        ),
         const ListTile(
           leading: Icon(Icons.construction_outlined),
-          title: Text('Calls and the feed arrive in later stages.'),
+          title: Text('Calls arrive in a later stage.'),
         ),
       ]),
     );
