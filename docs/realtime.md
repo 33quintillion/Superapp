@@ -84,7 +84,7 @@ Events go to every device of every member, including the device that made the ch
 Each user has a Redis pub/sub channel. A server subscribes only to the users who have a socket open on it, and every write publishes to the channels of the conversation's members after it commits. Pub/sub delivery is best-effort, which is safe because Postgres and the change feed are the source of truth. Before a large launch, load-test this (Stage 9) and decide whether to move to Redis Streams or a broker with per-device queues.
 
 ## Not done yet
-- Push notifications for offline devices (Stage 4, needs APNs and FCM credentials).
+- Push notifications reach browsers today. iPhone and Android need APNs and FCM credentials and app-side registration (see [`push.md`](push.md)).
 - Group chats. The schema has roles and members, but only direct chats can be created (Stage 5).
 - Per-device delivery state. Receipts are per user, not per device.
 - Outboxes are kept in memory. A send that is still pending when the app is killed is lost and has to be typed again.

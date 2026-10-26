@@ -1,7 +1,7 @@
 // End-to-end: real API + real Postgres/Redis + production Next build, driven by Chromium.
 // Prereqs: Postgres and Redis running, `pnpm --filter @nexa/api build`, `pnpm --filter @nexa/web build`.
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createECDH, randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -12,6 +12,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const apiDir = join(here, '..', '..', 'api');
 const API_PORT = 3100, WEB_PORT = 3101, SMTP_PORT = 2525;
 const WEB = `http://127.0.0.1:${WEB_PORT}`;
+
+// Web Push is the one push provider that needs no Apple or Google account.
+const vapid = createECDH('prime256v1');
+vapid.generateKeys();
 
 const env = {
   ...process.env,
@@ -31,6 +35,9 @@ const env = {
   S3_ACCESS_KEY_ID: process.env.E2E_S3_ACCESS_KEY_ID ?? 'minioadmin',
   S3_SECRET_ACCESS_KEY: process.env.E2E_S3_SECRET_ACCESS_KEY ?? 'minioadmin',
   S3_AUTO_CREATE_BUCKET: 'true',
+  VAPID_PUBLIC_KEY: vapid.getPublicKey().toString('base64url'),
+  VAPID_PRIVATE_KEY: vapid.getPrivateKey().toString('base64url'),
+  VAPID_SUBJECT: 'mailto:e2e@example.test',
 };
 
 const procs = [];
@@ -154,7 +161,70 @@ async function chatFlow(browser, API, tag, step) {
   assert(csrf.status === 403, 'cross-site writes through the proxy are refused');
   step('chat proxy is limited to messaging and refuses cross-site writes');
 
+  await notificationsFlow(ana, ben, step);
+
   for (const p of people) await p.ctx.close();
+}
+
+/** Notification settings and the browser service worker handling a push. */
+async function notificationsFlow(ana, ben, step) {
+  // As if Ben had allowed notifications for this site when asked.
+  await ben.ctx.grantPermissions(['notifications'], { origin: WEB });
+  await ben.page.goto(`${WEB}/account`);
+  await ben.page.waitForFunction(() => document.querySelector('[data-testid=browser-push-state]')?.textContent !== 'Checking…');
+  const pushState = await ben.page.textContent('[data-testid=browser-push-state]');
+  assert(pushState === 'Off', `browser push offered (state: ${pushState})`);
+  await ben.page.selectOption('select[name=preview]', 'sender');
+  await ben.page.check('input[name=quiet]');
+  await ben.page.fill('input[name=quietStart]', '23:00');
+  await ben.page.fill('input[name=quietEnd]', '06:30');
+  await ben.page.click('[data-testid=notifications] button[type=submit]');
+  await ben.page.waitForSelector('[data-testid=notifications-saved]');
+  await ben.page.reload();
+  await ben.page.waitForSelector('input[name=quietStart]');
+  assert((await ben.page.inputValue('select[name=preview]')) === 'sender', 'preview setting kept');
+  assert((await ben.page.inputValue('input[name=quietEnd]')) === '06:30', 'quiet hours kept');
+  step('notification settings saved through the proxy and kept after reload');
+
+  // Ana sends while Ben is away from the chat screen (no socket open).
+  await ana.page.fill('input[name=message]', 'are you there?');
+  await ana.page.press('input[name=message]', 'Enter');
+  await ana.page.locator('[data-testid=msg][data-body="are you there?"] [data-testid=ticks]:not(:has-text("sending"))').waitFor();
+  const conv = (await ben.page.evaluate(async () => (await fetch('/api/chat/conversations')).json())).conversations[0];
+  const before = conv.members.find((m) => m.displayName === 'Ben').lastDeliveredSeq;
+  assert(conv.lastMessage.body === 'are you there?' && before < conv.lastMessage.seq, 'not delivered to Ben yet');
+
+  // Hand the service worker a push, as the browser does once it has decrypted one.
+  const cdp = await ben.ctx.newCDPSession(ben.page);
+  const registered = new Promise((resolve) =>
+    cdp.on('ServiceWorker.workerRegistrationUpdated', ({ registrations }) => {
+      const r = registrations.find((x) => x.scopeURL === `${WEB}/` && !x.isDeleted);
+      if (r) resolve(r.registrationId);
+    }),
+  );
+  await cdp.send('ServiceWorker.enable');
+  await ben.page.evaluate(async () => {
+    await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+  });
+  const registrationId = await registered;
+  const payload = {
+    title: 'Ana',
+    body: 'New message',
+    tag: conv.id,
+    silent: false,
+    badge: 1,
+    data: { type: 'message', conversationId: conv.id, messageId: conv.lastMessage.id, seq: String(conv.lastMessage.seq) },
+  };
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(payload) });
+  await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).some((n) => n.title === 'Ana'));
+  for (let i = 0; i < 40; i++) {
+    const c = await ana.page.evaluate(async (id) => (await fetch(`/api/chat/conversations/${id}`)).json(), conv.id);
+    if (c.members.find((m) => m.displayName === 'Ben').lastDeliveredSeq >= conv.lastMessage.seq) break;
+    assert(i < 39, 'service worker reported the message delivered');
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  step('service worker shows the notification and reports the message delivered');
 }
 
 const smtp = await startSmtpSink(SMTP_PORT);
@@ -175,7 +245,8 @@ try {
   await waitFor(`http://127.0.0.1:${API_PORT}/health/ready`);
   await waitFor(`${WEB}/sign-in`);
 
-  browser = await chromium.launch();
+  // Full Chromium in headless mode: the stripped-down headless shell has no notifications.
+  browser = await chromium.launch({ channel: 'chromium' });
   const page = await browser.newPage();
   const tag = randomBytes(4).toString('hex');
   const email = `e2e_${tag}@example.test`;

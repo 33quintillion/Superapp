@@ -112,7 +112,7 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit, messages, media] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
@@ -121,6 +121,11 @@ export class UsersService {
       this.db.query('SELECT action, host(ip) AS ip, created_at FROM audit_log WHERE actor_id = $1 ORDER BY created_at', [userId]),
       this.messaging.exportFor(userId),
       this.db.query(`SELECT id, kind, content_type, byte_size, file_name, state, created_at FROM media WHERE owner_id = $1 ORDER BY created_at`, [userId]),
+      this.db.query(
+        `SELECT id, session_id, provider, created_at, last_success_at, disabled_at, disabled_reason FROM push_devices WHERE user_id = $1 ORDER BY created_at`,
+        [userId],
+      ),
+      this.db.one('SELECT push_enabled, preview, quiet_start, quiet_end, time_zone, updated_at FROM notification_settings WHERE user_id = $1', [userId]),
     ]);
     await this.audit.record({ actorId: userId, action: 'account.exported' });
     return {
@@ -135,6 +140,9 @@ export class UsersService {
       // Messages you sent. Files are listed; download them from the app while signed in.
       messagesSent: messages,
       mediaUploaded: media.rows,
+      // Push tokens themselves are left out: they are device secrets, not personal content.
+      pushDevices: pushDevices.rows,
+      notificationSettings: notifications,
     };
   }
 
@@ -143,6 +151,7 @@ export class UsersService {
     await this.db.tx(async (tx) => {
       await this.db.query(`UPDATE users SET state = 'deactivated', updated_at = now() WHERE id = $1`, [userId], tx);
       await this.db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'deactivated' WHERE user_id = $1 AND revoked_at IS NULL`, [userId], tx);
+      await this.db.query('DELETE FROM push_devices WHERE user_id = $1', [userId], tx);
       await this.audit.record({ actorId: userId, action: 'account.deactivated' }, tx);
     });
   }
@@ -169,6 +178,7 @@ export class UsersService {
       await this.db.query('DELETE FROM sessions WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM one_time_tokens WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM privacy_settings WHERE user_id = $1', [userId], tx);
+      await this.db.query('DELETE FROM notification_settings WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM blocks WHERE blocker_id = $1 OR blocked_id = $1', [userId], tx);
       await this.db.query('UPDATE reports SET reporter_id = NULL WHERE reporter_id = $1', [userId], tx);
       await this.db.query('UPDATE audit_log SET ip = NULL WHERE actor_id = $1', [userId], tx);

@@ -19,6 +19,8 @@ export const TEST_ENV = {
   S3_ACCESS_KEY_ID: process.env.TEST_S3_ACCESS_KEY_ID ?? 'minioadmin',
   S3_SECRET_ACCESS_KEY: process.env.TEST_S3_SECRET_ACCESS_KEY ?? 'minioadmin',
   S3_AUTO_CREATE_BUCKET: 'true',
+  // Push tests drive the worker by hand; the rest don't need it polling.
+  PUSH_WORKER_ENABLED: 'false',
 };
 
 export function testConfig(overrides: Record<string, string> = {}): AppConfig {

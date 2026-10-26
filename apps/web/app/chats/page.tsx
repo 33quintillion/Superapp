@@ -4,7 +4,9 @@ import { ChatApp } from './chat-app';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ChatsPage() {
+export default async function ChatsPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
+  // Set when the user opens a notification.
+  const { c } = await searchParams;
   const [me, list] = await Promise.all([
     authed<{ id: string; displayName: string }>('GET', '/v1/me'),
     authed<{ conversations: Conversation[] }>('GET', '/v1/conversations'),
@@ -12,5 +14,6 @@ export default async function ChatsPage() {
   // The WebSocket goes to the API directly (Next.js cannot proxy it); only a 60-second,
   // single-use ticket ever reaches the browser.
   const wsBase = process.env.API_PUBLIC_WS_URL ?? 'ws://localhost:3000';
-  return <ChatApp me={me} initial={list.conversations} wsBase={wsBase} />;
+  const open = list.conversations.find((x) => x.id === c)?.id;
+  return <ChatApp me={me} initial={list.conversations} wsBase={wsBase} initialActiveId={open} />;
 }

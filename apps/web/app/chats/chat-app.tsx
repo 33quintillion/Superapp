@@ -35,9 +35,9 @@ function peerOf(c: Conversation | undefined, me: string) {
   return c?.members.find((m) => m.userId !== me);
 }
 
-export function ChatApp({ me, initial, wsBase }: { me: Me; initial: Conversation[]; wsBase: string }) {
+export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; initial: Conversation[]; wsBase: string; initialActiveId?: string }) {
   const [convs, setConvs] = useState<Conversation[]>(initial);
-  const [activeId, setActiveId] = useState<string | null>(initial[0]?.id ?? null);
+  const [activeId, setActiveId] = useState<string | null>(initialActiveId ?? initial[0]?.id ?? null);
   const [msgs, setMsgs] = useState<Record<string, Message[]>>({});
   const [hasMore, setHasMore] = useState<Record<string, boolean>>({});
   const [conn, setConn] = useState<ConnectionState>('connecting');

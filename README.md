@@ -2,13 +2,13 @@
 
 Nexa is a working codename for a messaging, social, services and payments app for Android, iOS and the web. Its brand, interface and code are all original. Run a trademark search before using the name in public.
 
-**Status: Stages 1 to 3 are in place: foundation, accounts, and one-to-one chats with media.** Chats are **not end-to-end encrypted** yet (blocked on a licence review, see ADR 0004). Group chats, push notifications, calls, social, business, payments and mini-apps are not built yet. [`docs/feature-checklist.md`](docs/feature-checklist.md) shows what is implemented, what is tested, and what is blocked.
+**Status: Stages 1 to 3 are in place: foundation, accounts, and one-to-one chats with media. Stage 4 push notifications work in browsers; iPhone and Android need Apple and Firebase credentials ([`docs/push.md`](docs/push.md)).** Chats are **not end-to-end encrypted** yet (blocked on a licence review, see ADR 0004). Group chats, calls, social, business, payments and mini-apps are not built yet. [`docs/feature-checklist.md`](docs/feature-checklist.md) shows what is implemented, what is tested, and what is blocked.
 
 ## Repository layout
 
 | Path | What it is |
 | --- | --- |
-| `apps/api` | NestJS 11 (Fastify) backend: REST API, WebSocket gateway, Postgres migrations, Redis (rate limits, presence, fan-out), S3-compatible media storage |
+| `apps/api` | NestJS 11 (Fastify) backend: REST API, WebSocket gateway, push delivery worker, Postgres migrations, Redis (rate limits, presence, fan-out), S3-compatible media storage |
 | `apps/web` | Next.js 15 web app. A server-side layer holds the tokens in httpOnly cookies |
 | `apps/mobile` | Flutter 3.47 app for Android and iOS. Web builds are possible but `apps/web` is the main web client |
 | `packages/design-tokens` | One `tokens.json` that generates CSS variables and a Dart theme |
@@ -33,7 +33,7 @@ Sent emails show up in Mailpit at http://localhost:8025. To work without Docker,
 ## Tests
 
 ```bash
-pnpm --filter @nexa/api test        # 105 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
+pnpm --filter @nexa/api test        # 149 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
 pnpm --filter @nexa/web test        # cookie/secret-exposure guards
 pnpm --filter @nexa/web test:e2e    # Chromium → Next → API → Postgres/Redis/SMTP/S3, including two people chatting (needs both apps built)
 pnpm --filter @nexa/design-tokens test
@@ -48,5 +48,5 @@ CI (`.github/workflows/ci.yml`) runs all of these on every pull request.
 - [Implementation plan](docs/plan.md) and [feature checklist](docs/feature-checklist.md)
 - [Risks](docs/risks.md)
 - [Security and privacy](docs/security-privacy.md)
-- [API reference](docs/api.md) and [messaging sync and realtime protocol](docs/realtime.md)
+- [API reference](docs/api.md), [messaging sync and realtime protocol](docs/realtime.md) and [push notifications](docs/push.md)
 - [Local development](docs/local-dev.md)

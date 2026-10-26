@@ -4,9 +4,10 @@ import { ACCESS_COOKIE } from '@/lib/cookies';
 import { forwardToApi } from '@/lib/api';
 
 /**
- * The chat screen's only way to reach the API. It attaches the access token from the
- * httpOnly cookie, so browser code still never holds a token. Only the messaging
- * endpoints below can be reached through it, and writes must come from this site.
+ * The chat and notification screens' only way to reach the API. It attaches the access
+ * token from the httpOnly cookie, so browser code still never holds a token. Only the
+ * messaging and notification endpoints below can be reached through it, and writes must
+ * come from this site.
  */
 const ALLOWED: [string, RegExp][] = [
   ['GET', /^conversations(\/[0-9a-f-]{36}(\/(messages|changes|pins))?)?$/],
@@ -24,6 +25,13 @@ const ALLOWED: [string, RegExp][] = [
   ['GET', /^presence$/],
   ['POST', /^realtime\/tickets$/],
   ['GET', /^users\/[a-z0-9_]{3,30}$/],
+  // Notifications: settings and this browser's push subscription.
+  ['GET', /^push\/(config|devices)$/],
+  ['PUT', /^push\/devices\/current$/],
+  ['DELETE', /^push\/devices\/current$/],
+  ['POST', /^push\/devices\/current\/test$/],
+  ['GET', /^me\/notifications$/],
+  ['PATCH', /^me\/notifications$/],
 ];
 
 async function handle(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {

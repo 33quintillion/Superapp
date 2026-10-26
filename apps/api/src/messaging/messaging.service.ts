@@ -4,6 +4,7 @@ import { AppError, Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
 import { MediaService } from '../media/media.service';
+import { PushService } from '../push/push.service';
 import { RealtimeBus } from '../realtime/realtime-bus.service';
 import { SafetyService } from '../safety/safety.service';
 
@@ -114,6 +115,7 @@ export class MessagingService {
     private readonly safety: SafetyService,
     private readonly media: MediaService,
     private readonly limits: RateLimitService,
+    private readonly push: PushService,
   ) {}
 
   // ---------------------------------------------------------------- conversations
@@ -269,6 +271,8 @@ export class MessagingService {
           [conversationId, userId, seq],
           tx,
         );
+        // Same transaction: the notification is queued if and only if the message is saved.
+        await this.push.enqueueMessage(tx, conversationId, row!.id, userId);
         return row!.id;
       });
     } catch (err) {
@@ -279,6 +283,7 @@ export class MessagingService {
       }
       throw err;
     }
+    this.push.kick();
     const message = (await this.loadOne(NO_VIEWER, messageId))!;
     await this.publishToMembers(conversationId, { type: 'message.created', data: message });
     return { message, duplicate: false };

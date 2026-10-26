@@ -18,6 +18,10 @@ import { MessagingController } from './messaging/messaging.controller';
 import { MessagingService } from './messaging/messaging.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
+import { PushController } from './push/push.controller';
+import { PushProviders } from './push/push.providers';
+import { PushService } from './push/push.service';
+import { PushWorker } from './push/push.worker';
 import { StorageService } from './storage/storage.service';
 import { UsersController } from './users/users.controller';
 import { UsersService } from './users/users.service';
@@ -37,6 +41,7 @@ export class AppModule {
         MessagingController,
         MediaController,
         RealtimeController,
+        PushController,
       ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
@@ -53,6 +58,9 @@ export class AppModule {
         StorageService,
         MediaService,
         RealtimeBus,
+        PushProviders,
+        PushService,
+        PushWorker,
         MessagingService,
         RealtimeGateway,
       ],
