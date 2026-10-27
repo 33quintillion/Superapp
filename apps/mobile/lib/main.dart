@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api/api_client.dart';
 import 'auth/auth_controller.dart';
 import 'auth/session_store.dart';
+import 'calls/call_engine.dart';
 import 'chat/realtime.dart';
 import 'screens/auth_screens.dart';
 import 'theme/theme.dart';
@@ -13,10 +14,12 @@ void main() {
 }
 
 class NexaApp extends StatelessWidget {
-  const NexaApp({super.key, required this.auth, this.connectSocket});
+  const NexaApp({super.key, required this.auth, this.connectSocket, this.callEngine});
   final AuthController auth;
   /// Tests swap in an in-memory socket; the app uses a real WebSocket.
   final SocketFactory? connectSocket;
+  /// Tests swap in fake call media; the app uses WebRTC.
+  final CallEngine Function()? callEngine;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -29,7 +32,7 @@ class NexaApp extends StatelessWidget {
             AuthStatus.unknown => const Scaffold(body: Center(child: CircularProgressIndicator())),
             AuthStatus.signedOut => SignInScreen(auth: auth),
             AuthStatus.mfaRequired => MfaScreen(auth: auth),
-            AuthStatus.signedIn => HomeScreen(auth: auth, connectSocket: connectSocket),
+            AuthStatus.signedIn => HomeScreen(auth: auth, connectSocket: connectSocket, callEngine: callEngine),
           },
         ),
       );

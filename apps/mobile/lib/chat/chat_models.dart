@@ -147,8 +147,35 @@ String describeSystem(Map<String, dynamic> e, String actorId, String me, String 
       };
     case 'group_updated':
       return e['title'] != null ? '$actor renamed the group to “${e['title']}”' : '$actor changed the group settings';
+    case 'call':
+      return describeCall(e, actorId == me);
   }
   return 'Group updated';
+}
+
+/// A call notice in the chat, from the viewer's side ([mine]: the viewer placed the call).
+String describeCall(Map<String, dynamic> e, bool mine) {
+  final video = e['media'] == 'video';
+  final kind = video ? 'video call' : 'voice call';
+  final title = video ? 'Video call' : 'Voice call';
+  final secs = (e['durationSeconds'] as num?)?.toInt() ?? 0;
+  return switch (e['outcome']) {
+    'completed' => '${mine ? '↗' : '↙'} $title · ${formatDuration(secs)}',
+    'declined' => mine ? '$title declined' : 'You declined a $kind',
+    'failed' => '$title failed to connect',
+    'connection_lost' => '$title · ${formatDuration(secs)} (connection lost)',
+    'busy' => mine ? '$title · busy' : 'Missed $kind',
+    'missed' => mine ? '$title · no answer' : 'Missed $kind',
+    'cancelled' => mine ? '$title · cancelled' : 'Missed $kind',
+    _ => title,
+  };
+}
+
+String formatDuration(int s) {
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final sec = (s % 60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$sec' : '$m:$sec';
 }
 
 class GroupInfo {

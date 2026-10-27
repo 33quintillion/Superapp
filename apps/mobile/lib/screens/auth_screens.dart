@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
+import '../calls/call_controller.dart';
+import '../calls/call_engine.dart';
 import '../chat/chat_controller.dart';
 import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
+import 'call_screens.dart';
 import 'chat_screens.dart';
 import 'social_screens.dart';
 
@@ -151,9 +154,10 @@ class _RegisterScreenState extends State<RegisterScreen> with _Submitting {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.auth, this.connectSocket});
+  const HomeScreen({super.key, required this.auth, this.connectSocket, this.callEngine});
   final AuthController auth;
   final SocketFactory? connectSocket;
+  final CallEngine Function()? callEngine;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -161,15 +165,19 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ChatController chat = ChatController(auth: widget.auth, wsBase: wsBaseFor(widget.auth.api.baseUrl), connect: widget.connectSocket);
+  late final CallController calls;
 
   @override
   void initState() {
     super.initState();
+    // Before the socket opens, so it hears calls from the first connection on.
+    calls = CallController(chat: chat, engine: widget.callEngine);
     unawaited(chat.start().catchError((_) {}));
   }
 
   @override
   void dispose() {
+    calls.dispose();
     chat.dispose();
     super.dispose();
   }
@@ -178,52 +186,58 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final auth = widget.auth;
     final p = auth.profile!;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Nexa'), actions: [
-        IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut),
-      ]),
-      body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
-        ListTile(
-          leading: CircleAvatar(child: Text(p.displayName.isEmpty ? '?' : p.displayName.characters.first.toUpperCase())),
-          title: Text(p.displayName, key: const Key('display-name')),
-          subtitle: Text('@${p.username}'),
-        ),
-        if (!p.emailVerified)
-          const ListTile(leading: Icon(Icons.mark_email_unread_outlined), title: Text('Check your inbox to confirm your email address.')),
-        const Divider(),
-        ListenableBuilder(
-          listenable: chat,
-          builder: (context, _) {
-            final unread = chat.conversations.fold<int>(0, (n, c) => n + c.unreadCount);
-            return ListTile(
-              key: const Key('open-chats'),
-              leading: const Icon(Icons.chat_bubble_outline),
-              title: const Text('Chats'),
-              subtitle: const Text('Not end-to-end encrypted yet'),
-              trailing: unread > 0 ? Badge(label: Text('$unread')) : const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatListScreen(chat: chat))),
-            );
-          },
-        ),
-        ListTile(
-          key: const Key('open-feed'),
-          leading: const Icon(Icons.dynamic_feed_outlined),
-          title: const Text('Feed and stories'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FeedScreen(auth: auth))),
-        ),
-        ListTile(
-          key: const Key('open-communities'),
-          leading: const Icon(Icons.groups_outlined),
-          title: const Text('Communities'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommunitiesScreen(auth: auth))),
-        ),
-        const ListTile(
-          leading: Icon(Icons.construction_outlined),
-          title: Text('Calls arrive in a later stage.'),
-        ),
-      ]),
+    return CallOverlayHost(
+      calls: calls,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Nexa'), actions: [
+          IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut),
+        ]),
+        body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
+          ListTile(
+            leading: CircleAvatar(child: Text(p.displayName.isEmpty ? '?' : p.displayName.characters.first.toUpperCase())),
+            title: Text(p.displayName, key: const Key('display-name')),
+            subtitle: Text('@${p.username}'),
+          ),
+          if (!p.emailVerified)
+            const ListTile(leading: Icon(Icons.mark_email_unread_outlined), title: Text('Check your inbox to confirm your email address.')),
+          const Divider(),
+          ListenableBuilder(
+            listenable: chat,
+            builder: (context, _) {
+              final unread = chat.conversations.fold<int>(0, (n, c) => n + c.unreadCount);
+              return ListTile(
+                key: const Key('open-chats'),
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: const Text('Chats'),
+                subtitle: const Text('Not end-to-end encrypted yet'),
+                trailing: unread > 0 ? Badge(label: Text('$unread')) : const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatListScreen(chat: chat))),
+              );
+            },
+          ),
+          ListTile(
+            key: const Key('open-feed'),
+            leading: const Icon(Icons.dynamic_feed_outlined),
+            title: const Text('Feed and stories'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FeedScreen(auth: auth))),
+          ),
+          ListTile(
+            key: const Key('open-communities'),
+            leading: const Icon(Icons.groups_outlined),
+            title: const Text('Communities'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommunitiesScreen(auth: auth))),
+          ),
+          ListTile(
+            key: const Key('open-calls'),
+            leading: const Icon(Icons.call_outlined),
+            title: const Text('Calls'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CallHistoryScreen(chat: chat))),
+          ),
+        ]),
+      ),
     );
   }
 }

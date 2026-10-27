@@ -7,6 +7,7 @@ import '../chat/chat_controller.dart';
 import '../chat/chat_models.dart';
 import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
+import 'call_screens.dart';
 
 class ChatListScreen extends StatelessWidget {
   const ChatListScreen({super.key, required this.chat});
@@ -193,6 +194,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   Text('${c!.members.length} members', style: Theme.of(context).textTheme.labelSmall),
               ]),
               actions: [
+                if (c != null) ...callActions(context, chat, c),
                 if (c?.isGroup ?? false)
                   IconButton(
                     key: const Key('group-info'),

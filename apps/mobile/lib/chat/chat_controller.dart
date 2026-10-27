@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../auth/auth_controller.dart';
+import '../calls/call_controller.dart';
 import 'chat_models.dart';
 import 'realtime.dart';
 
@@ -21,6 +22,8 @@ class ChatController extends ChangeNotifier {
 
   final AuthController auth;
   late final RealtimeConnection rt;
+  /// Voice and video calls, when the app has set them up.
+  CallController? calls;
 
   List<Conversation> conversations = [];
   final Map<String, List<ChatMessage>> _messages = {};
@@ -250,7 +253,16 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Other parts of the app (calls) that need the same live events and reconnects.
+  final _taps = <void Function(String type, Map<String, dynamic> data)>[];
+  final _readyTaps = <void Function()>[];
+  void addEventTap(void Function(String type, Map<String, dynamic> data) fn) => _taps.add(fn);
+  void addReadyTap(void Function() fn) => _readyTaps.add(fn);
+
   void _onReady() {
+    for (final t in _readyTaps) {
+      t();
+    }
     for (final cid in _loaded) {
       unawaited(_resync(cid));
     }
@@ -267,6 +279,12 @@ class ChatController extends ChangeNotifier {
   }
 
   void _onEvent(String type, Map<String, dynamic> d) {
+    if (type.startsWith('call.')) {
+      for (final t in _taps) {
+        t(type, d);
+      }
+      return;
+    }
     switch (type) {
       case 'message.created' || 'message.updated':
         final m = ChatMessage.fromJson(d);
