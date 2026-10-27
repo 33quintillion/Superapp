@@ -16,12 +16,19 @@ import { MediaController } from './media/media.controller';
 import { MediaService } from './media/media.service';
 import { MessagingController } from './messaging/messaging.controller';
 import { MessagingService } from './messaging/messaging.service';
+import { GroupsController } from './messaging/groups.controller';
+import { GroupsService } from './messaging/groups.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
 import { PushController } from './push/push.controller';
 import { PushProviders } from './push/push.providers';
 import { PushService } from './push/push.service';
 import { PushWorker } from './push/push.worker';
+import { CommunitiesService } from './social/communities.service';
+import { FollowsService } from './social/follows.service';
+import { PostsService } from './social/posts.service';
+import { SocialController } from './social/social.controller';
+import { StoriesService } from './social/stories.service';
 import { StorageService } from './storage/storage.service';
 import { UsersController } from './users/users.controller';
 import { UsersService } from './users/users.service';
@@ -39,9 +46,11 @@ export class AppModule {
         UsersController,
         SafetyController,
         MessagingController,
+        GroupsController,
         MediaController,
         RealtimeController,
         PushController,
+        SocialController,
       ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
@@ -62,6 +71,11 @@ export class AppModule {
         PushService,
         PushWorker,
         MessagingService,
+        GroupsService,
+        FollowsService,
+        PostsService,
+        StoriesService,
+        CommunitiesService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

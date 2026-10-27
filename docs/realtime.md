@@ -70,6 +70,8 @@ A frame that fails gets `{ type: "error", ref, error: { code, message, details? 
 | `typing` | `{ conversationId, userId, typing }` |
 | `presence` | `{ userId, online, lastSeenAt }` |
 | `conversation.updated` | `{ id, mutedUntil, archived }`, sent only to your own devices |
+| `conversation.changed` | `{ id }`. A group's members, roles or settings changed; fetch `GET /v1/conversations/:id` again. New members also get it, so a group appears on their devices |
+| `conversation.removed` | `{ id }`. You were removed from a group or left it on another device; drop it from the list |
 
 Events go to every device of every member, including the device that made the change. Clients deduplicate by message id.
 

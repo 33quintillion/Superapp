@@ -1,6 +1,7 @@
 import { authed } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
 import { NotificationSettings } from './notifications';
+import { SocialSettings } from './social-settings';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +48,13 @@ export default async function AccountPage() {
           </button>
         </form>
       )}
+
+      <p>
+        <a href={`/u/${me.username}`}>View your profile</a>
+      </p>
+
+      <h2>Privacy</h2>
+      <SocialSettings />
 
       <h2>Notifications</h2>
       <NotificationSettings />

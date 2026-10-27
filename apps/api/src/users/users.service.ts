@@ -4,7 +4,12 @@ import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
 import { verifyPassword } from '../auth/password';
 import { MediaService } from '../media/media.service';
+import { GroupsService } from '../messaging/groups.service';
 import { MessagingService } from '../messaging/messaging.service';
+import { CommunitiesService } from '../social/communities.service';
+import { FollowsService } from '../social/follows.service';
+import { PostsService } from '../social/posts.service';
+import { StoriesService } from '../social/stories.service';
 
 interface UserRow {
   id: string;
@@ -28,6 +33,8 @@ export interface PrivacySettings {
   whoCanMessage: 'everyone' | 'contacts' | 'nobody';
   showOnlineStatus: boolean;
   showReadReceipts: boolean;
+  privateAccount: boolean;
+  whoCanAddToGroups: 'everyone' | 'following' | 'nobody';
 }
 
 const PRIVACY_COLUMNS: Record<keyof PrivacySettings, string> = {
@@ -37,6 +44,8 @@ const PRIVACY_COLUMNS: Record<keyof PrivacySettings, string> = {
   whoCanMessage: 'who_can_message',
   showOnlineStatus: 'show_online_status',
   showReadReceipts: 'show_read_receipts',
+  privateAccount: 'private_account',
+  whoCanAddToGroups: 'who_can_add_to_groups',
 };
 
 const PROFILE_COLUMNS = { displayName: 'display_name', bio: 'bio', statusText: 'status_text', locale: 'locale' } as const;
@@ -48,6 +57,11 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly messaging: MessagingService,
     private readonly media: MediaService,
+    private readonly groups: GroupsService,
+    private readonly follows: FollowsService,
+    private readonly posts: PostsService,
+    private readonly stories: StoriesService,
+    private readonly communities: CommunitiesService,
   ) {}
 
   async me(userId: string) {
@@ -88,6 +102,7 @@ export class UsersService {
     if (entries.length) {
       const sets = entries.map(([k], i) => `${PRIVACY_COLUMNS[k]} = $${i + 2}`).join(', ');
       await this.db.query(`UPDATE privacy_settings SET ${sets}, updated_at = now() WHERE user_id = $1`, [userId, ...entries.map(([, v]) => v)]);
+      if (patch.privateAccount === false) await this.follows.acceptAllPending(userId);
       await this.audit.record({ actorId: userId, action: 'privacy.updated', metadata: { fields: entries.map(([k]) => k) } });
     }
     return this.privacy(userId);
@@ -107,12 +122,28 @@ export class UsersService {
       [username, viewerId],
     );
     if (!u) throw Errors.notFound('User');
-    return { id: u.id, username: u.username, displayName: u.display_name, bio: u.bio, statusText: u.status_text };
+    const [counts, relationship, privacy] = await Promise.all([
+      this.follows.counts(u.id),
+      u.id === viewerId ? null : this.follows.relationship(viewerId, u.id),
+      this.db.one<{ private_account: boolean }>('SELECT private_account FROM privacy_settings WHERE user_id = $1', [u.id]),
+    ]);
+    return {
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      bio: u.bio,
+      statusText: u.status_text,
+      privateAccount: privacy?.private_account ?? false,
+      followerCount: counts.followers,
+      followingCount: counts.following,
+      // null on your own profile.
+      relationship,
+    };
   }
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
@@ -126,6 +157,13 @@ export class UsersService {
         [userId],
       ),
       this.db.one('SELECT push_enabled, preview, quiet_start, quiet_end, time_zone, updated_at FROM notification_settings WHERE user_id = $1', [userId]),
+      this.posts.exportFor(userId),
+      this.stories.exportFor(userId),
+      this.communities.exportFor(userId),
+      this.db.query(
+        `SELECT follower_id, followee_id, state, created_at, accepted_at FROM follows WHERE follower_id = $1 OR followee_id = $1 ORDER BY created_at`,
+        [userId],
+      ),
     ]);
     await this.audit.record({ actorId: userId, action: 'account.exported' });
     return {
@@ -143,6 +181,12 @@ export class UsersService {
       // Push tokens themselves are left out: they are device secrets, not personal content.
       pushDevices: pushDevices.rows,
       notificationSettings: notifications,
+      posts: social.posts,
+      comments: social.comments,
+      likes: social.likes,
+      stories,
+      communities,
+      follows: follows.rows,
     };
   }
 
@@ -164,8 +208,13 @@ export class UsersService {
    */
   async deleteAccount(userId: string, password: string) {
     await this.confirmPassword(userId, password);
-    const mediaIds = await this.db.tx(async (tx) => {
+    const { mediaIds, groupNotices } = await this.db.tx(async (tx) => {
       const sentMedia = await this.messaging.scrubUser(userId, tx);
+      const groupNotices = await this.groups.leaveAll(userId, tx);
+      const postMedia = await this.posts.scrubUser(userId, tx);
+      const storyMedia = await this.stories.scrubUser(userId, tx);
+      await this.communities.scrubUser(userId, tx);
+      await this.db.query('DELETE FROM follows WHERE follower_id = $1 OR followee_id = $1', [userId], tx);
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),
            email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL,
@@ -184,8 +233,9 @@ export class UsersService {
       await this.db.query('UPDATE audit_log SET ip = NULL WHERE actor_id = $1', [userId], tx);
       await this.audit.record({ actorId: userId, action: 'account.deleted' }, tx);
       const owned = await this.db.query<{ id: string }>(`SELECT id FROM media WHERE owner_id = $1`, [userId], tx);
-      return [...new Set([...sentMedia, ...owned.rows.map((r) => r.id)])];
+      return { mediaIds: [...new Set([...sentMedia, ...postMedia, ...storyMedia, ...owned.rows.map((r) => r.id)])], groupNotices };
     });
+    await this.groups.announceAll(groupNotices).catch(() => undefined);
     // Stored files go once nothing references them (a forwarded copy keeps its own reference).
     for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);
   }

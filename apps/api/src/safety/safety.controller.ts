@@ -6,7 +6,7 @@ import type { AccessClaims } from '../auth/token.service';
 import { SafetyService } from './safety.service';
 
 const ReportBody = z.object({
-  subjectType: z.enum(['user', 'message', 'post', 'business', 'mini_app']),
+  subjectType: z.enum(['user', 'message', 'post', 'comment', 'story', 'community', 'business', 'mini_app']),
   subjectId: z.string().min(1).max(100),
   reason: z.enum(['spam', 'harassment', 'hate', 'violence', 'sexual_content', 'child_safety', 'fraud', 'impersonation', 'other']),
   details: z.string().trim().max(2000).default(''),

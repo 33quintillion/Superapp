@@ -4,11 +4,12 @@ import { ACCESS_COOKIE } from '@/lib/cookies';
 import { forwardToApi } from '@/lib/api';
 
 /**
- * The chat and notification screens' only way to reach the API. It attaches the access
- * token from the httpOnly cookie, so browser code still never holds a token. Only the
- * messaging and notification endpoints below can be reached through it, and writes must
- * come from this site.
+ * The browser screens' only way to reach the API. It attaches the access token from the
+ * httpOnly cookie, so browser code still never holds a token. Only the messaging, social
+ * and notification endpoints below can be reached through it (account export, deletion
+ * and security settings stay server-side), and writes must come from this site.
  */
+const ID = '[0-9a-f-]{36}';
 const ALLOWED: [string, RegExp][] = [
   ['GET', /^conversations(\/[0-9a-f-]{36}(\/(messages|changes|pins))?)?$/],
   ['POST', /^conversations\/direct$/],
@@ -32,6 +33,46 @@ const ALLOWED: [string, RegExp][] = [
   ['POST', /^push\/devices\/current\/test$/],
   ['GET', /^me\/notifications$/],
   ['PATCH', /^me\/notifications$/],
+  // Groups.
+  ['POST', /^conversations\/groups$/],
+  ['PATCH', new RegExp(`^conversations/${ID}/group$`)],
+  ['POST', new RegExp(`^conversations/${ID}/members$`)],
+  ['PATCH', new RegExp(`^conversations/${ID}/members/${ID}$`)],
+  ['DELETE', new RegExp(`^conversations/${ID}/members/${ID}$`)],
+  // Feed, posts and comments.
+  ['GET', /^feed$/],
+  ['POST', /^posts$/],
+  ['GET', new RegExp(`^posts/${ID}(/(comments|likes))?$`)],
+  ['PATCH', new RegExp(`^posts/${ID}$`)],
+  ['DELETE', new RegExp(`^posts/${ID}$`)],
+  ['PUT', new RegExp(`^posts/${ID}/like$`)],
+  ['POST', new RegExp(`^posts/${ID}/(comments|moderation)$`)],
+  ['DELETE', new RegExp(`^comments/${ID}$`)],
+  // Stories.
+  ['GET', new RegExp(`^stories(/${ID}(/views)?)?$`)],
+  ['POST', /^stories$/],
+  ['POST', new RegExp(`^stories/${ID}/views$`)],
+  ['DELETE', new RegExp(`^stories/${ID}$`)],
+  // People: following and the social privacy settings.
+  ['GET', new RegExp(`^users/${ID}/(posts|stories|followers|following)$`)],
+  ['POST', new RegExp(`^users/${ID}/follow$`)],
+  ['DELETE', new RegExp(`^users/${ID}/follow$`)],
+  ['GET', /^me\/follow-requests$/],
+  ['POST', new RegExp(`^me/follow-requests/${ID}$`)],
+  ['DELETE', new RegExp(`^me/followers/${ID}$`)],
+  ['GET', /^me\/privacy$/],
+  ['PATCH', /^me\/privacy$/],
+  ['POST', /^reports$/],
+  // Communities and channels.
+  ['GET', /^communities(\/[a-z0-9][a-z0-9_-]{2,39})?$/],
+  ['POST', /^communities$/],
+  ['PATCH', new RegExp(`^communities/${ID}$`)],
+  ['DELETE', new RegExp(`^communities/${ID}$`)],
+  ['POST', new RegExp(`^communities/${ID}/join$`)],
+  ['DELETE', new RegExp(`^communities/${ID}/membership$`)],
+  ['GET', new RegExp(`^communities/${ID}/(members|posts)$`)],
+  ['PATCH', new RegExp(`^communities/${ID}/members/${ID}$`)],
+  ['DELETE', new RegExp(`^communities/${ID}/members/${ID}$`)],
 ];
 
 async function handle(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
@@ -46,6 +87,8 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   if (!token) return NextResponse.json({ error: { code: 'unauthorized', message: 'Sign in again' } }, { status: 401 });
   const body = req.method === 'GET' || req.method === 'DELETE' ? undefined : await req.text();
   const res = await forwardToApi(req.method, `/v1/${path}${req.nextUrl.search}`, token, body);
+  // A 204 must not carry a body, not even an empty string.
+  if (res.status === 204) return new NextResponse(null, { status: 204, headers: { 'cache-control': 'no-store' } });
   return new NextResponse(res.body, { status: res.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 

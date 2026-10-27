@@ -17,12 +17,14 @@ export interface Message {
   changeSeq: number;
   senderId: string;
   clientId: string;
-  kind: Media['kind'] | 'text';
+  kind: Media['kind'] | 'text' | 'system';
   body: string | null;
   media: Media | null;
   replyTo: { id: string; senderId: string; preview: string; deleted: boolean } | null;
   forwarded: boolean;
   mentions: string[];
+  /** Group notices ("Ana added Ben"): what happened, rendered by the client. */
+  system: SystemEvent | null;
   reactions: { userId: string; emoji: string }[];
   editedAt: string | null;
   deletedAt: string | null;
@@ -32,10 +34,22 @@ export interface Message {
   pending?: 'sending' | 'failed';
 }
 
+export type SystemEvent =
+  | { type: 'group_created'; title: string }
+  | { type: 'members_added'; userIds: string[] }
+  | { type: 'member_removed'; userId: string }
+  | { type: 'member_left' }
+  | { type: 'role_changed'; userId: string; role: GroupRole }
+  | { type: 'group_updated'; fields: string[]; title?: string };
+
+export type GroupRole = 'owner' | 'admin' | 'member';
+export type GroupPolicy = 'everyone' | 'admins';
+
 export interface Member {
   userId: string;
   username: string | null;
   displayName: string;
+  role: GroupRole;
   lastDeliveredSeq: number;
   lastReadSeq: number | null;
 }
@@ -50,6 +64,8 @@ export interface Conversation {
   mutedUntil: string | null;
   archived: boolean;
   peerId: string | null;
+  title: string;
+  group: { description: string; sendPolicy: GroupPolicy; infoPolicy: GroupPolicy; addPolicy: GroupPolicy; myRole: GroupRole } | null;
   members: Member[];
 }
 

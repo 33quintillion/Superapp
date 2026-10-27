@@ -99,3 +99,51 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--color-primary
   .chat-list { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--color-border); }
   .msg { max-width: 90%; }
 }
+
+/* Groups */
+.system-note { align-self: center; text-align: center; padding: var(--space-xs) var(--space-md); background: var(--color-surface-muted); border-radius: var(--radius-pill); max-width: 90%; }
+.sender { color: var(--color-primary); }
+.group-panel { padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; gap: var(--space-sm); max-height: 45vh; overflow-y: auto; }
+.group-policies { display: flex; flex-wrap: wrap; gap: var(--space-md); }
+.group-members { list-style: none; margin: 0; padding: 0; }
+.group-members li { display: flex; justify-content: space-between; gap: var(--space-md); padding: var(--space-xs) 0; border-bottom: 1px solid var(--color-border); }
+.group-member-actions { display: flex; gap: var(--space-md); }
+.btn.danger { color: var(--color-danger); }
+.group-panel .new-chat { padding: 0; }
+
+/* Social */
+main.social { display: flex; flex-direction: column; gap: var(--space-lg); }
+main.social h1 { margin-bottom: var(--space-sm); }
+textarea { font: inherit; padding: var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); resize: vertical; width: 100%; }
+select { font: inherit; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+.composer-card { display: flex; flex-direction: column; gap: var(--space-sm); }
+.composer-row { align-items: center; flex-wrap: wrap; }
+.composer-row input { flex: 1; min-width: 0; }
+.spacer { flex: 1; }
+.post { display: flex; flex-direction: column; gap: var(--space-sm); }
+.post-byline a { font-weight: 600; text-decoration: none; }
+.post-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.post-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-xs); }
+.post-media { width: 100%; max-height: 420px; object-fit: cover; border-radius: var(--radius-md); }
+.shared-post { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-md); }
+.post-actions { display: flex; gap: var(--space-lg); align-items: center; }
+.post-actions .liked { color: var(--color-danger); }
+.post-actions .actions-menu { right: auto; left: 0; }
+.comments { border-top: 1px solid var(--color-border); padding-top: var(--space-sm); display: flex; flex-direction: column; gap: var(--space-xs); }
+.post-list { display: flex; flex-direction: column; gap: var(--space-md); }
+.story-tray { display: flex; gap: var(--space-md); overflow-x: auto; padding: var(--space-xs) 0; }
+.story-ring { flex: none; width: 56px; height: 56px; border-radius: 50%; border: 3px solid var(--color-primary); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 600; cursor: pointer; }
+.story-ring.seen { border-color: var(--color-border); }
+.story-ring.add { border-style: dashed; font-size: var(--font-size-title); }
+.story-viewer { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); padding: var(--space-lg); }
+.story-frame { width: min(360px, 100%); aspect-ratio: 9 / 16; border-radius: var(--radius-lg); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: var(--space-md); padding: var(--space-lg); color: #fff; position: relative; overflow: hidden; }
+.story-frame .post-media { max-height: 70%; object-fit: contain; }
+.story-head { position: absolute; top: var(--space-md); left: var(--space-md); right: var(--space-md); }
+.story-text { font-size: var(--font-size-title); text-align: center; white-space: pre-wrap; margin: 0; background: transparent; color: #fff; border: 0; }
+textarea.story-text { height: 40%; }
+.story-controls { display: flex; gap: var(--space-sm); flex-wrap: wrap; justify-content: center; align-items: center; }
+.story-viewer > .muted, .story-viewer > .error { color: #fff; }
+.swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.swatch.on { border-color: #fff; }
+.community-row { text-decoration: none; color: inherit; }
+.profile h1 { margin: 0; }

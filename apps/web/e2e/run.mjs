@@ -227,6 +227,158 @@ async function notificationsFlow(ana, ben, step) {
   step('service worker shows the notification and reports the message delivered');
 }
 
+/** Groups, follows, the feed, stories, private accounts and communities across two browsers. */
+async function socialFlow(browser, API, tag, step) {
+  const people = {};
+  for (const [i, name] of ['cara', 'dev', 'eve'].entries()) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'social passphrase 321', displayName: name[0].toUpperCase() + name.slice(1) };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i + 40}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    people[name] = { ...u, token: (await r.json()).accessToken };
+  }
+  for (const name of ['cara', 'dev']) {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    // Answers prompt() and confirm() the way a person would.
+    page.on('dialog', (d) => d.accept(d.type() === 'prompt' ? 'Off topic' : undefined));
+    if (process.env.E2E_DEBUG) page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', people[name].email);
+    await page.fill('input[name=password]', people[name].password);
+    await page.click('button[type=submit]');
+    await page.waitForURL(`${WEB}/account`);
+    Object.assign(people[name], { ctx, page });
+  }
+  const { cara, dev, eve } = people;
+
+  // Group chat.
+  await cara.page.goto(`${WEB}/chats`);
+  await cara.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await cara.page.click('[data-testid=new-group]');
+  await cara.page.fill('input[name=groupTitle]', 'Trip planning');
+  await cara.page.fill('input[name=groupMembers]', `${dev.username}, @${eve.username}`);
+  await cara.page.click('[data-testid=new-group-form] button[type=submit]');
+  await cara.page.waitForSelector('[data-testid=peer-name]:has-text("Trip planning")');
+  await cara.page.waitForSelector('[data-testid=system-note]:has-text("You created the group")');
+  await dev.page.goto(`${WEB}/chats`);
+  await dev.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await dev.page.click('[data-testid=conv-group]');
+  await dev.page.waitForSelector('[data-testid=system-note]:has-text("Cara created the group")');
+  await dev.page.fill('input[name=message]', 'hi group');
+  await dev.page.press('input[name=message]', 'Enter');
+  const devMsg = cara.page.locator('[data-testid=msg][data-body="hi group"]');
+  await devMsg.waitFor();
+  assert((await devMsg.locator('.sender').textContent()) === 'Dev', 'group messages show who sent them');
+  step('group created from the chat list; members see the notice and each other’s messages');
+
+  await cara.page.click('[data-testid=group-info-toggle]');
+  assert((await cara.page.locator('[data-testid=group-member]').count()) === 3, 'three members listed');
+  // Controlled by the server's answer, so click and wait rather than check().
+  await cara.page.click('input[name=adminsOnlySend]');
+  await cara.page.waitForFunction(() => document.querySelector('input[name=adminsOnlySend]')?.checked);
+  await dev.page.waitForSelector('[data-testid=admins-only]');
+  await cara.page.waitForSelector('[data-testid=system-note]:has-text("You changed the group settings")');
+  step('owner switches the group to admins-only; members’ composer closes live');
+
+  // Following and the feed.
+  await dev.page.goto(`${WEB}/u/${cara.username}`);
+  await dev.page.click('[data-testid=follow-button]');
+  await dev.page.waitForSelector('[data-testid=follow-button]:has-text("Following")');
+  assert((await dev.page.textContent('[data-testid=follower-count]')) === '1', 'follower count goes up');
+  step('follow from a profile page');
+
+  await cara.page.goto(`${WEB}/feed`);
+  await cara.page.fill('textarea[name=postBody]', 'Hello followers');
+  await cara.page.selectOption('select[name=audience]', 'followers');
+  await cara.page.setInputFiles('[data-testid=post-file-input]', { name: 'dot.png', mimeType: 'image/png', buffer: PNG });
+  await cara.page.click('[data-testid=post-composer] button[type=submit]');
+  await cara.page.waitForSelector('[data-testid=post][data-body="Hello followers"]');
+  await dev.page.goto(`${WEB}/feed`);
+  const devPost = dev.page.locator('[data-testid=post][data-body="Hello followers"]');
+  await devPost.waitFor();
+  await dev.page.waitForFunction(() => document.querySelector('[data-testid=post-image]')?.naturalWidth === 1);
+  await devPost.locator('[data-testid=like]').click();
+  await devPost.locator('[data-testid=like-count]:has-text("1")').waitFor();
+  await devPost.locator('[data-testid=comments-toggle]').click();
+  await devPost.locator('input[name=comment]').fill('Nice photo!');
+  await devPost.locator('input[name=comment]').press('Enter');
+  await devPost.locator('[data-testid=comment]:has-text("Nice photo!")').waitFor();
+  const eveSees = await fetch(`${API}/v1/users/${(await (await fetch(`${API}/v1/users/${cara.username}`, { headers: { authorization: `Bearer ${eve.token}` } })).json()).id}/posts`, {
+    headers: { authorization: `Bearer ${eve.token}` },
+  });
+  assert((await eveSees.json()).posts.length === 0, 'followers-only post hidden from a non-follower');
+  await cara.page.reload();
+  await cara.page.locator('[data-testid=post][data-body="Hello followers"] [data-testid=like-count]:has-text("1")').waitFor();
+  step('followers-only photo post: follower sees it, likes and comments; non-follower does not');
+
+  // Stories.
+  await cara.page.click('button[aria-label="Add to your story"]');
+  await cara.page.fill('textarea[name=storyText]', 'Packing for the trip');
+  await cara.page.click('[data-testid=story-composer] button[type=submit]');
+  await cara.page.waitForSelector('[data-testid=story-composer]', { state: 'detached' });
+  await dev.page.reload();
+  await dev.page.click('[data-testid=story-ring]');
+  await dev.page.waitForSelector('[data-testid=story-viewer]:has-text("Packing for the trip")');
+  await dev.page.click('[data-testid=story-viewer] button:has-text("Close")');
+  for (let i = 0; i < 20; i++) {
+    await cara.page.reload();
+    await cara.page.click('[data-testid=story-ring]');
+    if ((await cara.page.textContent('[data-testid=story-views]')).includes('1 views')) break;
+    assert(i < 19, 'author sees the view count');
+    await cara.page.click('[data-testid=story-viewer] button:has-text("Close")');
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  step('text story shared, seen by a follower, and the author sees the view');
+
+  // Private account and follow requests.
+  await dev.page.goto(`${WEB}/account`);
+  await dev.page.click('input[name=privateAccount]');
+  await dev.page.waitForFunction(() => document.querySelector('input[name=privateAccount]')?.checked);
+  const devId = (await (await fetch(`${API}/v1/users/${dev.username}`, { headers: { authorization: `Bearer ${eve.token}` } })).json()).id;
+  const followed = await (await fetch(`${API}/v1/users/${devId}/follow`, { method: 'POST', headers: { authorization: `Bearer ${eve.token}` } })).json();
+  assert(followed.following === 'pending', 'following a private account sends a request');
+  await dev.page.reload();
+  await dev.page.click('[data-testid=follow-requests] button:has-text("Approve")');
+  await dev.page.waitForSelector('[data-testid=follow-requests]', { state: 'detached' });
+  const rel = await (await fetch(`${API}/v1/users/${dev.username}`, { headers: { authorization: `Bearer ${eve.token}` } })).json();
+  assert(rel.relationship.following === 'active', 'request approved');
+  step('private account: follow request approved from the account page');
+
+  // Communities.
+  const slug = `trip-${tag}`;
+  await cara.page.goto(`${WEB}/communities`);
+  await cara.page.click('text=Create a community or channel');
+  await cara.page.fill('[data-testid=create-community] input[name=name]', 'Trip club');
+  await cara.page.fill('[data-testid=create-community] input[name=slug]', slug);
+  await cara.page.selectOption('[data-testid=create-community] select[name=visibility]', 'private');
+  await cara.page.click('[data-testid=create-community] button[type=submit]');
+  await cara.page.waitForURL(`${WEB}/communities/${slug}`);
+  await dev.page.goto(`${WEB}/communities/${slug}`);
+  await dev.page.click('[data-testid=join]');
+  await dev.page.waitForSelector('[data-testid=join-pending]');
+  await cara.page.reload();
+  await cara.page.click('[data-testid=approve]');
+  await cara.page.waitForSelector('[data-testid=pending-member]', { state: 'detached' });
+  await dev.page.reload();
+  await dev.page.fill('textarea[name=postBody]', 'Selling my old tent');
+  await dev.page.click('[data-testid=post-composer] button[type=submit]');
+  await dev.page.waitForSelector('[data-testid=post][data-body="Selling my old tent"]');
+  await cara.page.reload();
+  const offTopic = cara.page.locator('[data-testid=post][data-body="Selling my old tent"]');
+  await offTopic.locator('.actions summary').click();
+  await offTopic.locator('[data-testid=moderate-post]').click();
+  await offTopic.waitFor({ state: 'detached' });
+  await dev.page.reload();
+  await dev.page.waitForSelector('[data-testid=post-removed]:has-text("Off topic")');
+  step('private community: join request approved, member posts, moderator removes it with a reason');
+
+  for (const p of [cara, dev]) await p.ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
 let browser;
 let failed = false;
@@ -281,6 +433,15 @@ try {
   await page.goto(`${WEB}/account`);
   assert((await page.textContent('[data-testid=display-name]')) === 'E2E Person', 'refresh via middleware');
   step('expired access cookie is refreshed transparently');
+
+  // Several requests at once after the access cookie expires share one refresh,
+  // instead of tripping the API's stolen-token detection and ending the session.
+  await page.context().clearCookies({ name: 'nexa_at' });
+  const statuses = await page.evaluate(() => Promise.all([1, 2, 3, 4].map(() => fetch('/api/chat/me/privacy').then((r) => r.status))));
+  assert(statuses.every((st) => st === 200), `parallel refresh statuses ${statuses}`);
+  await page.goto(`${WEB}/account`);
+  assert((await page.textContent('[data-testid=display-name]')) === 'E2E Person', 'still signed in after parallel refresh');
+  step('parallel requests with an expired access cookie share one refresh and stay signed in');
 
   await page.click('text=Sign out of this device');
   await page.waitForURL(/\/sign-in/);
@@ -341,6 +502,7 @@ try {
   step('two-step sign-in: wrong code refused, right code accepted');
 
   await chatFlow(browser, API, tag, step);
+  await socialFlow(browser, API, tag, step);
 
   console.log('\nWeb e2e: all checks passed');
 } catch (err) {

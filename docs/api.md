@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3000` locally. Requests and responses are JSON. Authenticated routes need `Authorization: Bearer <accessToken>`.
 
-Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` (403), `not_found` (404), `email_taken` / `username_taken` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` / `push_not_configured` (409), `rate_limited` (429, with a `Retry-After` header).
+Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` / `cannot_add` / `admins_only` / `outranked` (403), `not_found` (404), `email_taken` / `username_taken` / `slug_taken` / `owner_cannot_leave` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` / `push_not_configured` (409), `rate_limited` (429, with a `Retry-After` header).
 
 A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 
@@ -40,11 +40,11 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | --- | --- | --- | --- |
 | GET | `/v1/me` | ✓ | Profile, including `emailVerified` and `mfaEnabled` |
 | PATCH | `/v1/me` | ✓ | Any of `displayName`, `bio`, `statusText`, `locale` |
-| GET / PATCH | `/v1/me/privacy` | ✓ | `discoverableByEmail`, `discoverableByPhone`, `discoverableByUsername`, `whoCanMessage` (`everyone`/`contacts`/`nobody`), `showOnlineStatus`, `showReadReceipts` |
+| GET / PATCH | `/v1/me/privacy` | ✓ | `discoverableByEmail`, `discoverableByPhone`, `discoverableByUsername`, `whoCanMessage` (`everyone`/`contacts`/`nobody`), `showOnlineStatus`, `showReadReceipts`, `privateAccount` (followers need approval; turning it off accepts pending requests), `whoCanAddToGroups` (`everyone`/`following`/`nobody`) |
 | GET | `/v1/me/export` | ✓ | JSON export of the account's data |
 | POST | `/v1/me/deactivate` | ✓ | `{ password }` → 204; signing in again reactivates |
 | DELETE | `/v1/me` | ✓ | `{ password }` → 204; permanent |
-| GET | `/v1/users/:username` | ✓ | Public profile; 404 if hidden or blocked either way |
+| GET | `/v1/users/:username` | ✓ | Public profile with `privateAccount`, `followerCount`, `followingCount` and `relationship: { following: none\|pending\|active, followsYou }`; 404 if hidden or blocked either way |
 
 ## Safety
 | Method | Path | Auth | Notes |
@@ -52,7 +52,7 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | GET | `/v1/blocks` | ✓ | Users you blocked |
 | POST | `/v1/blocks` | ✓ | `{ userId }` → 204 |
 | DELETE | `/v1/blocks/:userId` | ✓ | 204 |
-| POST | `/v1/reports` | ✓ | `{ subjectType, subjectId, reason, details? }` → 201 |
+| POST | `/v1/reports` | ✓ | `{ subjectType: user\|message\|post\|comment\|story\|community, subjectId, reason, details? }` → 201 |
 
 ## Conversations
 Messages are **not end-to-end encrypted** yet; see [ADR 0004](adr/0004-end-to-end-encryption.md). Sync rules (ordering, retries, receipts) are in [`realtime.md`](realtime.md). Every route returns 404 for conversations you are not in.
@@ -61,13 +61,28 @@ Messages are **not end-to-end encrypted** yet; see [ADR 0004](adr/0004-end-to-en
 | --- | --- | --- | --- |
 | GET | `/v1/conversations` | ✓ | `?archived=false&limit=30&cursor=` → `{ conversations, nextCursor }`, newest activity first |
 | POST | `/v1/conversations/direct` | ✓ | `{ userId }` → the one direct chat with that user (created if needed). 404 if the user doesn't exist or either has blocked the other |
-| GET | `/v1/conversations/:id` | ✓ | `{ id, kind, lastSeq, lastMessage, unreadCount, mutedUntil, archived, peerId, members: [{ userId, username, displayName, role, lastDeliveredSeq, lastReadSeq }] }` |
+| GET | `/v1/conversations/:id` | ✓ | `{ id, kind, title, group (null for direct chats), lastSeq, lastMessage, unreadCount, mutedUntil, archived, peerId, members: [{ userId, username, displayName, role, lastDeliveredSeq, lastReadSeq }] }` |
 | PATCH | `/v1/conversations/:id` | ✓ | Your own settings: `{ mutedUntil?: ISO date \| null, archived?: boolean }` |
 | GET | `/v1/conversations/:id/messages` | ✓ | `?before=<seq>` (history, default newest) or `?after=<seq>` (catch-up), `limit` ≤ 100 → `{ messages (oldest first), hasMore }` |
 | POST | `/v1/conversations/:id/messages` | ✓ | `{ clientId, kind?: text\|image\|video\|audio\|voice\|file, body?, mediaId?, replyToId?, mentions?: [userId] }` → 201 `{ message, duplicate: false }`, or 200 `{ message, duplicate: true }` for a repeated `clientId`. 403 `cannot_message` if blocked, or if the recipient only accepts messages from people they've replied to |
 | GET | `/v1/conversations/:id/changes` | ✓ | `?since=<counter>&limit=200` → `{ changes, nextSince, hasMore }` |
 | GET | `/v1/conversations/:id/pins` | ✓ | Pinned messages, newest pin first |
 | POST | `/v1/conversations/:id/receipts` | ✓ | `{ kind: delivered\|read, seq }` → your positions (they only move forward) |
+
+A group's `group` field is `{ description, sendPolicy, infoPolicy, addPolicy (each everyone|admins), myRole }`.
+
+### Groups
+Members only see messages sent after they joined. Membership and settings changes appear in the chat as messages with `kind: "system"` and a `system` object (`group_created`, `members_added`, `member_removed`, `member_left`, `role_changed`, `group_updated`), and members get a `conversation.changed` event; people who are removed get `conversation.removed`.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/conversations/groups` | ✓ | `{ title (1-100), description?, memberIds: [≤255] }` → 201 conversation. You are the owner. 403 `cannot_add` with `details.userIds` when someone's "who can add me" setting or a block stops it. 20 per hour |
+| PATCH | `/v1/conversations/:id/group` | ✓ | Any of `title`, `description`, `sendPolicy`, `infoPolicy`, `addPolicy`. Policies are admin-only; title and description follow `infoPolicy` |
+| POST | `/v1/conversations/:id/members` | ✓ | `{ userIds }` → conversation. Admins, or anyone when `addPolicy` is `everyone`. At most 256 members |
+| PATCH | `/v1/conversations/:id/members/:userId` | ✓ | `{ role: owner\|admin\|member }`. Admins promote members; only the owner demotes admins or hands over ownership |
+| DELETE | `/v1/conversations/:id/members/:userId` | ✓ | Remove someone (admins remove members, the owner removes anyone), or leave when it is your own id. When the owner leaves, the longest-serving admin (or else member) becomes owner |
+
+Sending to an admins-only group as a member gives 403 `admins_only`.
 
 A message looks like `{ id, conversationId, seq, changeSeq, senderId, clientId, kind, body (null once deleted), media, replyTo: { id, seq, senderId, kind, preview, deleted }, forwarded, mentions, reactions: [{ userId, emoji }], editedAt, deletedAt, pinnedAt, pinnedBy, createdAt }`.
 
@@ -90,9 +105,48 @@ Files go straight from the client to object storage. The API never handles the b
 | --- | --- | --- | --- |
 | POST | `/v1/media/uploads` | ✓ | `{ kind, contentType, byteSize, fileName?, durationMs? (required for voice), width?, height? }` → 201 `{ media, upload: { method: "PUT", url, headers, expiresIn } }`. PUT exactly `byteSize` bytes with those headers within 15 minutes |
 | POST | `/v1/media/:id/complete` | ✓ | Uploader only. Checks the stored size and the file signature against `contentType` → the media, `state: ready`. Mismatches are deleted (400 `media_rejected`). 409 `upload_missing` if nothing was uploaded |
-| GET | `/v1/media/:id` | ✓ | `{ media, url, expiresIn: 300 }` for the uploader, or for members of a chat where it was sent (and not deleted). Otherwise 404 |
+| GET | `/v1/media/:id` | ✓ | `{ media, url, expiresIn: 300 }` for the uploader, for members of a chat where it was sent (and not deleted), or for anyone allowed to see the post or story it is attached to. Otherwise 404 |
 
 Allowed types: images (JPEG, PNG, GIF, WebP, HEIC, ≤ 20 MB), video (MP4, QuickTime, WebM, ≤ 100 MB), audio and voice notes (MP3, M4A/AAC, Ogg, WebM, WAV; audio ≤ 50 MB, voice ≤ 16 MB and ≤ 15 minutes), and files (PDF, plain text, ZIP, Word, Excel, PowerPoint, ≤ 100 MB). SVG, HTML and executables are refused.
+
+## Social
+Who can see a post, story, comment or community is decided by the same rules on every route, including media downloads. People who blocked each other never see each other's content. Anything you can't see is a 404.
+
+A post is `{ id, author: { id, username, displayName }, community: { id, slug, name, kind } | null, audience: public|followers|only_me, body, media: [...], likeCount, commentCount, liked, createdAt, editedAt, removed: { at, reason } | null, shared: post | { id, unavailable: true } | null }`. Lists return `{ posts, nextCursor }`; pass `?cursor=` for the next page.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/users/:id/follow` | ✓ | → `{ following: active\|pending, followsYou }`. Pending for private accounts. 200 per day |
+| DELETE | `/v1/users/:id/follow` | ✓ | Unfollow, or withdraw a request → 204 |
+| GET | `/v1/users/:id/followers`, `/v1/users/:id/following` | ✓ | `{ users, nextCursor }`. 404 for a private account you don't follow |
+| GET | `/v1/me/follow-requests` | ✓ | `{ users }` waiting for your approval |
+| POST | `/v1/me/follow-requests/:userId` | ✓ | `{ approve }` → 204 |
+| DELETE | `/v1/me/followers/:userId` | ✓ | Remove a follower → 204 |
+| GET | `/v1/feed` | ✓ | Your posts, people you follow and communities you belong to, newest first |
+| GET | `/v1/users/:id/posts` | ✓ | That person's posts you are allowed to see |
+| POST | `/v1/posts` | ✓ | `{ clientId, body? (≤5000), audience?, mediaIds? (≤10 ready images or videos you uploaded), sharedPostId?, communityId? }` → 201 `{ post, duplicate: false }` or 200 `{ post, duplicate: true }` for a repeated `clientId`. Needs a body, media or a shared post. Community posts take the community's visibility. 30 per hour |
+| GET / PATCH / DELETE | `/v1/posts/:id` | ✓ | Read; edit `{ body?, audience? }` (author only); delete (author only, frees its files) |
+| PUT | `/v1/posts/:id/like` | ✓ | `{ liked }` → `{ liked, likeCount }` |
+| GET | `/v1/posts/:id/likes` | ✓ | `{ users }`, without people you blocked or who blocked you |
+| GET / POST | `/v1/posts/:id/comments` | ✓ | List oldest first `{ comments, nextCursor }`; add `{ body (1-2000) }` → 201 comment. 120 per hour |
+| DELETE | `/v1/comments/:id` | ✓ | Comment author, post author, or a community moderator → 204 |
+| POST | `/v1/posts/:id/moderation` | ✓ | Community moderators and above: `{ removed, reason? }` → 204. Recorded in the audit log. Removed posts stay visible to their author with the reason |
+| GET | `/v1/stories` | ✓ | `{ groups: [{ author, stories, allViewed }] }` for you and people you follow, unseen first |
+| POST | `/v1/stories` | ✓ | `{ kind: text\|image\|video, body? (≤500), background? (#RRGGBB), mediaId?, audience?: public\|followers (default) }` → 201. Lasts 24 hours. 50 per day |
+| GET / DELETE | `/v1/stories/:id` | ✓ | Read, or delete your own early |
+| POST | `/v1/stories/:id/views` | ✓ | Mark seen → 204 |
+| GET | `/v1/stories/:id/views` | ✓ | Author only: `{ viewers }` |
+| GET | `/v1/users/:id/stories` | ✓ | That person's live stories you may see |
+| POST | `/v1/communities` | ✓ | `{ slug, name, description?, kind?: community\|channel, visibility?: public\|private }` → 201. 409 `slug_taken`. 5 per day |
+| GET | `/v1/communities` | ✓ | `?q=&limit=` → `{ communities }`. Without `q`, the ones you belong to or asked to join; with `q`, any community whose name or address matches (private ones show only their name and description), largest first |
+| GET | `/v1/communities/:idOrSlug` | ✓ | `{ id, slug, kind, name, description, visibility, memberCount, membership: { role, state } \| null, createdAt }`. A private community's name and description are visible so people can ask to join; its posts and members are not. 404 for people banned from it |
+| PATCH / DELETE | `/v1/communities/:id` | ✓ | Edit (admins) or delete (owner) |
+| POST | `/v1/communities/:id/join` | ✓ | → the community. Public: active member; private: pending until approved. Banned people get 403 |
+| DELETE | `/v1/communities/:id/membership` | ✓ | Leave → 204. 409 `owner_cannot_leave` (hand over first) |
+| GET | `/v1/communities/:id/members` | ✓ | `?state=active\|pending\|banned` → `{ members }`. Members only; pending and banned lists are for moderators |
+| PATCH | `/v1/communities/:id/members/:userId` | ✓ | `{ role?, state?: active (approve) \| banned }`. You can only act on people ranked below you (403 `outranked`); handing over ownership is owner-only |
+| DELETE | `/v1/communities/:id/members/:userId` | ✓ | Remove someone ranked below you → 204 |
+| GET | `/v1/communities/:id/posts` | ✓ | Posts in the community, for anyone who may see it. In channels only admins and the owner can post |
 
 ## Realtime
 | Method | Path | Auth | Notes |
