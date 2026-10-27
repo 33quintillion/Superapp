@@ -128,6 +128,8 @@ export class AuthService {
       if (user) await this.audit.record({ actorId: user.id, action: 'auth.login_failed', ip: client.ip });
       throw Errors.invalidCredentials();
     }
+    // Only after the password checks out, so this can't be used to find suspended accounts.
+    if (user.state === 'suspended') throw Errors.accountSuspended();
     if (user.mfa_enabled_at) {
       const mfaToken = await this.issueOneTimeToken(user.id, 'mfa_challenge', `${MFA_CHALLENGE_TTL_MIN} minutes`);
       return { mfaRequired: true, mfaToken };
@@ -144,13 +146,14 @@ export class AuthService {
     if (!row) throw Errors.invalidToken();
     const userId = row.user_id;
     const user = await this.db.one<{ state: string }>('SELECT state FROM users WHERE id = $1', [userId]);
+    if (user!.state === 'suspended') throw Errors.accountSuspended();
     await this.checkTotp(userId, input.code);
     const used = await this.db.query(`UPDATE one_time_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL`, [hashToken(input.mfaToken)]);
     if (used.rowCount === 0) throw Errors.invalidToken();
-    return this.completeLogin(userId, user!.state, input.deviceName, client);
+    return this.completeLogin(userId, user!.state, input.deviceName, client, true);
   }
 
-  private async completeLogin(userId: string, state: string, deviceName: string | undefined, client: ClientInfo) {
+  private async completeLogin(userId: string, state: string, deviceName: string | undefined, client: ClientInfo, mfa = false) {
     return this.db.tx(async (tx) => {
       if (state === 'deactivated') {
         // Deactivation is reversible by signing in again (see docs/feature-checklist.md).
@@ -158,7 +161,7 @@ export class AuthService {
         await this.audit.record({ actorId: userId, action: 'account.reactivated', ip: client.ip }, tx);
       }
       await this.audit.record({ actorId: userId, action: 'auth.login', ip: client.ip }, tx);
-      return this.createSession(tx, userId, deviceName, client);
+      return this.createSession(tx, userId, deviceName, client, mfa);
     });
   }
 
@@ -323,12 +326,13 @@ export class AuthService {
 
   // --- helpers ---
 
-  private async createSession(tx: PoolClient, userId: string, deviceName: string | undefined, client: ClientInfo): Promise<TokenPair> {
+  /** mfa: the session was opened with a two-step code, which the admin dashboard requires. */
+  private async createSession(tx: PoolClient, userId: string, deviceName: string | undefined, client: ClientInfo, mfa = false): Promise<TokenPair> {
     const refreshToken = randomToken();
     const s = await this.db.one<{ id: string }>(
-      `INSERT INTO sessions (user_id, device_name, user_agent, ip, refresh_token_hash, expires_at)
-       VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6)) RETURNING id`,
-      [userId, deviceName?.slice(0, 100) || 'Unknown device', client.userAgent, client.ip, hashToken(refreshToken), this.config.REFRESH_TOKEN_TTL_DAYS],
+      `INSERT INTO sessions (user_id, device_name, user_agent, ip, refresh_token_hash, expires_at, mfa_verified_at)
+       VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6), CASE WHEN $7 THEN now() END) RETURNING id`,
+      [userId, deviceName?.slice(0, 100) || 'Unknown device', client.userAgent, client.ip, hashToken(refreshToken), this.config.REFRESH_TOKEN_TTL_DAYS, mfa],
       tx,
     );
     return this.pairFor(userId, s!.id, refreshToken);

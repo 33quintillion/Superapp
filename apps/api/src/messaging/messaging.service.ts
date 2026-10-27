@@ -388,6 +388,36 @@ export class MessagingService {
     return out;
   }
 
+  /** Platform moderation (admin dashboard): removes a reported message for everyone, whatever its age. */
+  async removeByModerator(messageId: string) {
+    const m = await this.db.one<{ conversation_id: string; media_id: string | null }>(
+      `SELECT conversation_id, media_id FROM messages WHERE id = $1 AND deleted_at IS NULL AND kind <> 'system'`,
+      [messageId],
+    );
+    if (!m) return false;
+    const removed = await this.db
+      .tx(async (tx) => {
+        const seq = await this.nextSeq(m.conversation_id, tx);
+        const r = await this.db.query(
+          `UPDATE messages SET body = '', media_id = NULL, mentions = '{}', pinned_at = NULL, pinned_by = NULL, deleted_at = now(), change_seq = $2
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [messageId, seq],
+          tx,
+        );
+        if (!r.rowCount) throw new NoChange(m.conversation_id);
+        await this.db.query('DELETE FROM message_reactions WHERE message_id = $1', [messageId], tx);
+        return true;
+      })
+      .catch((err) => {
+        if (err instanceof NoChange) return false;
+        throw err;
+      });
+    if (!removed) return false;
+    await this.publishToMembers(m.conversation_id, { type: 'message.updated', data: (await this.loadOne(NO_VIEWER, messageId))! });
+    if (m.media_id) await this.media.releaseIfUnused(m.media_id).catch((e) => this.logger.warn(`media release failed: ${e.message}`));
+    return true;
+  }
+
   /** "Delete for me". Other members keep the message. */
   async hideForMe(userId: string, messageId: string) {
     const m = await this.requireVisibleMessage(userId, messageId);

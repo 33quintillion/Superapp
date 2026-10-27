@@ -183,3 +183,80 @@ See [`push.md`](push.md) for how delivery works and how to configure each provid
 | PATCH | `/v1/me/notifications` | ✓ | Any of the fields above. `timeZone` is an IANA name; `start` and `end` must differ and may wrap past midnight |
 
 Per-chat mute (`PATCH /v1/conversations/:id` with `mutedUntil`) also stops notifications for that chat.
+
+## Businesses
+Business accounts, staff roles, the catalogue, orders and bookings. See [`business.md`](business.md) for the role matrix and order and booking rules. `:ref` is a business id or handle; changes take the id. Back-office routes return 404 to people who are not active staff, and 403 when your role lacks the permission.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/businesses` | ✓ | `{ handle, name, category, timeZone (IANA), currency (ISO 4217), description?, contactEmail?, phone? (E.164), address? }` → 201 business; you are its owner. 409 `handle_taken`. 3 per day |
+| GET | `/v1/businesses` | ✓ | Search active businesses: `q`, `category`, `limit` (1–50). Verified first |
+| GET | `/v1/me/businesses` | ✓ | Businesses you work at, plus invitations waiting for you |
+| GET | `/v1/businesses/:ref` | ✓ | `{ id, handle, name, description, category, contactEmail, phone, address, timeZone, currency, ordersEnabled, bookingsEnabled, verified, state, suspensionReason (staff only), myRole, permissions, invited }`. Suspended businesses are 404 for customers |
+| PATCH | `/v1/businesses/:id` | ✓ | `business.edit`. Any of the fields above (not `handle` or `currency`), plus `ordersEnabled`, `bookingsEnabled`. 409 `business_suspended` while suspended |
+| DELETE | `/v1/businesses/:id` | ✓ | Owner. Closes it: open orders and future bookings are cancelled |
+| GET | `/v1/businesses/:ref/hours` | ✓ | `{ hours: [{ weekday (0 = Sunday), opens: "HH:MM", closes: "HH:MM" }] }` in the business's time zone |
+| PUT | `/v1/businesses/:id/hours` | ✓ | `business.edit`. Replaces all opening hours. Several rows per day are allowed; they must not overlap |
+| GET | `/v1/businesses/:id/staff` | ✓ | Staff only. `{ staff: [{ user, role: "owner" \| "manager" \| "staff", state: "invited" \| "active", since }] }` |
+| POST | `/v1/businesses/:id/staff` | ✓ | `staff.manage`. `{ username, role: "manager" \| "staff" }` invites someone. Owners invite managers and staff; managers invite staff. 409 `already_staff`. 50 per day |
+| POST | `/v1/businesses/:id/staff/accept` | ✓ | Accept your invitation → the business |
+| PATCH | `/v1/businesses/:id/staff/:userId` | ✓ | `{ role }`. Only roles below your own, never your own |
+| DELETE | `/v1/businesses/:id/staff/:userId` | ✓ | Remove someone below you, or leave / decline yourself. 409 `owner_cannot_leave` |
+| POST | `/v1/businesses/:id/transfer` | ✓ | Owner. `{ userId }` of an active manager, who becomes owner; you become a manager |
+| GET | `/v1/businesses/:ref/items` | ✓ | `{ items: [{ id, name, description, priceMinor, currency, available, stock, position }] }`. `all=true` (staff) includes hidden and sold-out items |
+| POST | `/v1/businesses/:id/items` | ✓ | `catalogue.manage`. `{ name, priceMinor, description?, available?, stock? (null = not tracked), position? }`. Up to 500 items |
+| PATCH | `/v1/businesses/:id/items/:itemId` | ✓ | `catalogue.manage`. Any item field. Past orders keep their own copy of name and price |
+| DELETE | `/v1/businesses/:id/items/:itemId` | ✓ | `catalogue.manage`. Archives the item |
+| POST | `/v1/businesses/:ref/orders` | ✓ | `{ clientId, items: [{ itemId, quantity (1–99) }] (1–50 lines), note? }` → 201 order, or 200 with the first order for a repeated `clientId`. Prices come from the catalogue. 409 `orders_closed`, `item_unavailable` (`details.itemId`). 30 per hour |
+| GET | `/v1/businesses/:id/orders` | ✓ | `orders.view`. `status` (comma-separated), `limit` (1–100), `cursor`. Newest first, with `customer` (id, username, display name only) |
+| GET | `/v1/orders` | ✓ | Orders you placed, newest first. `limit`, `cursor` |
+| GET | `/v1/orders/:id` | ✓ | The customer or the business's staff; 404 for anyone else |
+| POST | `/v1/orders/:id/cancel` | ✓ | The customer, while `placed`. 409 `order_in_progress` after that |
+| POST | `/v1/orders/:id/status` | ✓ | `orders.manage`. `{ status, reason? }`. `placed → accepted \| rejected`, `accepted → ready \| cancelled`, `ready → completed \| cancelled`. 409 `invalid_transition`. Rejected and cancelled orders give their stock back |
+| GET | `/v1/businesses/:ref/services` | ✓ | `{ services: [{ id, name, description, durationMinutes, priceMinor, currency, capacity, active }] }`. `all=true` (staff) includes inactive ones |
+| POST | `/v1/businesses/:id/services` | ✓ | `services.manage`. `{ name, durationMinutes (5–480), priceMinor?, capacity? (1–100, people at once), description?, active? }` |
+| PATCH / DELETE | `/v1/businesses/:id/services/:serviceId` | ✓ | `services.manage`. Delete archives it; existing bookings stay |
+| GET | `/v1/businesses/:ref/services/:serviceId/slots` | ✓ | `date=YYYY-MM-DD` (the business's local date) → `{ date, timeZone, slots: [{ startsAt, endsAt, remaining }] }`. Steps of the service's length inside opening hours, in the future, up to 90 days ahead, with room left |
+| POST | `/v1/businesses/:ref/bookings` | ✓ | `{ serviceId, startsAt (one of the slots), clientId, note? }` → 201 booking, or 200 for a repeated `clientId`. 409 `slot_unavailable`, `slot_full`, `bookings_closed`. 20 per hour |
+| GET | `/v1/businesses/:id/bookings` | ✓ | `bookings.view`. `from`, `to` (ISO times, up to 62 days apart) |
+| GET | `/v1/bookings` | ✓ | Your bookings. `upcoming=false` for all of them, newest first |
+| GET | `/v1/bookings/:id` | ✓ | The customer or the business's staff |
+| POST | `/v1/bookings/:id/cancel` | ✓ | The customer, or staff with `bookings.manage`, before it starts. 409 `booking_started`, `booking_closed` |
+| POST | `/v1/bookings/:id/outcome` | ✓ | `bookings.manage`. `{ status: "completed" \| "no_show" }`, after the start. 409 `booking_not_started` |
+
+An order is `{ id, business: { id, handle, name }, customer? (staff view only), status, statusReason, fulfilment: "pickup", payment: "pay_in_person", note, items: [{ itemId, name, unitPriceMinor, quantity }], totalMinor, currency, createdAt, updatedAt }`. A booking is `{ id, business: { id, handle, name, timeZone }, service: { id, name }, customer? , startsAt, endsAt, status: "confirmed" \| "cancelled" \| "completed" \| "no_show", cancelledBy, note, createdAt }`. Money is always in minor units of the business's currency.
+
+## Integrations
+The integration catalogue (phase 1 of mini-apps, ADR 0006). Partners can't call our API yet; these endpoints record what each person allowed.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/integrations` | ✓ | Live integrations: `{ integrations: [{ id, slug, name, description, category, developer: { name }, homepageUrl, scopes: [{ scope, description }], version, state, grant }] }`. `category` filter |
+| GET | `/v1/integrations/:slug` | ✓ | One integration. Also returned when it was switched off but you still have a grant (`grant.active: false`) |
+| PUT | `/v1/integrations/:slug/connection` | ✓ | `{ scopes }`, a subset of what it asks for. Replaces your grant. 404 unless live |
+| DELETE | `/v1/integrations/:slug/connection` | ✓ | Revoke |
+| GET | `/v1/me/integrations` | ✓ | What you connected, with the scopes you granted |
+
+Scopes: `profile.basic`, `email`, `orders.read`, `bookings.read`, `notifications.send`. Nothing can grant access to messages, contacts or tokens.
+
+## Admin
+Platform staff only. Every route needs a `platform_staff` role, two-step verification turned on, and a session opened with a two-step code in the last `ADMIN_SESSION_MAX_HOURS` (default 12). Refusals are 403 with `not_platform_staff`, `mfa_required`, `mfa_reauth_required` or `admin_only`. See [`admin.md`](admin.md).
+
+| Method | Path | Role | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/admin/overview` | moderator | `{ role, reports: { open, inReview, childSafety }, users: { active, suspended }, businesses, liveIntegrations }` |
+| GET | `/v1/admin/reports` | moderator | `status=open\|closed`, `subjectType`, `limit`, `offset`. Open: child safety first, then oldest first |
+| GET | `/v1/admin/reports/:id` | moderator | The report with `subject` (the reported thing as it is now, or `null`) and `related` reports on the same subject. Only the reported message is shown, never the rest of the chat. Viewing is audited |
+| POST | `/v1/admin/reports/:id/claim` | moderator | Marks it `in_review` and assigns it to you |
+| POST | `/v1/admin/reports/:id/resolve` | moderator | `{ decision: "dismiss" \| "action", removeContent?, suspendAuthor?, note? }`. Closes every open report on the same subject. Removing a business or integration needs `admin`. 409 `content_gone`, `report_closed`; 403 `staff_protected` |
+| GET | `/v1/admin/users` | moderator | `q` (username prefix, exact email or id). Email is shown to admins only |
+| POST | `/v1/admin/users/:id/suspend` | moderator | `{ reason }`. Signs them out everywhere and removes push devices. Sign-in then fails with 403 `account_suspended` |
+| POST | `/v1/admin/users/:id/unsuspend` | moderator | `{ reason? }` |
+| GET | `/v1/admin/businesses` | admin | `q`, `state`, `limit` |
+| POST | `/v1/admin/businesses/:id/actions` | admin | `{ action: "verify" \| "unverify" \| "suspend" \| "unsuspend", reason? }` |
+| GET / POST | `/v1/admin/integrations` | admin | List (with connection counts), or create a draft: `{ slug, name, category, developerName, developerContact, homepageUrl (https), scopes, description?, version? }` |
+| PATCH | `/v1/admin/integrations/:id` | admin | Asking for more scopes sends a live integration back to `draft`; fewer scopes trims every grant |
+| POST | `/v1/admin/integrations/:id/state` | admin | `{ state: "live" \| "disabled" \| "draft", reason? }`. `disabled` is the kill switch |
+| GET / POST | `/v1/admin/staff` | admin | List platform staff, or `{ username }` to add a moderator |
+| DELETE | `/v1/admin/staff/:userId` | admin | Remove a moderator (admins are removed from the command line) |
+| GET | `/v1/admin/audit` | admin | `action` (prefix), `before` (entry id), `limit` (1–200). Newest first, without IP addresses |

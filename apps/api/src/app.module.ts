@@ -1,4 +1,12 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
+import { AdminController } from './admin/admin.controller';
+import { AdminService } from './admin/admin.service';
+import { BookingsService } from './business/bookings.service';
+import { BusinessController } from './business/business.controller';
+import { BusinessesService } from './business/businesses.service';
+import { OrdersService } from './business/orders.service';
+import { IntegrationsController } from './integrations/integrations.controller';
+import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
 import { IceService } from './calls/ice.service';
@@ -55,6 +63,9 @@ export class AppModule {
         PushController,
         SocialController,
         CallsController,
+        BusinessController,
+        IntegrationsController,
+        AdminController,
       ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
@@ -82,6 +93,11 @@ export class AppModule {
         CommunitiesService,
         IceService,
         CallsService,
+        BusinessesService,
+        OrdersService,
+        BookingsService,
+        IntegrationsService,
+        AdminService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

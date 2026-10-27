@@ -1,3 +1,4 @@
+import { can, canManageRole, PERMISSIONS, permissionsOf } from '../src/business/roles';
 import { SecretBox } from '../src/crypto/secret-box';
 import { base32Decode, base32Encode, hotp, totp, verifyTotp } from '../src/crypto/totp';
 import { hashToken, randomToken } from '../src/crypto/tokens';
@@ -115,5 +116,26 @@ describe('storage config', () => {
   it('requires a bucket and credentials', () => {
     expect(() => loadConfig({ ...TEST_ENV, S3_BUCKET: undefined } as unknown as NodeJS.ProcessEnv)).toThrow(/S3_BUCKET/);
     expect(() => loadConfig({ ...TEST_ENV, S3_BUCKET: 'Bad_Name' } as NodeJS.ProcessEnv)).toThrow(/S3_BUCKET/);
+  });
+});
+
+describe('business staff roles', () => {
+  it('gives each role exactly the permissions in the matrix', () => {
+    expect(permissionsOf('owner')).toEqual(Object.keys(PERMISSIONS));
+    expect(permissionsOf('manager').sort()).toEqual(
+      ['bookings.manage', 'bookings.view', 'business.edit', 'business.view', 'catalogue.manage', 'orders.manage', 'orders.view', 'services.manage', 'staff.manage', 'staff.view'].sort(),
+    );
+    expect(permissionsOf('staff').sort()).toEqual(['bookings.manage', 'bookings.view', 'business.view', 'orders.manage', 'orders.view', 'staff.view'].sort());
+    expect(can(null, 'business.view')).toBe(false);
+  });
+
+  it('lets people manage only roles below their own', () => {
+    expect(canManageRole('owner', 'manager')).toBe(true);
+    expect(canManageRole('owner', 'staff')).toBe(true);
+    expect(canManageRole('owner', 'owner')).toBe(false);
+    expect(canManageRole('manager', 'staff')).toBe(true);
+    expect(canManageRole('manager', 'manager')).toBe(false);
+    expect(canManageRole('manager', 'owner')).toBe(false);
+    expect(canManageRole('staff', 'staff')).toBe(false);
   });
 });

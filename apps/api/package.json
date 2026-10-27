@@ -9,6 +9,7 @@
     "migrate": "tsc -p tsconfig.build.json && node dist/src/database/migrate.cli.js",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "jest --runInBand",
+    "admin:grant": "tsc -p tsconfig.build.json && node dist/src/admin/grant.cli.js",
     "vapid-keys": "tsc -p tsconfig.build.json && node dist/src/push/vapid-keys.cli.js"
   },
   "dependencies": {

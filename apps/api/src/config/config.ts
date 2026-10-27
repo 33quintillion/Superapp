@@ -125,6 +125,9 @@ const schema = z.object({
   CLOUDFLARE_TURN_API_TOKEN: z.string().optional(),
   /** Overrides https://rtc.live.cloudflare.com. Tests only; refused in staging and production. */
   CLOUDFLARE_TURN_API_BASE: z.url().optional(),
+
+  // Admin dashboard: platform staff must have signed in with a two-step code within this many hours.
+  ADMIN_SESSION_MAX_HOURS: z.coerce.number().int().min(1).max(72).default(12),
 });
 
 function list(v: string) {

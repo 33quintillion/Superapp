@@ -18,7 +18,9 @@ export const Errors = {
   invalidCredentials: () => new AppError(HttpStatus.UNAUTHORIZED, 'invalid_credentials', 'Email or password is incorrect'),
   forbidden: (message = 'Not allowed') => new AppError(HttpStatus.FORBIDDEN, 'forbidden', message),
   notFound: (what = 'Resource') => new AppError(HttpStatus.NOT_FOUND, 'not_found', `${what} not found`),
-  conflict: (code: string, message: string) => new AppError(HttpStatus.CONFLICT, code, message),
+  conflict: (code: string, message: string, details?: unknown) => new AppError(HttpStatus.CONFLICT, code, message, details),
+  accountSuspended: () =>
+    new AppError(HttpStatus.FORBIDDEN, 'account_suspended', 'This account has been suspended. Contact support if you think this is a mistake.'),
   invalidToken: () => new AppError(HttpStatus.BAD_REQUEST, 'invalid_token', 'This link or code is invalid or has expired'),
   rateLimited: (retryAfter: number) =>
     new AppError(HttpStatus.TOO_MANY_REQUESTS, 'rate_limited', 'Too many requests, try again later', { retryAfter }),
