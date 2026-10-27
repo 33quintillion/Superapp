@@ -9,6 +9,10 @@ const securityHeaders = [
 export default {
   poweredByHeader: false,
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // Video calls happen on the chat screen, so only it may use the camera.
+      { source: '/chats', headers: [{ key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=()' }] },
+    ];
   },
 };

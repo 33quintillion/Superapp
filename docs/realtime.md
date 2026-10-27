@@ -57,6 +57,13 @@ The server re-checks the session every `WS_SESSION_RECHECK_SECONDS` (30 s by def
 | `{ type: "send", ref?, conversationId, message: { clientId, kind?, body?, mediaId?, replyToId?, mentions? } }` | `{ type: "ack", ref, data: { message, duplicate } }` |
 | `{ type: "receipt", ref?, conversationId, kind: "delivered" \| "read", seq }` | `{ type: "ack", ref, data: { conversationId, userId, lastDeliveredSeq, lastReadSeq } }` |
 | `{ type: "typing", conversationId, typing }` | none |
+| `{ type: "call.start", ref?, conversationId, media: "audio" \| "video" }` | `ack` with the call (`ringing`, or `ended` with `busy`). Errors: `cannot_call`, `already_in_call`, `group_calls_unsupported`, `not_found`. 20 per 10 minutes |
+| `{ type: "call.accept", ref?, callId }` | `ack` with the call, now bound to this connection. `call_not_ringing` if it ended or another device answered |
+| `{ type: "call.decline", ref?, callId }` | `ack` with the ended call |
+| `{ type: "call.hangup", ref?, callId, failed? }` | `ack` with the ended call (repeat-safe) |
+| `{ type: "call.connected", ref?, callId }` | `ack`. Media is flowing; starts the call clock |
+| `{ type: "call.signal", ref?, callId, signal }` | `ack` only when `ref` is given. `signal` is `{ kind: "offer" \| "answer", sdp }` or `{ kind: "candidate", candidate: { candidate, sdpMid, sdpMLineIndex, usernameFragment } \| null }`. Only from the connection bound to the call (`call_not_active` otherwise) |
+| `{ type: "call.resume", ref?, callId }` | `ack` with the call, now bound to this new connection. Used after a reconnect (`call_ended` if it is over) |
 
 A frame that fails gets `{ type: "error", ref, error: { code, message, details? } }`, and the connection stays open. Clients use their `clientId` as the `ref` for sends.
 
@@ -72,6 +79,8 @@ A frame that fails gets `{ type: "error", ref, error: { code, message, details? 
 | `conversation.updated` | `{ id, mutedUntil, archived }`, sent only to your own devices |
 | `conversation.changed` | `{ id }`. A group's members, roles or settings changed; fetch `GET /v1/conversations/:id` again. New members also get it, so a group appears on their devices |
 | `conversation.removed` | `{ id }`. You were removed from a group or left it on another device; drop it from the list |
+| `call.updated` | The call (see [`calls.md`](calls.md)), to every device of both people on each change: ringing, answered, connected, someone reconnecting, ended |
+| `call.signal` | `{ callId, from, signal }`, only to the one connection taking part on the receiving side |
 
 Events go to every device of every member, including the device that made the change. Clients deduplicate by message id.
 
@@ -87,6 +96,5 @@ Each user has a Redis pub/sub channel. A server subscribes only to the users who
 
 ## Not done yet
 - Push notifications reach browsers today. iPhone and Android need APNs and FCM credentials and app-side registration (see [`push.md`](push.md)).
-- Group chats. The schema has roles and members, but only direct chats can be created (Stage 5).
 - Per-device delivery state. Receipts are per user, not per device.
 - Outboxes are kept in memory. A send that is still pending when the app is killed is lost and has to be typed again.

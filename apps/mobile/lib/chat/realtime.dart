@@ -78,6 +78,11 @@ class RealtimeConnection extends ChangeNotifier {
   int _attempt = 0;
   bool _stopped = true;
   final _outbox = <String, _Outgoing>{};
+  final _requests = <String, Completer<Map<String, dynamic>>>{};
+  int _nextRef = 0;
+
+  /// This socket's id on the server, from the ready frame. Calls are tied to one connection.
+  String? connectionId;
 
   int get pendingCount => _outbox.length;
 
@@ -95,6 +100,7 @@ class RealtimeConnection extends ChangeNotifier {
   /// Stops everything synchronously; safe to call from dispose().
   bool _teardown() {
     _stopped = true;
+    _failRequests();
     _retry?.cancel();
     unawaited(_sub?.cancel());
     unawaited(_socket?.close());
@@ -141,9 +147,15 @@ class RealtimeConnection extends ChangeNotifier {
     switch (type) {
       case 'ready':
         _attempt = 0;
+        connectionId = (f['data'] as Map?)?['connectionId'] as String?;
         _setStatus(ConnectionStatus.online);
         _outbox.forEach(_transmit);
         onReady();
+      case 'ack' when ref != null && _requests.containsKey(ref):
+        _requests.remove(ref)!.complete((f['data'] as Map?)?.cast<String, dynamic>() ?? const {});
+      case 'error' when ref != null && _requests.containsKey(ref):
+        final err = f['error'] as Map<String, dynamic>? ?? const {};
+        _requests.remove(ref)!.completeError(SendRejected(err['code'] as String? ?? 'error', err['message'] as String? ?? 'Failed'));
       case 'ack' when ref != null && _outbox.containsKey(ref):
         _outbox.remove(ref)!.completer.complete(f['data'] as Map<String, dynamic>);
       case 'error' when ref != null && _outbox.containsKey(ref):
@@ -159,9 +171,19 @@ class RealtimeConnection extends ChangeNotifier {
     }
   }
 
+  void _failRequests() {
+    connectionId = null;
+    final pending = _requests.values.toList();
+    _requests.clear();
+    for (final c in pending) {
+      c.completeError(SendRejected('offline', 'Connection lost'));
+    }
+  }
+
   void _onClosed() {
     _socket = null;
     _sub = null;
+    _failRequests();
     if (_stopped) return;
     _setStatus(ConnectionStatus.offline);
     _scheduleRetry();
@@ -187,6 +209,20 @@ class RealtimeConnection extends ChangeNotifier {
     _outbox[clientId] = o;
     _transmit(clientId, o);
     return o.completer.future;
+  }
+
+  /// Sends a frame and resolves with its ack. Not retried after a reconnect: call actions
+  /// only mean something on the connection that made them.
+  Future<Map<String, dynamic>> request(Map<String, dynamic> f, {Duration timeout = const Duration(seconds: 10)}) {
+    if (status != ConnectionStatus.online || _socket == null) return Future.error(SendRejected('offline', 'You’re offline'));
+    final ref = 'q${_nextRef += 1}';
+    final c = Completer<Map<String, dynamic>>();
+    _requests[ref] = c;
+    _socket!.add(jsonEncode({...f, 'ref': ref}));
+    return c.future.timeout(timeout, onTimeout: () {
+      _requests.remove(ref);
+      throw SendRejected('timeout', 'No answer from the server');
+    });
   }
 
   /// Fire-and-forget frames (typing, receipts). Dropped while offline; receipts are re-sent on screen.

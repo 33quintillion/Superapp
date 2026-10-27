@@ -667,6 +667,24 @@ export class MessagingService {
     return Number(r!.last_seq);
   }
 
+  /**
+   * Calls follow the rules for direct messages: no blocks either way, the other person's
+   * account is live, and their "who can message me" setting. Returns the other person's id.
+   */
+  async assertCanCall(userId: string, conversationId: string, tx: Queryable): Promise<string> {
+    const members = await this.members(conversationId, tx);
+    if (!members.some((m) => m.user_id === userId)) throw Errors.notFound('Conversation');
+    const c = await this.db.one<{ kind: string }>('SELECT kind FROM conversations WHERE id = $1', [conversationId], tx);
+    if (c!.kind !== 'direct') throw Errors.conflict('group_calls_unsupported', 'Group calls are not available yet');
+    try {
+      await this.assertCanSend(userId, conversationId, members, tx);
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'cannot_message') throw new AppError(HttpStatus.FORBIDDEN, 'cannot_call', 'You can’t call this person');
+      throw err;
+    }
+    return members.find((m) => m.user_id !== userId)!.user_id;
+  }
+
   /** Direct chats only: a block between two people in a group doesn't stop the group. */
   private async assertNotBlocked(userId: string, conversationId: string, db: Queryable) {
     const blocked = await this.db.one(

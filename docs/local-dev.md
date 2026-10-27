@@ -14,6 +14,8 @@ redis-server --daemonize yes
 
 For media, run any S3-compatible service and set the `S3_*` variables. docker-compose starts SeaweedFS (Apache-2.0) with the credentials in `infra/seaweedfs/s3.json`. The tests expect one on `http://localhost:9000` with the `minioadmin`/`minioadmin` credentials; override with `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID` and `TEST_S3_SECRET_ACCESS_KEY`. Without Docker, moto's S3 server works for local runs (`pip install 'moto[server]' && moto_server -p 9000`), but CI uses SeaweedFS because moto doesn't check signatures. MinIO no longer publishes its server image, so it is not used here. With `S3_AUTO_CREATE_BUCKET=true` the API creates the bucket and allows `CORS_ORIGINS` on it, because browsers upload to it directly.
 
+For calls, the default (`TURN_PROVIDER=none` with a public STUN server) works between browsers on the same machine or network. To test a relay locally, install coturn (`apt install coturn`) and run `turnserver -n --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port=3479 --use-auth-secret --static-auth-secret=devsecret --realm=nexa.test --allow-loopback-peers --no-tls --no-dtls`, then set `TURN_PROVIDER=coturn`, `TURN_URLS=turn:127.0.0.1:3479` and `TURN_SHARED_SECRET=devsecret`. The web e2e starts its own coturn this way. See [`calls.md`](calls.md).
+
 For email, run Mailpit as a binary (https://mailpit.axllent.org), or point `SMTP_URL` at any SMTP server you control.
 
 ## Environment

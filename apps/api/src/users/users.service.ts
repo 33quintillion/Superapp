@@ -143,7 +143,7 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
@@ -162,6 +162,11 @@ export class UsersService {
       this.communities.exportFor(userId),
       this.db.query(
         `SELECT follower_id, followee_id, state, created_at, accepted_at FROM follows WHERE follower_id = $1 OR followee_id = $1 ORDER BY created_at`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id, conversation_id, caller_id, callee_id, media, end_reason, created_at, answered_at, connected_at, ended_at
+           FROM calls WHERE caller_id = $1 OR callee_id = $1 ORDER BY created_at`,
         [userId],
       ),
     ]);
@@ -187,6 +192,8 @@ export class UsersService {
       stories,
       communities,
       follows: follows.rows,
+      // Call history (metadata only: call audio and video never reach the server).
+      calls: calls.rows,
     };
   }
 
