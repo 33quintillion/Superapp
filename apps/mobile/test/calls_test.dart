@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:nexa/api/api_client.dart';
 import 'package:nexa/auth/auth_controller.dart';
 import 'package:nexa/auth/session_store.dart';
+import 'package:nexa/calls/call_controller.dart';
 import 'package:nexa/calls/call_engine.dart';
 import 'package:nexa/chat/chat_models.dart';
 import 'package:nexa/chat/realtime.dart';
@@ -450,5 +451,12 @@ void main() {
     final done = {'type': 'call', 'callId': 'x', 'media': 'audio', 'outcome': 'completed', 'durationSeconds': 3725};
     expect(describeSystem(done, 'me', 'me', (_) => 'Ben'), '↗ Voice call · 1:02:05');
     expect(describeSystem({...done, 'outcome': 'declined'}, 'ben', 'me', (_) => 'Ben'), 'You declined a voice call');
+  });
+
+  test('a failed call without a TURN relay tells the person to try another network', () {
+    final failed = Call(callJson(state: 'ended', endReason: 'failed'));
+    expect(callEndedText(failed, 'me', 'Ben', relay: false), 'Call failed: your networks couldn’t connect directly. Try again on Wi-Fi or another network');
+    expect(callEndedText(failed, 'me', 'Ben', relay: true), 'Call failed: the connection couldn’t be set up');
+    expect(callEndedText(failed, 'me', 'Ben'), 'Call failed: the connection couldn’t be set up');
   });
 }

@@ -200,5 +200,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }
+  if (deployed && cfg.TURN_PROVIDER === 'none' && !cfg.STUN_URLS.length) {
+    // Without STUN or TURN, devices only offer local addresses, so calls connect only on one network.
+    throw new Error('TURN_PROVIDER=none needs STUN_URLS in staging and production (e.g. stun:stun.cloudflare.com:3478)');
+  }
   return cfg;
 }

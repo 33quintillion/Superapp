@@ -63,8 +63,12 @@ export function describeMediaError(err: unknown, media: CallMedia): string {
   return `Couldn’t start your ${what}.`;
 }
 
-/** One sentence for how a call ended, from this person's side. */
-export function endedText(c: Call, me: string, peerName: string): string {
+/**
+ * One sentence for how a call ended, from this person's side. `relay` is whether this device
+ * was given a TURN relay; without one, a failed call usually means the two networks can't
+ * reach each other directly, and the person can do something about that.
+ */
+export function endedText(c: Call, me: string, peerName: string, relay?: boolean | null): string {
   const caller = c.callerId === me;
   switch (c.endReason) {
     case 'completed':
@@ -78,7 +82,9 @@ export function endedText(c: Call, me: string, peerName: string): string {
     case 'cancelled':
       return caller ? 'Call cancelled' : 'Missed call';
     case 'failed':
-      return 'Call failed: the connection couldn’t be set up';
+      return relay === false
+        ? 'Call failed: your networks couldn’t connect directly. Try again on Wi-Fi or another network'
+        : 'Call failed: the connection couldn’t be set up';
     case 'connection_lost':
       return 'Call ended: the connection was lost';
     default:
@@ -110,6 +116,8 @@ export class CallManager {
   private lastInbound = { lost: 0, received: 0 };
   private ring: { stop: () => void } | null = null;
   private lastPeerConn: string | null = null;
+  /** Whether the API handed this device a TURN relay for the current call (null before asking). */
+  private relayOffered: boolean | null = null;
 
   constructor(
     private readonly rt: RealtimeClient,
@@ -319,6 +327,7 @@ export class CallManager {
     if (!this.pcReady) {
       this.pcReady = (async () => {
         const ice = await chatApi<IceConfig>('GET', 'calls/ice-servers').catch(() => ({ iceServers: [], iceTransportPolicy: 'all' as const, relay: false }));
+        this.relayOffered = ice.relay;
         const pc = new RTCPeerConnection({ iceServers: ice.iceServers, iceTransportPolicy: ice.iceTransportPolicy });
         this.pc = pc;
         for (const t of this.view.localStream?.getTracks() ?? []) pc.addTrack(t, this.view.localStream!);
@@ -439,9 +448,9 @@ export class CallManager {
   // ---------------------------------------------------------------- ending
 
   private ended(c: Call) {
-    const peer = this.view.peerName || 'They';
+    const notice = endedText(c, this.me, this.view.peerName || 'They', this.relayOffered);
     this.teardown();
-    this.set({ phase: 'ended', call: c, notice: endedText(c, this.me, peer), localStream: null, remoteStream: null, quality: null });
+    this.set({ phase: 'ended', call: c, notice, localStream: null, remoteStream: null, quality: null });
     this.later(5000, () => this.dismiss());
   }
 
@@ -460,6 +469,7 @@ export class CallManager {
     this.pc?.close();
     this.pc = null;
     this.pcReady = null;
+    this.relayOffered = null;
     this.pendingCandidates = [];
     this.view.localStream?.getTracks().forEach((t) => t.stop());
   }

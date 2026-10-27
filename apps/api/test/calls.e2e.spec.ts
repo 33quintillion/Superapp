@@ -533,6 +533,9 @@ describe('managed TURN providers', () => {
     expect(() => testConfig({ TURN_PROVIDER: 'coturn', TURN_URLS: 'turn:x:3478' })).toThrow(/TURN_SHARED_SECRET/);
     expect(() => testConfig({ TURN_PROVIDER: 'twilio', TWILIO_ACCOUNT_SID: 'AC' })).toThrow(/TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET/);
     expect(() => testConfig({ ICE_TRANSPORT_POLICY: 'relay' })).toThrow(/needs a TURN_PROVIDER/);
+    const deployed = { NODE_ENV: 'production', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://x', S3_AUTO_CREATE_BUCKET: 'false' };
+    expect(() => testConfig({ ...deployed, TURN_PROVIDER: 'none', STUN_URLS: '' })).toThrow(/TURN_PROVIDER=none needs STUN_URLS/);
+    expect(testConfig({ ...deployed, TURN_PROVIDER: 'none', STUN_URLS: 'stun:stun.cloudflare.com:3478' }).STUN_URLS).toEqual(['stun:stun.cloudflare.com:3478']);
     expect(() => testConfig({ STUN_URLS: 'http://not-stun' })).toThrow(/Not a STUN\/TURN URL/);
     expect(() => testConfig({ TURN_PROVIDER: 'coturn', TURN_URLS: 'stun:x', TURN_SHARED_SECRET: 's' })).toThrow(/turn: or turns:/);
     expect(() => testConfig({ NODE_ENV: 'production', CLOUDFLARE_TURN_API_BASE: 'http://127.0.0.1:1', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://x', S3_AUTO_CREATE_BUCKET: 'false' })).toThrow(
