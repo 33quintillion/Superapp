@@ -6,7 +6,7 @@ import { forwardToApi } from '@/lib/api';
 /**
  * The browser screens' only way to reach the API. It attaches the access token from the
  * httpOnly cookie, so browser code still never holds a token. Only the messaging, social
- * and notification endpoints below can be reached through it (account export, deletion
+ * notification and call endpoints below can be reached through it (account export, deletion
  * and security settings stay server-side), and writes must come from this site.
  */
 const ID = '[0-9a-f-]{36}';
@@ -63,6 +63,11 @@ const ALLOWED: [string, RegExp][] = [
   ['GET', /^me\/privacy$/],
   ['PATCH', /^me\/privacy$/],
   ['POST', /^reports$/],
+  // Calls: history, TURN settings, and ending a call. Starting and answering happen on the WebSocket.
+  ['GET', /^calls$/],
+  ['GET', /^calls\/(ice-servers|active)$/],
+  ['GET', new RegExp(`^calls/${ID}$`)],
+  ['POST', new RegExp(`^calls/${ID}/(decline|hangup)$`)],
   // Communities and channels.
   ['GET', /^communities(\/[a-z0-9][a-z0-9_-]{2,39})?$/],
   ['POST', /^communities$/],

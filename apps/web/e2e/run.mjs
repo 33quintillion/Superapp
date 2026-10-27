@@ -10,7 +10,9 @@ import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const apiDir = join(here, '..', '..', 'api');
-const API_PORT = 3100, WEB_PORT = 3101, SMTP_PORT = 2525;
+const API_PORT = 3100, WEB_PORT = 3101, SMTP_PORT = 2525, TURN_PORT = 3479;
+// A real TURN relay (coturn) for the calls flow. Every call is forced through it.
+const TURN_SECRET = randomBytes(16).toString('hex');
 const WEB = `http://127.0.0.1:${WEB_PORT}`;
 
 // Web Push is the one push provider that needs no Apple or Google account.
@@ -38,7 +40,23 @@ const env = {
   VAPID_PUBLIC_KEY: vapid.getPublicKey().toString('base64url'),
   VAPID_PRIVATE_KEY: vapid.getPrivateKey().toString('base64url'),
   VAPID_SUBJECT: 'mailto:e2e@example.test',
+  TURN_PROVIDER: 'coturn',
+  TURN_URLS: `turn:127.0.0.1:${TURN_PORT}?transport=udp,turn:127.0.0.1:${TURN_PORT}?transport=tcp`,
+  TURN_SHARED_SECRET: TURN_SECRET,
+  ICE_TRANSPORT_POLICY: 'relay',
+  CALL_RING_SECONDS: '8',
+  CALL_CONNECT_SECONDS: '10',
+  CALL_SWEEP_INTERVAL_MS: '500',
 };
+
+/** coturn with the TURN REST API shared secret, as in production, on loopback only. */
+function startTurn() {
+  return run(process.env.E2E_TURNSERVER ?? 'turnserver', [
+    '-n', '--listening-ip=127.0.0.1', '--relay-ip=127.0.0.1', `--listening-port=${TURN_PORT}`,
+    '--min-port=49160', '--max-port=49200', '--use-auth-secret', `--static-auth-secret=${TURN_SECRET}`, '--realm=nexa.test',
+    '--no-tls', '--no-dtls', '--no-cli', '--allow-loopback-peers', '--fingerprint', '--no-stdout-log', '--log-file=/dev/null',
+  ]);
+}
 
 const procs = [];
 function run(cmd, args, opts) {
@@ -379,6 +397,147 @@ async function socialFlow(browser, API, tag, step) {
   for (const p of [cara, dev]) await p.ctx.close();
 }
 
+/**
+ * Voice and video calls between two real Chromium browsers with fake camera and
+ * microphone devices. ICE_TRANSPORT_POLICY=relay, so media only flows if the browsers
+ * authenticate to the local coturn with the API's credentials and relay through it.
+ */
+async function callsFlow(browser, API, tag, step, turn) {
+  const people = {};
+  for (const [i, name] of ['dan', 'fay'].entries()) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'calling passphrase 654', displayName: name === 'dan' ? 'Dan' : 'Fay' };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i + 60}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    const ctx = await browser.newContext();
+    await ctx.grantPermissions(['camera', 'microphone'], { origin: WEB });
+    const page = await ctx.newPage();
+    if (process.env.E2E_DEBUG) {
+      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
+      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
+    }
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', u.email);
+    await page.fill('input[name=password]', u.password);
+    await page.click('button[type=submit]');
+    await page.waitForURL(`${WEB}/account`);
+    people[name] = { ...u, ctx, page };
+  }
+  const { dan, fay } = people;
+  await dan.page.goto(`${WEB}/chats`);
+  await dan.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await dan.page.fill('input[name=username]', fay.username);
+  await dan.page.click('form.new-chat button');
+  await dan.page.waitForSelector('[data-testid="peer-name"]:has-text("Fay")');
+  await fay.page.goto(`${WEB}/chats`);
+  await fay.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+
+  // Media is really flowing when the remote <video> has a picture and keeps playing.
+  const videoPlaying = (page) =>
+    page.waitForFunction(
+      () => {
+        const v = document.querySelector('[data-testid=remote-video]');
+        if (!v || !v.videoWidth) return false;
+        const t = Number(v.dataset.seenTime ?? -1);
+        v.dataset.seenTime = String(v.currentTime);
+        return t >= 0 && v.currentTime > t;
+      },
+      null,
+      { timeout: 20000, polling: 500 },
+    );
+  const phase = (page, p) => page.waitForSelector(`[data-testid=in-call][data-phase=${p}]`, { timeout: 20000 });
+
+  await dan.page.click('[data-testid=video-call]');
+  await dan.page.waitForSelector('[data-testid=call-status]:has-text("Ringing")');
+  await fay.page.waitForSelector('[data-testid=incoming-call]:has-text("Dan")');
+  await fay.page.waitForSelector('[data-testid=incoming-call]:has-text("Incoming video call")');
+  step('video call rings the other browser');
+
+  await fay.page.click('[data-testid=accept-call]');
+  await phase(dan.page, 'active');
+  await phase(fay.page, 'active');
+  await videoPlaying(dan.page);
+  await videoPlaying(fay.page);
+  for (const p of [dan.page, fay.page]) await p.waitForSelector('[data-testid=call-route][data-route=relay]', { timeout: 10000 });
+  step('answered: camera video plays both ways, relayed through coturn with API-issued TURN credentials');
+
+  await dan.page.click('[data-testid=mute]');
+  assert(await dan.page.evaluate(() => document.querySelector('[data-testid=local-video]').srcObject.getAudioTracks().every((t) => !t.enabled)), 'mute disables the microphone track');
+  await dan.page.click('[data-testid=camera]');
+  await dan.page.waitForSelector('[data-testid=local-video]', { state: 'detached' });
+  await dan.page.click('[data-testid=camera]');
+  await dan.page.click('[data-testid=mute]');
+  assert(await dan.page.evaluate(() => document.querySelector('[data-testid=local-video]').srcObject.getTracks().every((t) => t.enabled)), 'unmute and camera on');
+  step('mute and camera controls switch the local tracks');
+
+  // Fay's browser loses its connection to the server for a moment. The call keeps its
+  // place, her browser resumes on a new socket, and Dan restarts ICE.
+  await fay.ctx.setOffline(true);
+  await fay.page.waitForSelector('[data-testid=conn]:has-text("Offline")');
+  await dan.page.waitForSelector('[data-testid=in-call][data-phase=reconnecting]', { timeout: 10000 });
+  await fay.ctx.setOffline(false);
+  await fay.page.waitForSelector('[data-testid=conn]:has-text("Connected")', { timeout: 20000 });
+  await phase(dan.page, 'active');
+  await videoPlaying(dan.page);
+  await videoPlaying(fay.page);
+  step('signalling connection drops mid-call and the call recovers');
+
+  await dan.page.click('[data-testid=hangup]');
+  await dan.page.waitForSelector('[data-testid=call-ended]:has-text("Call ended")');
+  await fay.page.waitForSelector('[data-testid=call-ended]:has-text("Call ended")');
+  await dan.page.waitForSelector('[data-testid=system-note]:has-text("Video call ·")');
+  await fay.page.waitForSelector('[data-testid=system-note]:has-text("Video call ·")');
+  assert(await dan.page.evaluate(() => !document.querySelector('[data-testid=in-call]')), 'call screen closed');
+  step('hang up ends the call for both; the chat shows the call and its length');
+
+  await fay.page.click('[data-testid=voice-call]');
+  await dan.page.waitForSelector('[data-testid=incoming-call]:has-text("Incoming voice call")');
+  await dan.page.click('[data-testid=decline-call]');
+  await fay.page.waitForSelector('[data-testid=call-ended]:has-text("Dan declined the call")');
+  await dan.page.waitForSelector('[data-testid=system-note]:has-text("You declined a voice call")');
+  step('declined voice call');
+
+  await dan.page.click('[data-testid=voice-call]');
+  await fay.page.waitForSelector('[data-testid=incoming-call]');
+  await dan.page.waitForSelector('[data-testid=call-ended]:has-text("No answer")', { timeout: 20000 });
+  await fay.page.waitForSelector('[data-testid=incoming-call]', { state: 'detached' });
+  await fay.page.waitForSelector('[data-testid=system-note]:has-text("Missed voice call")');
+  await fay.page.click('[data-testid=calls-toggle]');
+  await fay.page.waitForSelector('[data-testid=call-row][data-outcome=missed]:has-text("Dan")');
+  assert((await fay.page.locator('[data-testid=call-row]').count()) === 3, 'three calls in history');
+  await fay.page.click('[data-testid=calls-toggle]');
+  step('unanswered call rings out: "No answer" for the caller, a missed call in chat and history for the callee');
+
+  // Microphone blocked in the browser: nothing rings, and the person is told why.
+  await fay.ctx.clearPermissions();
+  await fay.page.click('[data-testid=voice-call]');
+  await fay.page.waitForSelector('[data-testid=call-ended]:has-text("Allow access to your microphone")');
+  assert(!(await dan.page.isVisible('[data-testid=incoming-call]')), 'no call placed without a microphone');
+  // Answering with the camera blocked: the call keeps ringing with an explanation.
+  await dan.page.click('[data-testid=video-call]');
+  await fay.page.waitForSelector('[data-testid=incoming-call]');
+  await fay.page.click('[data-testid=accept-call]');
+  await fay.page.waitForSelector('[data-testid=call-notice]:has-text("Allow access to your camera and microphone")');
+  await fay.page.click('[data-testid=decline-call]');
+  await dan.page.waitForSelector('[data-testid=call-ended]:has-text("Fay declined the call")');
+  await fay.ctx.grantPermissions(['camera', 'microphone'], { origin: WEB });
+  step('microphone or camera permission denied: explained, and no broken call');
+
+  // The TURN relay goes down. Relay-only calls cannot connect, and both sides are told.
+  turn.kill('SIGTERM');
+  await new Promise((r) => turn.once('exit', r));
+  await dan.page.click('[data-testid=video-call]');
+  await fay.page.click('[data-testid=accept-call]');
+  await dan.page.waitForSelector('[data-testid=call-ended]:has-text("Call failed")', { timeout: 30000 });
+  await fay.page.waitForSelector('[data-testid=call-ended]:has-text("Call failed")', { timeout: 30000 });
+  step('relay unreachable: the call fails cleanly on both sides');
+
+  for (const p of [dan, fay]) await p.ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
 let browser;
 let failed = false;
@@ -389,6 +548,7 @@ try {
   const redis = new Redis(env.REDIS_URL);
   await redis.flushdb();
   await redis.quit();
+  const turn = startTurn();
   run('node', ['dist/src/main.js'], { cwd: apiDir, env });
   run('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], {
     cwd: join(here, '..'),
@@ -398,12 +558,20 @@ try {
   await waitFor(`${WEB}/sign-in`);
 
   // Full Chromium in headless mode: the stripped-down headless shell has no notifications.
-  browser = await chromium.launch({ channel: 'chromium' });
+  // Fake camera and microphone devices for the calls flow (a test pattern and a beep).
+  browser = await chromium.launch({ channel: 'chromium', args: ['--use-fake-device-for-media-stream'] });
   const page = await browser.newPage();
   const tag = randomBytes(4).toString('hex');
   const email = `e2e_${tag}@example.test`;
   const pw1 = 'first passphrase 123', pw2 = 'second passphrase 456';
   const step = (s) => console.log(`  ✓ ${s}`);
+
+  // E2E_ONLY=calls runs just the calls flow, for quicker iteration on it.
+  all: {
+    if (process.env.E2E_ONLY === 'calls') {
+      await callsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step, turn);
+      break all;
+    }
 
   await page.goto(`${WEB}/register`);
   await page.fill('input[name=displayName]', 'E2E Person');
@@ -503,6 +671,9 @@ try {
 
   await chatFlow(browser, API, tag, step);
   await socialFlow(browser, API, tag, step);
+  // Last: it stops the TURN relay to test a failed connection.
+  await callsFlow(browser, API, tag, step, turn);
+  }
 
   console.log('\nWeb e2e: all checks passed');
 } catch (err) {

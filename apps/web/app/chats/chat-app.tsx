@@ -15,6 +15,8 @@ import {
   SystemEvent,
   uploadMedia,
 } from '@/lib/chat-client';
+import { CallManager, CallView } from '@/lib/call-session';
+import { CallHistory, CallScreen, describeCall } from './call-ui';
 
 interface Me {
   id: string;
@@ -60,6 +62,8 @@ export function describeSystem(e: SystemEvent, actorId: string, me: string, name
       return e.role === 'owner' ? `${who(e.userId)} now own${e.userId === me ? '' : 's'} the group` : e.role === 'admin' ? `${actor} made ${whom(e.userId)} an admin` : `${actor} removed ${whom(e.userId)} as admin`;
     case 'group_updated':
       return e.title !== undefined ? `${actor} renamed the group to “${e.title}”` : `${actor} changed the group settings`;
+    case 'call':
+      return describeCall(e, actorId, me);
   }
 }
 
@@ -75,6 +79,12 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const [now, setNow] = useState(() => Date.now());
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [callView, setCallView] = useState<CallView | null>(null);
+  const [showCalls, setShowCalls] = useState(false);
+  const [callsKey, setCallsKey] = useState(0);
+  const calls = useRef<CallManager | null>(null);
+  const convsRef = useRef(convs);
+  convsRef.current = convs;
 
   const synced = useRef<Record<string, number>>({});
   const loaded = useRef(new Set<string>());
@@ -192,6 +202,13 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
         case 'conversation.changed':
           void refreshConversation(d.id);
           break;
+        case 'call.updated':
+          if (d?.state === 'ended') setCallsKey((k) => k + 1);
+          calls.current?.onEvent(f);
+          break;
+        case 'call.signal':
+          calls.current?.onEvent(f);
+          break;
         case 'conversation.removed':
           setConvs((prev) => prev.filter((c) => c.id !== d.id));
           setActiveId((id) => (id === d.id ? null : id));
@@ -204,15 +221,29 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
 
   useEffect(() => {
     const client = new RealtimeClient(wsBase, onEvent, setConn, () => {
+      void calls.current?.onReady();
       for (const cid of loaded.current) void resync(cid);
       void chatApi<{ conversations: Conversation[] }>('GET', 'conversations').then((r) =>
         setConvs((prev) => sortConversations([...prev.filter((c) => !r.conversations.some((x) => x.id === c.id)), ...r.conversations])),
       );
     });
     rt.current = client;
+    const manager = new CallManager(
+      client,
+      me.id,
+      ({ conversationId, peerId }) => {
+        const c = convsRef.current.find((x) => x.id === conversationId);
+        return c?.members.find((m) => m.userId === peerId)?.displayName ?? 'Someone';
+      },
+      setCallView,
+    );
+    calls.current = manager;
     client.start();
-    return () => client.stop();
-  }, [wsBase, onEvent, resync]);
+    return () => {
+      manager.dispose();
+      client.stop();
+    };
+  }, [wsBase, onEvent, resync, me.id]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -329,6 +360,24 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
             setActiveId(c.id);
           }}
         />
+        <button className="btn quiet small calls-toggle" data-testid="calls-toggle" aria-expanded={showCalls} onClick={() => setShowCalls((v) => !v)}>
+          {showCalls ? 'Back to chats' : 'Calls'}
+        </button>
+        {showCalls && (
+          <CallHistory
+            refreshKey={callsKey}
+            onCall={async (peerId, media) => {
+              try {
+                const c = await chatApi<Conversation>('POST', 'conversations/direct', { userId: peerId });
+                setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]));
+                setActiveId(c.id);
+                await calls.current?.start(c.id, peerId, media);
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Couldn’t call');
+              }
+            }}
+          />
+        )}
         <Search onPick={(m) => setActiveId(m.conversationId)} nameFor={(cid) => titleOf(convs.find((c) => c.id === cid), me.id)} />
         <ul className="conv-items">
           {convs
@@ -379,6 +428,16 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
                 </div>
               </div>
               <div className="chat-head-actions">
+                {active.kind === 'direct' && peer && (
+                  <>
+                    <button className="btn quiet small" data-testid="voice-call" aria-label={`Voice call ${peer.displayName}`} onClick={() => void calls.current?.start(active.id, peer.userId, 'audio')}>
+                      📞 Call
+                    </button>
+                    <button className="btn quiet small" data-testid="video-call" aria-label={`Video call ${peer.displayName}`} onClick={() => void calls.current?.start(active.id, peer.userId, 'video')}>
+                      🎥 Video
+                    </button>
+                  </>
+                )}
                 {active.kind === 'group' && (
                   <button className="btn quiet small" data-testid="group-info-toggle" onClick={() => setShowInfo((v) => !v)}>
                     {showInfo ? 'Close info' : 'Group info'}
@@ -449,6 +508,7 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
             )}
           </>
         )}
+        {callView && calls.current && <CallScreen view={callView} calls={calls.current} />}
         {error && (
           <p className="error toast" role="alert" onClick={() => setError(null)}>
             {error}

@@ -52,7 +52,9 @@ jobs:
         run: PGPASSWORD=superapp_dev psql -h localhost -U superapp -d superapp_test -c 'CREATE DATABASE superapp_e2e'
       - name: Install Chromium for e2e
         run: pnpm --filter @nexa/web exec playwright install --with-deps chromium
-      - name: Web end-to-end (browser → Next → API → Postgres/Redis/SMTP)
+      - name: Install coturn (TURN relay for the calls e2e)
+        run: sudo apt-get update && sudo apt-get install -y coturn
+      - name: Web end-to-end (browser → Next → API → Postgres/Redis/SMTP/TURN)
         run: pnpm --filter @nexa/web test:e2e
 
   mobile:
