@@ -6,6 +6,8 @@ import { RedisService } from '../redis/redis.service';
 export interface RealtimeEvent {
   type: string;
   data: unknown;
+  /** Only this connection gets the event (call signalling); the user's others ignore it. */
+  connectionId?: string;
 }
 
 type Listener = (e: RealtimeEvent) => void;

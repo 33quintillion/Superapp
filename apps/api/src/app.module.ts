@@ -1,4 +1,7 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
+import { CallsController } from './calls/calls.controller';
+import { CallsService } from './calls/calls.service';
+import { IceService } from './calls/ice.service';
 import { AuthController, SessionsController } from './auth/auth.controller';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
@@ -51,6 +54,7 @@ export class AppModule {
         RealtimeController,
         PushController,
         SocialController,
+        CallsController,
       ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
@@ -76,6 +80,8 @@ export class AppModule {
         PostsService,
         StoriesService,
         CommunitiesService,
+        IceService,
+        CallsService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

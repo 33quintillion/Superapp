@@ -43,6 +43,7 @@ interface JobRow {
   seq: string | null;
   message_kind: string | null;
   body: string | null;
+  system_event: { type?: string; media?: string } | null;
   deleted: boolean | null;
   sender_name: string | null;
   is_member: boolean;
@@ -198,8 +199,14 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
     if (job.kind === 'test') {
       return { title: 'Nexa', body: 'Notifications are working on this device.', threadId: 'test', silent, badge, data: { type: 'test' }, ttlSeconds };
     }
-    const data = { type: 'message', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
     const sender = job.sender_name || 'Deleted account';
+    if (job.message_kind === 'system' && job.system_event?.type === 'call') {
+      // Missed calls: always say what it was, so the person knows to call back.
+      const data = { type: 'missed_call', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
+      const what = job.system_event.media === 'video' ? 'Missed video call' : 'Missed voice call';
+      return { title: job.preview === 'none' ? 'Nexa' : sender, body: job.preview === 'none' ? 'Missed call' : what, threadId: job.conversation_id!, silent, badge, data, ttlSeconds };
+    }
+    const data = { type: 'message', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
     const group = job.conversation_kind === 'group';
     let title = 'Nexa';
     let body = 'New message';
@@ -257,7 +264,7 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
               u.state = 'active' AS user_active,
               ns.push_enabled, ns.preview, ns.quiet_start, ns.quiet_end, ns.time_zone,
               m.id AS message_id, m.conversation_id, c.kind AS conversation_kind, c.title AS conversation_title,
-              m.seq, m.kind AS message_kind, m.body, m.deleted_at IS NOT NULL AS deleted,
+              m.seq, m.kind AS message_kind, m.body, m.system_event, m.deleted_at IS NOT NULL AS deleted,
               sender.display_name AS sender_name,
               cm.user_id IS NOT NULL AS is_member, cm.last_read_seq,
               COALESCE(cm.muted_until > now(), false) AS muted,

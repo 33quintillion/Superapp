@@ -90,7 +90,49 @@ const schema = z.object({
         .map((h) => h.trim().toLowerCase())
         .filter(Boolean),
     ),
+
+  /** Calls (docs/calls.md). How long an unanswered call rings before it counts as missed. */
+  CALL_RING_SECONDS: z.coerce.number().int().min(5).max(180).default(45),
+  /** An answered call whose media has not connected within this long has failed. */
+  CALL_CONNECT_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
+  /** How long a device that dropped off mid-call has to reconnect before the call ends. */
+  CALL_RECONNECT_GRACE_SECONDS: z.coerce.number().int().min(1).max(120).default(20),
+  /** How often this instance ends calls that timed out. 0 turns the sweep off on this instance. */
+  CALL_SWEEP_INTERVAL_MS: z.coerce.number().int().min(0).default(2000),
+
+  /** STUN servers given to every call, comma-separated (e.g. stun:stun.cloudflare.com:3478). */
+  STUN_URLS: z.string().default('').transform(list),
+  /**
+   * Where TURN relay credentials come from. none: STUN only (calls fail behind strict NATs).
+   * coturn: your own coturn with use-auth-secret. twilio / cloudflare: their managed TURN.
+   */
+  TURN_PROVIDER: z.enum(['none', 'coturn', 'twilio', 'cloudflare']).default('none'),
+  /** relay forces every call through TURN, hiding each person's IP address from the other. */
+  ICE_TRANSPORT_POLICY: z.enum(['all', 'relay']).default('all'),
+  /** Lifetime of issued TURN credentials. Longer than your longest expected call. */
+  TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(300).max(86400).default(4 * 3600),
+  /** coturn: turn:/turns: URLs, comma-separated, and the static-auth-secret from turnserver.conf. */
+  TURN_URLS: z.string().default('').transform(list),
+  TURN_SHARED_SECRET: z.string().optional(),
+  /** Twilio Network Traversal Service: account SID plus an API key (SK...) and its secret. */
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_API_KEY_SID: z.string().optional(),
+  TWILIO_API_KEY_SECRET: z.string().optional(),
+  /** Overrides https://api.twilio.com. Tests only; refused in staging and production. */
+  TWILIO_API_BASE: z.url().optional(),
+  /** Cloudflare Realtime TURN: the TURN key id and its API token. */
+  CLOUDFLARE_TURN_KEY_ID: z.string().optional(),
+  CLOUDFLARE_TURN_API_TOKEN: z.string().optional(),
+  /** Overrides https://rtc.live.cloudflare.com. Tests only; refused in staging and production. */
+  CLOUDFLARE_TURN_API_BASE: z.url().optional(),
 });
+
+function list(v: string) {
+  return v
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export type AppConfig = z.infer<typeof schema>;
 export const APP_CONFIG = Symbol('APP_CONFIG');
@@ -123,9 +165,38 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (vapid !== 0 && vapid !== 3) {
     throw new Error('Web Push needs all of VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT, or none of them');
   }
+  const turnNeeds: Record<typeof cfg.TURN_PROVIDER, [string, unknown][]> = {
+    none: [],
+    coturn: [
+      ['TURN_URLS', cfg.TURN_URLS.length ? cfg.TURN_URLS : undefined],
+      ['TURN_SHARED_SECRET', cfg.TURN_SHARED_SECRET],
+    ],
+    twilio: [
+      ['TWILIO_ACCOUNT_SID', cfg.TWILIO_ACCOUNT_SID],
+      ['TWILIO_API_KEY_SID', cfg.TWILIO_API_KEY_SID],
+      ['TWILIO_API_KEY_SECRET', cfg.TWILIO_API_KEY_SECRET],
+    ],
+    cloudflare: [
+      ['CLOUDFLARE_TURN_KEY_ID', cfg.CLOUDFLARE_TURN_KEY_ID],
+      ['CLOUDFLARE_TURN_API_TOKEN', cfg.CLOUDFLARE_TURN_API_TOKEN],
+    ],
+  };
+  const missing = turnNeeds[cfg.TURN_PROVIDER].filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length) throw new Error(`TURN_PROVIDER=${cfg.TURN_PROVIDER} needs ${missing.join(', ')}`);
+  for (const u of [...cfg.STUN_URLS, ...cfg.TURN_URLS]) {
+    if (!/^(stuns?|turns?):[^\s]+$/.test(u)) throw new Error(`Not a STUN/TURN URL: ${u}`);
+  }
+  if (cfg.TURN_PROVIDER === 'coturn' && cfg.TURN_URLS.some((u) => !u.startsWith('turn'))) {
+    throw new Error('TURN_URLS must be turn: or turns: URLs');
+  }
+  if (cfg.ICE_TRANSPORT_POLICY === 'relay' && cfg.TURN_PROVIDER === 'none') {
+    throw new Error('ICE_TRANSPORT_POLICY=relay needs a TURN_PROVIDER, or no call could ever connect');
+  }
   for (const [name, url] of [
     ['APNS_ENDPOINT', cfg.APNS_ENDPOINT],
     ['FCM_ENDPOINT', cfg.FCM_ENDPOINT],
+    ['TWILIO_API_BASE', cfg.TWILIO_API_BASE],
+    ['CLOUDFLARE_TURN_API_BASE', cfg.CLOUDFLARE_TURN_API_BASE],
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }

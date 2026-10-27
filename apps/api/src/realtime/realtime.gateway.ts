@@ -14,6 +14,7 @@ import { DatabaseService } from '../database/database.service';
 import { ReceiptBody, SendBody } from '../messaging/messaging.schemas';
 import { MessagingService } from '../messaging/messaging.service';
 import { RedisService } from '../redis/redis.service';
+import { CallsService } from '../calls/calls.service';
 import { RealtimeBus, RealtimeEvent } from './realtime-bus.service';
 
 export const REALTIME_PATH = '/v1/realtime';
@@ -28,11 +29,37 @@ export const CloseCodes = { sessionEnded: 4401, tooManyFrames: 4429, slowConsume
 const ticketKey = (t: string) => `rt:ticket:${createHash('sha256').update(t).digest('hex')}`;
 
 const ref = z.string().max(64).optional();
+/** WebRTC SDP and ICE candidates, relayed untouched; bounded so a frame stays small. */
+const CallSignal = z.discriminatedUnion('kind', [
+  z.object({ kind: z.enum(['offer', 'answer']), sdp: z.string().min(1).max(32_000) }).strict(),
+  z
+    .object({
+      kind: z.literal('candidate'),
+      // null marks the end of candidates.
+      candidate: z
+        .object({
+          candidate: z.string().max(1024),
+          sdpMid: z.string().max(64).nullish(),
+          sdpMLineIndex: z.number().int().min(0).max(64).nullish(),
+          usernameFragment: z.string().max(256).nullish(),
+        })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
+]);
 const ClientFrame = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ping'), ref }),
   z.object({ type: z.literal('send'), ref, conversationId: z.uuid(), message: SendBody }),
   ReceiptBody.extend({ type: z.literal('receipt'), ref, conversationId: z.uuid() }),
   z.object({ type: z.literal('typing'), conversationId: z.uuid(), typing: z.boolean() }),
+  z.object({ type: z.literal('call.start'), ref, conversationId: z.uuid(), media: z.enum(['audio', 'video']) }),
+  z.object({ type: z.literal('call.accept'), ref, callId: z.uuid() }),
+  z.object({ type: z.literal('call.decline'), ref, callId: z.uuid() }),
+  z.object({ type: z.literal('call.hangup'), ref, callId: z.uuid(), failed: z.boolean().optional() }),
+  z.object({ type: z.literal('call.connected'), ref, callId: z.uuid() }),
+  z.object({ type: z.literal('call.resume'), ref, callId: z.uuid() }),
+  z.object({ type: z.literal('call.signal'), ref, callId: z.uuid(), signal: CallSignal }),
 ]);
 
 interface Conn {
@@ -73,9 +100,11 @@ export class RealtimeController {
 }
 
 /**
- * The WebSocket endpoint. Client → server frames: ping, send, receipt, typing. Server →
- * client frames: ready, pong, ack, error, and events (message.created, message.updated,
- * message.hidden, receipt, typing, presence, conversation.updated). See docs/realtime.md.
+ * The WebSocket endpoint. Client → server frames: ping, send, receipt, typing, and the
+ * call frames (call.start, call.accept, call.decline, call.hangup, call.connected,
+ * call.resume, call.signal). Server → client frames: ready, pong, ack, error, and events
+ * (message.created, message.updated, message.hidden, receipt, typing, presence,
+ * conversation.updated, call.updated, call.signal). See docs/realtime.md and docs/calls.md.
  */
 @Injectable()
 export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy {
@@ -93,6 +122,7 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
     private readonly db: DatabaseService,
     private readonly bus: RealtimeBus,
     private readonly messaging: MessagingService,
+    private readonly calls: CallsService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
@@ -178,6 +208,10 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
 
   private push(conn: Conn, e: RealtimeEvent) {
     if (conn.ws.readyState !== WebSocket.OPEN) return;
+    if (e.connectionId) {
+      if (e.connectionId !== conn.id) return;
+      e = { type: e.type, data: e.data };
+    }
     // A client that cannot keep up is dropped; it will resync from the change feed.
     if (conn.ws.bufferedAmount > MAX_BUFFERED_BYTES) return conn.ws.close(CloseCodes.slowConsumer, 'slow_consumer');
     this.write(conn, e);
@@ -223,6 +257,24 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
           conn.lastTyping.set(f.conversationId, now);
           return await this.messaging.typing(conn.userId, f.conversationId, f.typing);
         }
+        case 'call.start':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.start(conn.userId, conn.id, f.conversationId, f.media) });
+        case 'call.accept':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.accept(conn.userId, conn.id, f.callId) });
+        case 'call.decline':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.decline(conn.userId, f.callId) });
+        case 'call.hangup':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.hangup(conn.userId, f.callId, f.failed ?? false) });
+        case 'call.connected':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.connected(conn.userId, conn.id, f.callId) });
+        case 'call.resume':
+          return this.write(conn, { type: 'ack', ref: f.ref, data: await this.calls.resume(conn.userId, conn.id, f.callId) });
+        case 'call.signal': {
+          const r = await this.calls.signal(conn.userId, conn.id, f.callId, f.signal);
+          // Candidates are fire-and-forget; only acknowledge when the client asked (ref).
+          if (f.ref) this.write(conn, { type: 'ack', ref: f.ref, data: r });
+          return;
+        }
       }
     } catch (err) {
       if (conn.ws.readyState !== WebSocket.OPEN) return;
@@ -242,6 +294,8 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
     conn.timers.forEach(clearInterval);
     await conn.setup?.catch(() => undefined);
     await conn.unlisten?.();
+    // A call on this connection now waits for the device to come back (or times out).
+    await this.calls.connectionClosed(conn.userId, conn.id).catch((err) => this.logger.warn(`call cleanup failed: ${(err as Error).message}`));
     try {
       if (await this.bus.connectionDown(conn.userId, conn.id)) await this.messaging.announcePresence(conn.userId, false);
     } catch {
