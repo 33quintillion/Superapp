@@ -26,6 +26,8 @@ export async function createApp(config: AppConfig, opts: { logger?: boolean } = 
           },
   });
   const app = await NestFactory.create<NestFastifyApplication>(AppModule.forConfig(config), adapter, {
+    // Payment webhooks are verified against the exact bytes the provider signed.
+    rawBody: true,
     logger: opts.logger === false ? false : NEST_LEVELS.slice(0, NEST_LEVELS.indexOf(nestLevel(config.LOG_LEVEL)) + 1),
   });
   app.useGlobalFilters(new AllExceptionsFilter());

@@ -10,7 +10,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "jest --runInBand",
     "admin:grant": "tsc -p tsconfig.build.json && node dist/src/admin/grant.cli.js",
-    "vapid-keys": "tsc -p tsconfig.build.json && node dist/src/push/vapid-keys.cli.js"
+    "vapid-keys": "tsc -p tsconfig.build.json && node dist/src/push/vapid-keys.cli.js",
+    "stripe-sandbox": "tsc -p tsconfig.build.json && node dist/src/dev/stripe-sandbox.cli.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1140.0",

@@ -1,6 +1,6 @@
 # Businesses, orders and bookings
 
-Stage 7 lets anyone open a business page, sell from a catalogue for pickup, and take bookings. **No money moves through Nexa yet**: every order is "pay in person" until Stage 8 adds a payment provider. Endpoints are in [`api.md`](api.md#businesses).
+Stage 7 lets anyone open a business page, sell from a catalogue for pickup, and take bookings. Customers pay at pickup, or by card once the business has set up payouts (Stage 8, [`payments.md`](payments.md)). Endpoints are in [`api.md`](api.md#businesses).
 
 ## Staff roles
 Each business has one owner, any number of managers and staff. The table lives in `apps/api/src/business/roles.ts` and every back-office request checks it; `unit.spec.ts › business staff roles` pins it.
@@ -36,7 +36,7 @@ Each business has one owner, any number of managers and staff. The table lives i
 - A booking can be cancelled by the customer or the business before it starts. After the start, staff record `completed` or `no_show`.
 
 ## Not built yet
-- Online payment, refunds and payouts: Stage 8, which needs a payment provider account and legal review (ADR 0005).
+- Online payment for bookings. Orders can be paid online ([`payments.md`](payments.md)).
 - Delivery (only pickup), table service, tips, taxes and receipts.
 - Photos on items and businesses: waiting for the media-scanning provider, like all public media.
 - Business verification checks. The "Verified" badge is set by an admin by hand.

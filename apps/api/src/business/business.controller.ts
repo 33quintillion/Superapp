@@ -45,6 +45,7 @@ const BusinessPatch = z
     timeZone: BusinessFields.timeZone,
     ordersEnabled: z.boolean(),
     bookingsEnabled: z.boolean(),
+    inPersonPayments: z.boolean(),
   })
   .partial()
   .strict();
@@ -79,6 +80,7 @@ const PlaceOrder = z
       .min(1, 'Add something to your order')
       .max(MAX_ORDER_LINES),
     note: z.string().trim().max(500).default(''),
+    payment: z.enum(['pay_in_person', 'online']).default('pay_in_person'),
   })
   .strict();
 const orderStatus = z.enum(['placed', 'accepted', 'ready', 'completed', 'cancelled', 'rejected']);

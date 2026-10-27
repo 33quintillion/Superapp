@@ -3,25 +3,45 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { chatApi } from '@/lib/chat-client';
-import { Booking, Business, Item, localTime, money, NEXT_STEPS, Order, ORDER_STATUS_LABEL, Service, StaffMember, StaffRole, toMinor } from '@/lib/business-client';
+import { chatApi, newClientId } from '@/lib/chat-client';
+import {
+  Booking,
+  Business,
+  BusinessSubscription,
+  ENTITLEMENT_LABEL,
+  Item,
+  localTime,
+  money,
+  NEXT_STEPS,
+  Order,
+  ORDER_STATUS_LABEL,
+  Payment,
+  PAYMENT_LABEL,
+  PayoutAccount,
+  Plan,
+  Service,
+  StaffMember,
+  StaffRole,
+  toMinor,
+} from '@/lib/business-client';
 
-type Tab = 'orders' | 'bookings' | 'catalogue' | 'services' | 'staff' | 'settings';
+type Tab = 'orders' | 'bookings' | 'catalogue' | 'services' | 'staff' | 'payments' | 'settings';
 const TABS: { id: Tab; label: string; needs: string }[] = [
   { id: 'orders', label: 'Orders', needs: 'orders.view' },
   { id: 'bookings', label: 'Bookings', needs: 'bookings.view' },
   { id: 'catalogue', label: 'Catalogue', needs: 'catalogue.manage' },
   { id: 'services', label: 'Services and hours', needs: 'services.manage' },
   { id: 'staff', label: 'Staff', needs: 'staff.view' },
+  { id: 'payments', label: 'Payments and plan', needs: 'payments.view' },
   { id: 'settings', label: 'Settings', needs: 'business.edit' },
 ];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /** The back office. Tabs and buttons follow the person's permissions; the API enforces them again. */
-export function ManageBusiness({ initial, me }: { initial: Business; me: string }) {
+export function ManageBusiness({ initial, me, initialTab }: { initial: Business; me: string; initialTab?: string }) {
   const [b, setB] = useState(initial);
   const tabs = TABS.filter((t) => b.permissions.includes(t.needs));
-  const [tab, setTab] = useState<Tab>(tabs[0]?.id ?? 'orders');
+  const [tab, setTab] = useState<Tab>(tabs.find((t) => t.id === initialTab)?.id ?? tabs[0]?.id ?? 'orders');
   return (
     <main className="wide social">
       <div className="card">
@@ -47,6 +67,7 @@ export function ManageBusiness({ initial, me }: { initial: Business; me: string 
       {tab === 'catalogue' && <CatalogueTab b={b} />}
       {tab === 'services' && <ServicesTab b={b} />}
       {tab === 'staff' && <StaffTab b={b} me={me} />}
+      {tab === 'payments' && <PaymentsTab b={b} onChange={setB} />}
       {tab === 'settings' && <SettingsTab b={b} onChange={setB} />}
     </main>
   );
@@ -96,12 +117,19 @@ function OrdersTab({ b }: { b: Business }) {
       {orders?.map((o) => (
         <div className="row" key={o.id} data-testid="order" data-status={o.status}>
           <div>
-            <strong>{o.customer?.displayName ?? 'Deleted account'}</strong> <span className="pill">{ORDER_STATUS_LABEL[o.status]}</span>
+            <strong>{o.customer?.displayName ?? 'Deleted account'}</strong> <span className="pill">{ORDER_STATUS_LABEL[o.status]}</span>{' '}
+            <span className="pill" data-testid="order-payment">
+              {o.paymentStatus ? PAYMENT_LABEL[o.paymentStatus] : 'Pay at pickup'}
+            </span>
             <div className="small">{o.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')}</div>
             <div className="small muted">
               {money(o.totalMinor, o.currency)} · {localTime(o.createdAt, b.timeZone, true)}
+              {o.refundedMinor > 0 && ` · ${money(o.refundedMinor, o.currency)} refunded`}
               {o.note && ` · “${o.note}”`}
             </div>
+            {b.permissions.includes('orders.refund') && (o.paymentStatus === 'paid' || o.paymentStatus === 'partially_refunded') && (
+              <RefundForm order={o} onDone={() => void load()} />
+            )}
           </div>
           {b.permissions.includes('orders.manage') && (
             <span className="actions">
@@ -439,7 +467,14 @@ function SettingsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
           Save
         </button>
       </form>
-      <p className="small muted">Payment happens in person for now. Online payment comes once a payment provider is set up.</p>
+      {b.payments.online ? (
+        <label className="row">
+          <span>Also take payment at pickup</span>
+          <input type="checkbox" name="inPersonPayments" checked={b.payments.inPerson} onChange={(e) => patch({ inPersonPayments: e.target.checked } as Partial<Business>)} />
+        </label>
+      ) : (
+        <p className="small muted">Customers pay when they collect. Set up payouts under Payments and plan to take card payments online.</p>
+      )}
       {b.myRole === 'owner' && (
         <button
           className="btn quiet danger"
@@ -456,5 +491,202 @@ function SettingsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
       )}
       {err && <p className="error">{err}</p>}
     </section>
+  );
+}
+
+/** Staff refund part or all of a paid order. The id makes a double click or a retry harmless. */
+function RefundForm({ order: o, onDone }: { order: Order; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [key, setKey] = useState(newClientId);
+  const { err, act } = useAct();
+  const left = o.totalMinor - o.refundedMinor;
+  if (!open)
+    return (
+      <button className="link-btn small" onClick={() => setOpen(true)}>
+        Refund
+      </button>
+    );
+  return (
+    <form
+      className="composer-row"
+      data-testid="refund-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const f = new FormData(e.currentTarget);
+        const amount = String(f.get('amount') ?? '').trim();
+        void act(async () => {
+          await chatApi('POST', `orders/${o.id}/refunds`, {
+            clientId: key,
+            reason: String(f.get('reason') ?? ''),
+            ...(amount ? { amountMinor: toMinor(amount, o.currency) } : {}),
+          });
+          setKey(newClientId());
+          setOpen(false);
+          onDone();
+        });
+      }}
+    >
+      <input name="amount" inputMode="decimal" placeholder={`Amount (blank = all ${money(left, o.currency)})`} aria-label="Refund amount" />
+      <input name="reason" placeholder="Reason (optional)" maxLength={300} aria-label="Refund reason" />
+      <button className="btn small danger" type="submit">
+        Refund
+      </button>
+      {err && <span className="error small">{err}</span>}
+    </form>
+  );
+}
+
+type PaymentList = { payments: Payment[]; totals: { currency: string; paidMinor: number; refundedMinor: number; feesMinor: number }[] };
+
+const COUNTRIES = ['GB', 'IE', 'US', 'CA', 'AU', 'NZ', 'DE', 'FR', 'ES', 'IT', 'NL', 'IN', 'SG'];
+
+/** Payouts (where customers' money goes), the business's plan, and what was paid online. */
+function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => void }) {
+  const [account, setAccount] = useState<PayoutAccount | null>(null);
+  const [sub, setSub] = useState<BusinessSubscription | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [payments, setPayments] = useState<PaymentList | null>(null);
+  const { err, act } = useAct();
+  const owner = b.permissions.includes('payments.manage');
+  const load = useCallback(async () => {
+    const [a, s, p, list] = await Promise.all([
+      chatApi<PayoutAccount>('GET', `businesses/${b.id}/payments/account`),
+      chatApi<BusinessSubscription>('GET', `businesses/${b.id}/subscription`),
+      chatApi<{ plans: Plan[] }>('GET', 'plans'),
+      chatApi<PaymentList>('GET', `businesses/${b.id}/payments?limit=20`),
+    ]);
+    setAccount(a);
+    setSub(s);
+    setPlans(p.plans);
+    setPayments(list);
+    // Payout status decides whether customers see "pay now"; keep the header in step.
+    if (a.onlinePayments !== b.payments.online) onChange(await chatApi<Business>('GET', `businesses/${b.id}`));
+  }, [b.id, b.payments.online, onChange]);
+  useEffect(() => void load().catch(() => undefined), [load]);
+  const go = (path: string, body?: unknown) =>
+    act(async () => {
+      const { url } = await chatApi<{ url: string }>('POST', path, body);
+      window.location.assign(url);
+    });
+
+  if (!account || !sub) return <section className="card">Loading…</section>;
+  return (
+    <>
+      <section className="card stack" data-testid="payouts">
+        <h2>Online payments</h2>
+        {!account.enabled ? (
+          <p className="muted">Online payments aren’t switched on for Nexa yet. Customers pay when they collect.</p>
+        ) : account.onlinePayments ? (
+          <p data-testid="payouts-ready">
+            Customers can pay by card when they order. Money goes to your own account at our payment provider{account.payoutsEnabled ? ', which pays it out to your bank.' : '; finish your bank details there to get paid out.'}
+          </p>
+        ) : (
+          <>
+            <p data-testid="payouts-not-ready">
+              {account.connected
+                ? 'Your payout account isn’t finished yet. The payment provider needs a few more details before you can take card payments.'
+                : 'Take card payments online. Our payment provider checks who you are and pays out to your bank; Nexa never holds your money.'}
+            </p>
+            {owner ? (
+              <form
+                className="composer-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void go(`businesses/${b.id}/payments/account`, { country: String(new FormData(e.currentTarget).get('country')) });
+                }}
+              >
+                {!account.connected && (
+                  <select name="country" defaultValue="GB" aria-label="Country of the business">
+                    {COUNTRIES.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+                {account.connected && <input type="hidden" name="country" value={account.country ?? 'GB'} />}
+                <button className="btn" type="submit" data-testid="setup-payouts">
+                  {account.connected ? 'Continue setup' : 'Set up payouts'}
+                </button>
+              </form>
+            ) : (
+              <p className="small muted">Only the owner can set up payouts.</p>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="card stack" data-testid="plan">
+        <h2>Plan</h2>
+        {sub.subscription ? (
+          <>
+            <p data-testid="current-plan" data-status={sub.subscription.status}>
+              <strong>{sub.subscription.plan.name}</strong>, {money(sub.subscription.plan.priceMinor, sub.subscription.plan.currency)} a {sub.subscription.plan.interval}.{' '}
+              {sub.subscription.status === 'past_due' && <span className="pill error">Payment failed: update your card</span>}
+              {sub.subscription.currentPeriodEnd &&
+                (sub.subscription.cancelAtPeriodEnd ? ` Ends on ${new Date(sub.subscription.currentPeriodEnd).toLocaleDateString()}.` : ` Renews on ${new Date(sub.subscription.currentPeriodEnd).toLocaleDateString()}.`)}
+            </p>
+            {b.permissions.includes('billing.manage') && (
+              <div className="composer-row">
+                {sub.subscription.cancelAtPeriodEnd ? (
+                  <button className="btn small" onClick={() => act(async () => setSub(await chatApi<BusinessSubscription>('POST', `businesses/${b.id}/subscription/resume`)))}>
+                    Keep my plan
+                  </button>
+                ) : (
+                  <button className="btn quiet small danger" onClick={() => act(async () => setSub(await chatApi<BusinessSubscription>('DELETE', `businesses/${b.id}/subscription`)))}>
+                    Cancel at the end of the period
+                  </button>
+                )}
+                <button className="btn quiet small" onClick={() => go(`businesses/${b.id}/billing-portal`)}>
+                  Card and invoices
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="muted">Free plan.</p>
+        )}
+        <p className="small muted" data-testid="limits">
+          Up to {sub.limits.staff} staff and {sub.limits.catalogue.toLocaleString()} catalogue items.
+        </p>
+        {!sub.subscription && plans.length > 0 && (
+          <div className="stack">
+            {plans.map((p) => (
+              <div className="row" key={p.id} data-testid="plan-option" data-code={p.code}>
+                <span>
+                  <strong>{p.name}</strong> · {money(p.priceMinor, p.currency)} a {p.interval}
+                  {p.description && <span className="small muted"> · {p.description}</span>}
+                  <br />
+                  <span className="small">{p.entitlements.map((e) => ENTITLEMENT_LABEL[e] ?? e).join(' · ')}</span>
+                </span>
+                {b.permissions.includes('billing.manage') && (
+                  <button className="btn small" onClick={() => go(`businesses/${b.id}/subscription`, { planCode: p.code, clientId: newClientId() })}>
+                    Choose
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {payments && payments.payments.length > 0 && (
+        <section className="card stack" data-testid="payments-list">
+          <h2>Card payments</h2>
+          {payments.totals.map((t) => (
+            <p key={t.currency} className="small">
+              Paid {money(t.paidMinor, t.currency)} · refunded {money(t.refundedMinor, t.currency)} · Nexa fee {money(t.feesMinor, t.currency)}
+            </p>
+          ))}
+          {payments.payments.map((p) => (
+            <div className="row small" key={p.id}>
+              <span>
+                {money(p.amountMinor, p.currency)} · {localTime(p.createdAt, b.timeZone, true)}
+              </span>
+              <span className="pill">{PAYMENT_LABEL[p.status]}</span>
+            </div>
+          ))}
+        </section>
+      )}
+      {err && <p className="error">{err}</p>}
+    </>
   );
 }

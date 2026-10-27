@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../common/audit.service';
 import { decodeCursor, encodeCursor } from '../common/cursor';
 import { Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
+import { limitFor } from '../payments/entitlements';
+import { OrderHooks, PaymentsService, paymentStatus } from '../payments/payments.service';
 import { RealtimeBus } from '../realtime/realtime-bus.service';
 import { userSummary } from '../social/follows.service';
 import { BusinessesService } from './businesses.service';
@@ -17,10 +19,15 @@ export interface ItemInput {
   position: number;
 }
 
-export type OrderStatus = 'placed' | 'accepted' | 'ready' | 'completed' | 'cancelled' | 'rejected';
+export type OrderStatus = 'pending_payment' | 'placed' | 'accepted' | 'ready' | 'completed' | 'cancelled' | 'rejected';
 
-/** What business staff may move an order to, from each status. Customers may only cancel a placed order. */
+/**
+ * What business staff may move an order to, from each status. Customers may only cancel
+ * an order the business hasn't accepted. An online order waits in pending_payment, out of
+ * staff's hands, until the provider confirms the payment.
+ */
 const STAFF_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  pending_payment: [],
   placed: ['accepted', 'rejected'],
   accepted: ['ready', 'cancelled'],
   ready: ['completed', 'cancelled'],
@@ -62,6 +69,8 @@ interface OrderRow {
   created_at: Date;
   updated_at: Date;
   items: { itemId: string | null; name: string; unitPriceMinor: number; quantity: number }[];
+  pay_status: 'requires_payment' | 'succeeded' | 'cancelled' | null;
+  pay_refunded: string | null;
 }
 
 const ORDER_SELECT = `
@@ -69,18 +78,36 @@ const ORDER_SELECT = `
          u.username AS customer_username, u.display_name AS customer_display_name,
          o.status, o.fulfilment, o.payment, o.note, o.total_minor, o.currency, o.status_reason, o.created_at, o.updated_at,
          (SELECT json_agg(json_build_object('itemId', i.item_id, 'name', i.name, 'unitPriceMinor', i.unit_price_minor, 'quantity', i.quantity) ORDER BY i.position)
-            FROM order_items i WHERE i.order_id = o.id) AS items
-    FROM orders o JOIN businesses b ON b.id = o.business_id LEFT JOIN users u ON u.id = o.customer_id`;
+            FROM order_items i WHERE i.order_id = o.id) AS items,
+         p.status AS pay_status, p.refunded_minor AS pay_refunded
+    FROM orders o JOIN businesses b ON b.id = o.business_id LEFT JOIN users u ON u.id = o.customer_id
+    LEFT JOIN payments p ON p.order_id = o.id`;
+
+/** Staff only see online orders once they are paid; an abandoned checkout is none of their business. */
+const STAFF_VISIBLE = `(o.payment = 'pay_in_person' OR p.status = 'succeeded')`;
+
+export interface PlaceInput {
+  clientId: string;
+  items: { itemId: string; quantity: number }[];
+  note: string;
+  payment: 'pay_in_person' | 'online';
+}
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit, OrderHooks {
   constructor(
     private readonly db: DatabaseService,
     private readonly businesses: BusinessesService,
     private readonly audit: AuditService,
     private readonly limits: RateLimitService,
     private readonly bus: RealtimeBus,
+    private readonly payments: PaymentsService,
   ) {}
+
+  onModuleInit() {
+    this.payments.useOrders(this);
+    this.businesses.onClose(() => this.payments.settleClosedOrders());
+  }
 
   // ---------------------------------------------------------------- catalogue
 
@@ -113,7 +140,8 @@ export class OrdersService {
   async createItem(userId: string, businessId: string, input: ItemInput) {
     await this.businesses.requireStaff(userId, businessId, 'catalogue.manage');
     const count = await this.db.one<{ n: string }>('SELECT count(*) AS n FROM catalogue_items WHERE business_id = $1 AND archived_at IS NULL', [businessId]);
-    if (Number(count!.n) >= 500) throw Errors.conflict('catalogue_full', 'A catalogue can hold up to 500 items');
+    const max = await limitFor(this.db, businessId, 'catalogue');
+    if (Number(count!.n) >= max) throw Errors.conflict('catalogue_full', `A catalogue can hold up to ${max} items on this plan`, { limit: max });
     const r = await this.db.one<ItemRow>(
       `INSERT INTO catalogue_items (business_id, name, description, price_minor, available, stock, position) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [businessId, input.name, input.description, input.priceMinor, input.available, input.stock, input.position],
@@ -163,6 +191,9 @@ export class OrdersService {
       statusReason: r.status_reason,
       fulfilment: r.fulfilment,
       payment: r.payment,
+      // For online orders: unpaid, paid, partially_refunded, refunded or cancelled.
+      paymentStatus: r.pay_status ? paymentStatus(r.pay_status, Number(r.total_minor), Number(r.pay_refunded)) : null,
+      refundedMinor: Number(r.pay_refunded ?? 0),
       note: r.note,
       items: r.items ?? [],
       totalMinor: Number(r.total_minor),
@@ -175,13 +206,17 @@ export class OrdersService {
   /**
    * Places an order. Prices come from the catalogue, never from the client. Stock is taken
    * in the same transaction, and a retry with the same clientId returns the first order.
+   * An online order holds its stock in pending_payment until the payment arrives; the
+   * customer then gets the hosted checkout from POST /v1/orders/:id/checkout.
    */
-  async place(customerId: string, businessId: string, input: { clientId: string; items: { itemId: string; quantity: number }[]; note: string }) {
+  async place(customerId: string, businessId: string, input: PlaceInput) {
     const existing = await this.findByClientId(customerId, input.clientId);
     if (existing) return { order: existing, created: false };
     const b = await this.businesses.get(customerId, businessId);
     if (b.state !== 'active') throw Errors.notFound('Business');
     if (!b.ordersEnabled) throw Errors.conflict('orders_closed', 'This business isn’t taking orders right now');
+    if (input.payment === 'pay_in_person' && !b.payments.inPerson) throw Errors.conflict('in_person_not_accepted', 'This business only takes payment online');
+    if (input.payment === 'online' && !b.payments.online) throw Errors.conflict('online_payments_unavailable', 'This business can’t take payment online yet; choose pay at pickup');
     await this.limits.consume({ name: 'order:place', limit: 30, windowSeconds: 3600 }, customerId);
     // Merge repeated lines and lock items in a fixed order so concurrent orders can't deadlock.
     const lines = new Map<string, number>();
@@ -190,10 +225,11 @@ export class OrdersService {
     const sorted = [...lines.entries()].sort(([a], [z]) => a.localeCompare(z));
 
     const orderId = await this.db.tx(async (tx) => {
+      const online = input.payment === 'online';
       const o = await this.db.one<{ id: string }>(
-        `INSERT INTO orders (business_id, customer_id, client_id, note, total_minor, currency) VALUES ($1, $2, $3, $4, 0, $5)
+        `INSERT INTO orders (business_id, customer_id, client_id, note, total_minor, currency, payment, status) VALUES ($1, $2, $3, $4, 0, $5, $6, $7)
            ON CONFLICT (customer_id, client_id) DO NOTHING RETURNING id`,
-        [b.id, customerId, input.clientId, input.note, b.currency],
+        [b.id, customerId, input.clientId, input.note, b.currency, input.payment, online ? 'pending_payment' : 'placed'],
         tx,
       );
       if (!o) return null; // a concurrent retry got there first
@@ -215,12 +251,51 @@ export class OrdersService {
         );
       }
       await this.db.query('UPDATE orders SET total_minor = $2 WHERE id = $1', [o.id, total], tx);
+      if (online) await this.payments.prepareForOrder(tx, { orderId: o.id, businessId: b.id, payerId: customerId, amountMinor: total, currency: b.currency });
       return o.id;
     });
     if (!orderId) return { order: (await this.findByClientId(customerId, input.clientId))!, created: false };
     const order = (await this.load(orderId))!;
-    await this.bus.publish(await this.businesses.staffIds(b.id), { type: 'business.order.created', data: this.orderView(order, true) });
+    if (order.status === 'placed') await this.bus.publish(await this.businesses.staffIds(b.id), { type: 'business.order.created', data: this.orderView(order, true) });
     return { order: this.orderView(order, false), created: true };
+  }
+
+  // ---------------------------------------------------------------- payment hooks (OrderHooks)
+
+  async paid(orderId: string, tx: Queryable) {
+    const r = await this.db.query(
+      `UPDATE orders SET status = 'placed', updated_at = date_trunc('milliseconds', now()) WHERE id = $1 AND status = 'pending_payment'`,
+      [orderId],
+      tx,
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async unpaid(orderId: string, reason: string, tx: Queryable) {
+    const r = await this.db.query(
+      `UPDATE orders SET status = 'cancelled', status_reason = $2, updated_at = date_trunc('milliseconds', now()) WHERE id = $1 AND status = 'pending_payment'`,
+      [orderId, reason],
+      tx,
+    );
+    if (!r.rowCount) return false;
+    await this.restock(orderId, tx);
+    return true;
+  }
+
+  async announce(orderId: string, created: boolean) {
+    const r = await this.load(orderId);
+    if (!r) return;
+    if (r.customer_id) await this.bus.publish([r.customer_id], { type: 'order.updated', data: this.orderView(r, false) });
+    if (r.payment === 'online' && r.pay_status !== 'succeeded') return;
+    await this.bus.publish(await this.businesses.staffIds(r.business_id), { type: created ? 'business.order.created' : 'business.order.updated', data: this.orderView(r, true) });
+  }
+
+  private async restock(orderId: string, tx: Queryable) {
+    await this.db.query(
+      `UPDATE catalogue_items c SET stock = c.stock + i.quantity FROM order_items i WHERE i.order_id = $1 AND c.id = i.item_id AND c.stock IS NOT NULL`,
+      [orderId],
+      tx,
+    );
   }
 
   private async findByClientId(customerId: string, clientId: string) {
@@ -250,7 +325,7 @@ export class OrdersService {
   async forBusiness(userId: string, businessId: string, status: OrderStatus[] | undefined, limit: number, cursor?: string) {
     await this.businesses.requireStaff(userId, businessId, 'orders.view');
     const params: unknown[] = [businessId];
-    let where = 'o.business_id = $1';
+    let where = `o.business_id = $1 AND ${STAFF_VISIBLE}`;
     if (status?.length) {
       params.push(status);
       where += ` AND o.status = ANY($${params.length})`;
@@ -276,7 +351,7 @@ export class OrdersService {
   async cancelByCustomer(customerId: string, orderId: string) {
     return this.transition(orderId, async (o) => {
       if (o.customer_id !== customerId) throw Errors.notFound('Order');
-      if (o.status !== 'placed') throw Errors.conflict('order_in_progress', 'The business has already accepted this order; contact them to cancel');
+      if (o.status !== 'placed' && o.status !== 'pending_payment') throw Errors.conflict('order_in_progress', 'The business has already accepted this order; contact them to cancel');
       return { to: 'cancelled', reason: 'Cancelled by the customer', actor: customerId, asStaff: false };
     });
   }
@@ -304,19 +379,14 @@ export class OrdersService {
       if (!o) throw Errors.notFound('Order');
       const d = await decide(o, tx);
       await this.db.query(`UPDATE orders SET status = $2, status_reason = $3, updated_at = date_trunc('milliseconds', now()) WHERE id = $1`, [orderId, d.to, d.reason], tx);
-      if (RESTOCK.includes(d.to)) {
-        await this.db.query(
-          `UPDATE catalogue_items c SET stock = c.stock + i.quantity FROM order_items i WHERE i.order_id = $1 AND c.id = i.item_id AND c.stock IS NOT NULL`,
-          [orderId],
-          tx,
-        );
-      }
+      if (RESTOCK.includes(d.to)) await this.restock(orderId, tx);
       await this.audit.record({ actorId: d.actor, action: 'business.order.status', targetType: 'order', targetId: orderId, metadata: { from: o.status, to: d.to } }, tx);
-      return { business_id: o.business_id, asStaff: d.asStaff };
+      return { asStaff: d.asStaff };
     });
-    const r = (await this.load(orderId))!;
-    if (r.customer_id) await this.bus.publish([r.customer_id], { type: 'order.updated', data: this.orderView(r, false) });
-    await this.bus.publish(await this.businesses.staffIds(out.business_id), { type: 'business.order.updated', data: this.orderView(r, true) });
-    return this.orderView(r, out.asStaff);
+    // A closed online order stops its checkout or refunds the customer in full. If the
+    // provider can't be reached now, the payments sweep finishes the job.
+    if (RESTOCK.includes((await this.load(orderId))!.status)) await this.payments.settleClosedOrder(orderId).catch(() => undefined);
+    await this.announce(orderId, false);
+    return this.orderView((await this.load(orderId))!, out.asStaff);
   }
 }

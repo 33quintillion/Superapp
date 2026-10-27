@@ -1,12 +1,25 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
-import { Booking, localTime, money, Order, ORDER_STATUS_LABEL } from '@/lib/business-client';
+import { Booking, localTime, money, Order, ORDER_STATUS_LABEL, PAYMENT_LABEL } from '@/lib/business-client';
 
-export function MyOrders({ orders: initialOrders, bookings: initialBookings }: { orders: Order[]; bookings: Booking[] }) {
+export function MyOrders({ orders: initialOrders, bookings: initialBookings, justPaid }: { orders: Order[]; bookings: Booking[]; justPaid: string | null }) {
   const [orders, setOrders] = useState(initialOrders);
+  const paidOrder = justPaid ? orders.find((o) => o.id === justPaid) : undefined;
+  // Back from checkout before the provider's confirmation reached us: check again for a little while.
+  useEffect(() => {
+    if (!paidOrder || paidOrder.status !== 'pending_payment') return;
+    let tries = 0;
+    const t = setInterval(async () => {
+      tries += 1;
+      const o = await chatApi<Order>('GET', `orders/${paidOrder.id}`).catch(() => null);
+      if (o) setOrders((list) => list.map((x) => (x.id === o.id ? o : x)));
+      if ((o && o.status !== 'pending_payment') || tries >= 15) clearInterval(t);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [paidOrder?.id, paidOrder?.status]);
   const [bookings, setBookings] = useState(initialBookings);
   const [err, setErr] = useState<string | null>(null);
   const act = async (fn: () => Promise<void>) => {
@@ -20,6 +33,15 @@ export function MyOrders({ orders: initialOrders, bookings: initialBookings }: {
   return (
     <main className="wide social">
       <h1>Orders and bookings</h1>
+      {paidOrder && (
+        <p className="card" data-testid="payment-result" data-status={paidOrder.paymentStatus ?? ''}>
+          {paidOrder.paymentStatus === 'paid'
+            ? `Thanks, your payment went through. ${paidOrder.business.name} has your order.`
+            : paidOrder.status === 'pending_payment'
+              ? 'Waiting for the payment to be confirmed…'
+              : `This order is ${ORDER_STATUS_LABEL[paidOrder.status].toLowerCase()}.`}
+        </p>
+      )}
       {err && <p className="error">{err}</p>}
       <h2>Bookings</h2>
       <div className="card">
@@ -50,30 +72,49 @@ export function MyOrders({ orders: initialOrders, bookings: initialBookings }: {
       <div className="card">
         {orders.length === 0 && <p className="muted">No orders yet.</p>}
         {orders.map((o) => (
-          <div className="row" key={o.id} data-testid="my-order" data-status={o.status}>
+          <div className="row" key={o.id} data-testid="my-order" data-status={o.status} data-payment={o.paymentStatus ?? 'in_person'}>
             <span>
               <Link href={`/b/${o.business.handle}`}>{o.business.name}</Link> <span className="pill">{ORDER_STATUS_LABEL[o.status]}</span>
+              {o.paymentStatus && o.paymentStatus !== 'unpaid' && <span className="pill">{PAYMENT_LABEL[o.paymentStatus]}</span>}
               <br />
               <span className="small">{o.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')}</span>
               <br />
               <span className="small muted">
-                {money(o.totalMinor, o.currency)}, pay when you collect{o.statusReason && ` · ${o.statusReason}`}
+                {money(o.totalMinor, o.currency)}
+                {o.payment === 'pay_in_person' ? ', pay when you collect' : o.refundedMinor > 0 ? `, ${money(o.refundedMinor, o.currency)} refunded to your card` : ''}
+                {o.statusReason && ` · ${o.statusReason}`}
               </span>
             </span>
-            {o.status === 'placed' && (
-              <button
-                className="btn quiet small danger"
-                onClick={() => act(async () => {
-                  const c = await chatApi<Order>('POST', `orders/${o.id}/cancel`);
-                  setOrders(orders.map((x) => (x.id === o.id ? c : x)));
-                })}
-              >
-                Cancel
-              </button>
-            )}
+            <span className="actions">
+              {o.status === 'pending_payment' && (
+                <button
+                  className="btn small"
+                  onClick={() => act(async () => {
+                    const { url } = await chatApi<{ url: string }>('POST', `orders/${o.id}/checkout`);
+                    window.location.assign(url);
+                  })}
+                >
+                  Pay now
+                </button>
+              )}
+              {(o.status === 'placed' || o.status === 'pending_payment') && (
+                <button
+                  className="btn quiet small danger"
+                  onClick={() => act(async () => {
+                    const c = await chatApi<Order>('POST', `orders/${o.id}/cancel`);
+                    setOrders(orders.map((x) => (x.id === o.id ? c : x)));
+                  })}
+                >
+                  Cancel
+                </button>
+              )}
+            </span>
           </div>
         ))}
       </div>
+      <p className="small muted">
+        {orders.some((o) => o.payment === 'online') && 'Online payments are handled by our payment provider. Cancelled paid orders are refunded to the card you used.'}
+      </p>
     </main>
   );
 }

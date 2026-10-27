@@ -68,7 +68,7 @@ Future<AuthController> signedIn(FakeApi api) async {
   return auth;
 }
 
-Map<String, dynamic> bakery({bool orders = true, bool bookings = true}) => {
+Map<String, dynamic> bakery({bool orders = true, bool bookings = true, bool online = false, bool inPerson = true}) => {
       'id': 'b1',
       'handle': 'bakery',
       'name': 'Sunrise Bakery',
@@ -86,18 +86,21 @@ Map<String, dynamic> bakery({bool orders = true, bool bookings = true}) => {
       'myRole': null,
       'permissions': <String>[],
       'invited': null,
+      'payments': {'online': online, 'inPerson': inPerson},
     };
 
 Map<String, dynamic> item(String id, String name, int price, {bool available = true}) =>
     {'id': id, 'name': name, 'description': '', 'priceMinor': price, 'currency': 'EUR', 'available': available, 'stock': null, 'position': 0};
 
-Map<String, dynamic> order(String id, String status, {String reason = ''}) => {
+Map<String, dynamic> order(String id, String status, {String reason = '', String? paymentStatus, int refunded = 0}) => {
       'id': id,
       'business': {'id': 'b1', 'handle': 'bakery', 'name': 'Sunrise Bakery'},
       'status': status,
       'statusReason': reason,
       'fulfilment': 'pickup',
-      'payment': 'pay_in_person',
+      'payment': paymentStatus == null ? 'pay_in_person' : 'online',
+      'paymentStatus': paymentStatus,
+      'refundedMinor': refunded,
       'note': '',
       'items': [
         {'itemId': 'i1', 'name': 'Sourdough', 'unitPriceMinor': 450, 'quantity': 2},
@@ -260,5 +263,82 @@ void main() {
     expect(api.calls, contains('POST /v1/orders/o1/cancel'));
     expect(find.text('Sunrise Bakery · Cancelled'), findsOneWidget);
     expect(find.byKey(const Key('cancel-order-o1')), findsNothing);
+  });
+
+  testWidgets('pays online: the order is held and the provider’s checkout page opens outside the app', (tester) async {
+    final api = FakeApi();
+    api.on('GET /v1/businesses/bakery', (_) => json(200, bakery(online: true)));
+    api.on('GET /v1/businesses/bakery/items', (_) => json(200, {'items': [item('i1', 'Sourdough', 450)]}));
+    api.on('GET /v1/businesses/bakery/services', (_) => json(200, {'services': <Object>[]}));
+    api.on('POST /v1/businesses/b1/orders', (_) => json(201, order('o1', 'pending_payment', paymentStatus: 'unpaid')));
+    api.on('POST /v1/orders/o1/checkout', (_) => json(200, {'url': 'https://checkout.stripe.test/c/cs_1', 'expiresAt': '2026-10-27T09:30:00.000Z'}));
+    final opened = <Uri>[];
+    final auth = await signedIn(api);
+    await tester.pumpWidget(MaterialApp(home: StorefrontScreen(auth: auth, handle: 'bakery', openUrl: (u) async => opened.add(u))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-i1')));
+    await tester.pump();
+    // Pay at pickup stays the default while the business still offers it.
+    expect(find.text('Place order · EUR 4.50 · pay at pickup'), findsOneWidget);
+    await tester.tap(find.text('Pay now by card'));
+    await tester.pump();
+    expect(find.text('Continue to payment · EUR 4.50'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('place-order')));
+    await tester.pumpAndSettle();
+    expect(api.bodies['POST /v1/businesses/b1/orders']!.single['payment'], 'online');
+    expect(api.calls, contains('POST /v1/orders/o1/checkout'));
+    expect(opened, [Uri.parse('https://checkout.stripe.test/c/cs_1')]);
+    expect(find.textContaining('Finish paying on the payment page'), findsOneWidget);
+  });
+
+  testWidgets('a business without payouts set up only offers pay at pickup; one with no pickup payment only offers card', (tester) async {
+    final api = FakeApi();
+    var online = false;
+    api.on('GET /v1/businesses/bakery', (_) => json(200, bakery(online: online, inPerson: !online)));
+    api.on('GET /v1/businesses/bakery/items', (_) => json(200, {'items': [item('i1', 'Sourdough', 450)]}));
+    api.on('GET /v1/businesses/bakery/services', (_) => json(200, {'services': <Object>[]}));
+    final auth = await signedIn(api);
+    await tester.pumpWidget(MaterialApp(home: StorefrontScreen(auth: auth, handle: 'bakery', openUrl: (_) async {})));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-i1')));
+    await tester.pump();
+    expect(find.byKey(const Key('payment-choice')), findsNothing);
+    expect(find.text('Place order · EUR 4.50 · pay at pickup'), findsOneWidget);
+
+    online = true;
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(MaterialApp(home: StorefrontScreen(auth: auth, handle: 'bakery', openUrl: (_) async {})));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-i1')));
+    await tester.pump();
+    expect(find.text('Pay at pickup'), findsNothing);
+    expect(find.text('Continue to payment · EUR 4.50'), findsOneWidget);
+  });
+
+  testWidgets('shows how each order was paid and lets the customer finish paying a held order', (tester) async {
+    final api = FakeApi();
+    api.on('GET /v1/orders', (_) => json(200, {
+          'orders': [
+            order('o1', 'pending_payment', paymentStatus: 'unpaid'),
+            order('o2', 'accepted', paymentStatus: 'partially_refunded', refunded: 200),
+            order('o3', 'placed'),
+          ],
+          'nextCursor': null,
+        }));
+    api.on('GET /v1/bookings', (_) => json(200, {'bookings': <Object>[]}));
+    api.on('POST /v1/orders/o1/checkout', (_) => json(200, {'url': 'https://checkout.stripe.test/c/cs_2', 'expiresAt': '2026-10-27T09:30:00.000Z'}));
+    final opened = <Uri>[];
+    final auth = await signedIn(api);
+    await tester.pumpWidget(MaterialApp(home: MyOrdersScreen(auth: auth, openUrl: (u) async => opened.add(u))));
+    await tester.pumpAndSettle();
+    expect(find.text('Sunrise Bakery · Waiting for payment'), findsOneWidget);
+    expect(find.textContaining('EUR 9.00, Not paid yet'), findsOneWidget);
+    expect(find.textContaining('Partly refunded (EUR 2.00 back)'), findsOneWidget);
+    expect(find.textContaining('pay when you collect'), findsOneWidget);
+    expect(find.byKey(const Key('pay-order-o2')), findsNothing);
+    expect(find.byKey(const Key('cancel-order-o1')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('pay-order-o1')));
+    await tester.pumpAndSettle();
+    expect(opened, [Uri.parse('https://checkout.stripe.test/c/cs_2')]);
   });
 }

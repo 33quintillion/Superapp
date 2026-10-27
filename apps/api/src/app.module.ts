@@ -6,6 +6,10 @@ import { BusinessController } from './business/business.controller';
 import { BusinessesService } from './business/businesses.service';
 import { OrdersService } from './business/orders.service';
 import { IntegrationsController } from './integrations/integrations.controller';
+import { LedgerService } from './payments/ledger';
+import { PaymentsController } from './payments/payments.controller';
+import { PaymentsService } from './payments/payments.service';
+import { SubscriptionsService } from './payments/subscriptions.service';
 import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
@@ -66,6 +70,7 @@ export class AppModule {
         BusinessController,
         IntegrationsController,
         AdminController,
+        PaymentsController,
       ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
@@ -94,6 +99,9 @@ export class AppModule {
         IceService,
         CallsService,
         BusinessesService,
+        LedgerService,
+        PaymentsService,
+        SubscriptionsService,
         OrdersService,
         BookingsService,
         IntegrationsService,

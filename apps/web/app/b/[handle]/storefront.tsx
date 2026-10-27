@@ -15,6 +15,8 @@ export function Storefront({ business: b, items, services, hours }: { business: 
   // One id per basket, so a double click or a retry after a network error can't order twice.
   const [orderKey, setOrderKey] = useState(newClientId);
   const [err, setErr] = useState<string | null>(null);
+  const [payment, setPayment] = useState<'online' | 'pay_in_person'>(b.payments.inPerson ? 'pay_in_person' : 'online');
+  const [busy, setBusy] = useState(false);
   const lines = items.filter((i) => basket[i.id]);
   const total = lines.reduce((t, i) => t + i.priceMinor * basket[i.id], 0);
   const add = (id: string, d: number) => setBasket((x) => ({ ...x, [id]: Math.max(0, Math.min(99, (x[id] ?? 0) + d)) }));
@@ -78,28 +80,53 @@ export function Storefront({ business: b, items, services, hours }: { business: 
               onSubmit={async (e) => {
                 e.preventDefault();
                 setErr(null);
+                setBusy(true);
                 try {
                   const o = await chatApi<Order>('POST', `businesses/${b.id}/orders`, {
                     clientId: orderKey,
                     items: lines.map((i) => ({ itemId: i.id, quantity: basket[i.id] })),
                     note,
+                    payment,
                   });
+                  if (o.payment === 'online' && o.status === 'pending_payment') {
+                    // The order holds its items while the customer pays on the provider's page.
+                    const { url } = await chatApi<{ url: string }>('POST', `orders/${o.id}/checkout`);
+                    window.location.assign(url);
+                    return;
+                  }
                   setPlaced(o);
                   setBasket({});
                   setNote('');
                   setOrderKey(newClientId());
                 } catch (x) {
                   setErr(x instanceof Error ? x.message : 'Could not place the order');
+                } finally {
+                  setBusy(false);
                 }
               }}
             >
               <p>
-                Total <strong data-testid="basket-total">{money(total, b.currency)}</strong>. You pay when you collect.
+                Total <strong data-testid="basket-total">{money(total, b.currency)}</strong>.
+                {!b.payments.online && ' You pay when you collect.'}
               </p>
+              {b.payments.online && (
+                <fieldset className="stack" data-testid="payment-choice">
+                  <legend>How do you want to pay?</legend>
+                  <label>
+                    <input type="radio" name="payment" value="online" checked={payment === 'online'} onChange={() => setPayment('online')} /> Pay now, by card
+                  </label>
+                  {b.payments.inPerson && (
+                    <label>
+                      <input type="radio" name="payment" value="pay_in_person" checked={payment === 'pay_in_person'} onChange={() => setPayment('pay_in_person')} /> Pay when I collect
+                    </label>
+                  )}
+                </fieldset>
+              )}
               <input name="note" placeholder="Note for the business (optional)" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
-              <button className="btn" type="submit">
-                Place order
+              <button className="btn" type="submit" disabled={busy}>
+                {payment === 'online' ? 'Continue to payment' : 'Place order'}
               </button>
+              {payment === 'online' && <p className="small muted">You’ll pay on our payment provider’s secure page. We never see your card details.</p>}
             </form>
           )}
           {placed && (

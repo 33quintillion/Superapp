@@ -4,6 +4,9 @@ import { base32Decode, base32Encode, hotp, totp, verifyTotp } from '../src/crypt
 import { hashToken, randomToken } from '../src/crypto/tokens';
 import { loadConfig } from '../src/config/config';
 import { matchesSignature } from '../src/media/media-types';
+import { parseForm } from '../src/dev/stripe-sandbox';
+import { paymentStatus } from '../src/payments/payments.service';
+import { formEncode, ProviderError, SignatureError, signStripePayload, verifyStripeSignature } from '../src/payments/stripe';
 import { TEST_ENV } from './helpers';
 
 describe('TOTP (RFC 6238 Appendix B vectors, SHA-1)', () => {
@@ -123,10 +126,17 @@ describe('business staff roles', () => {
   it('gives each role exactly the permissions in the matrix', () => {
     expect(permissionsOf('owner')).toEqual(Object.keys(PERMISSIONS));
     expect(permissionsOf('manager').sort()).toEqual(
-      ['bookings.manage', 'bookings.view', 'business.edit', 'business.view', 'catalogue.manage', 'orders.manage', 'orders.view', 'services.manage', 'staff.manage', 'staff.view'].sort(),
+      [
+        'bookings.manage', 'bookings.view', 'business.edit', 'business.view', 'catalogue.manage', 'orders.manage', 'orders.refund', 'orders.view',
+        'payments.view', 'services.manage', 'staff.manage', 'staff.view',
+      ].sort(),
     );
     expect(permissionsOf('staff').sort()).toEqual(['bookings.manage', 'bookings.view', 'business.view', 'orders.manage', 'orders.view', 'staff.view'].sort());
     expect(can(null, 'business.view')).toBe(false);
+    // Where the money goes and what the business pays for stay with the owner.
+    expect(can('manager', 'payments.manage')).toBe(false);
+    expect(can('manager', 'billing.manage')).toBe(false);
+    expect(can('staff', 'orders.refund')).toBe(false);
   });
 
   it('lets people manage only roles below their own', () => {
@@ -137,5 +147,106 @@ describe('business staff roles', () => {
     expect(canManageRole('manager', 'manager')).toBe(false);
     expect(canManageRole('manager', 'owner')).toBe(false);
     expect(canManageRole('staff', 'staff')).toBe(false);
+  });
+});
+
+describe('Stripe webhook signatures', () => {
+  const secret = 'whsec_unit';
+  const body = JSON.stringify({ id: 'evt_1', type: 'checkout.session.completed', created: 1, livemode: false, data: { object: { id: 'cs_1' } } });
+  const now = Date.UTC(2026, 9, 27, 12, 0, 0);
+  // Stripe signs "<timestamp>.<body>" with HMAC-SHA256; this is the value its libraries produce.
+  const header = signStripePayload(body, secret, now);
+
+  it('accepts a correct signature and returns the event', () => {
+    expect(header).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+    expect(verifyStripeSignature(Buffer.from(body), header, [secret], 300, now).id).toBe('evt_1');
+    // Any of several v1 signatures may match (Stripe sends one per active secret), and any configured secret may sign.
+    const both = `${header},v1=${'0'.repeat(64)}`;
+    expect(verifyStripeSignature(Buffer.from(body), both, ['whsec_other', secret], 300, now).type).toBe('checkout.session.completed');
+  });
+
+  it.each([
+    ['no header', undefined],
+    ['no timestamp', header.replace(/^t=\d+,/, '')],
+    ['no v1 signature', header.replace(/,v1=.*/, ',v0=abc')],
+    ['a signature that is not hex', header.replace(/v1=.*/, 'v1=xyz')],
+    ['a signature over another body', signStripePayload(body + ' ', secret, now)],
+    ['another secret', signStripePayload(body, 'whsec_wrong', now)],
+  ])('refuses %s', (_, h) => {
+    expect(() => verifyStripeSignature(Buffer.from(body), h, [secret], 300, now)).toThrow(SignatureError);
+  });
+
+  it('refuses a replay outside the tolerance, in either direction', () => {
+    expect(() => verifyStripeSignature(Buffer.from(body), header, [secret], 300, now + 301_000)).toThrow(/tolerance/);
+    expect(() => verifyStripeSignature(Buffer.from(body), header, [secret], 300, now - 301_000)).toThrow(/tolerance/);
+    expect(verifyStripeSignature(Buffer.from(body), header, [secret], 300, now + 299_000).id).toBe('evt_1');
+  });
+
+  it('refuses signed bodies that are not events', () => {
+    const notEvent = JSON.stringify({ hello: 'world' });
+    expect(() => verifyStripeSignature(Buffer.from(notEvent), signStripePayload(notEvent, secret, now), [secret], 300, now)).toThrow(/not an event/);
+  });
+});
+
+describe('Stripe form encoding', () => {
+  it('encodes nested objects and arrays in bracket notation, and the sandbox reads them back', () => {
+    const params = {
+      mode: 'payment',
+      line_items: [{ quantity: 2, price_data: { currency: 'gbp', unit_amount: 450, product_data: { name: 'Bread & jam' } } }],
+      payment_intent_data: { application_fee_amount: undefined, transfer_data: { destination: 'acct_1' }, metadata: { order_id: 'o1' } },
+      reverse_transfer: true,
+      skipped: null,
+    };
+    const encoded = formEncode(params);
+    expect(decodeURIComponent(encoded)).toBe(
+      'mode=payment&line_items[0][quantity]=2&line_items[0][price_data][currency]=gbp&line_items[0][price_data][unit_amount]=450&line_items[0][price_data][product_data][name]=Bread & jam&payment_intent_data[transfer_data][destination]=acct_1&payment_intent_data[metadata][order_id]=o1&reverse_transfer=true',
+    );
+    expect(parseForm(encoded)).toEqual({
+      mode: 'payment',
+      line_items: [{ quantity: '2', price_data: { currency: 'gbp', unit_amount: '450', product_data: { name: 'Bread & jam' } } }],
+      payment_intent_data: { transfer_data: { destination: 'acct_1' }, metadata: { order_id: 'o1' } },
+      reverse_transfer: 'true',
+    });
+  });
+
+  it('retries only what may work later', () => {
+    expect(new ProviderError('x', 0).retryable).toBe(true);
+    expect(new ProviderError('x', 503).retryable).toBe(true);
+    expect(new ProviderError('x', 429).retryable).toBe(true);
+    expect(new ProviderError('x', 409).retryable).toBe(true);
+    expect(new ProviderError('x', 400).retryable).toBe(false);
+    expect(new ProviderError('x', 402).retryable).toBe(false);
+  });
+
+  it('names payment states for clients', () => {
+    expect(paymentStatus('requires_payment', 100, 0)).toBe('unpaid');
+    expect(paymentStatus('cancelled', 100, 0)).toBe('cancelled');
+    expect(paymentStatus('succeeded', 100, 0)).toBe('paid');
+    expect(paymentStatus('succeeded', 100, 40)).toBe('partially_refunded');
+    expect(paymentStatus('succeeded', 100, 100)).toBe('refunded');
+  });
+});
+
+describe('payments configuration', () => {
+  const stripe = { PAYMENTS_PROVIDER: 'stripe', STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' };
+  const cfg = (extra: Record<string, string>) => loadConfig({ ...TEST_ENV, ...extra } as NodeJS.ProcessEnv);
+  const deployed = { NODE_ENV: 'production', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://mail', STUN_URLS: 'stun:stun.example.test:3478', S3_AUTO_CREATE_BUCKET: 'false' };
+
+  it('is off unless chosen, and needs both secrets when on', () => {
+    expect(cfg({}).PAYMENTS_PROVIDER).toBe('none');
+    expect(cfg(stripe).STRIPE_WEBHOOK_SECRET).toEqual(['whsec_x']);
+    expect(cfg({ ...stripe, STRIPE_WEBHOOK_SECRET: 'whsec_a, whsec_b' }).STRIPE_WEBHOOK_SECRET).toEqual(['whsec_a', 'whsec_b']);
+    expect(() => cfg({ ...stripe, STRIPE_WEBHOOK_SECRET: '' })).toThrow(/needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET/);
+    expect(() => cfg({ ...stripe, STRIPE_SECRET_KEY: 'pk_test_x' })).toThrow(/secret or restricted key/);
+    expect(() => cfg({ ...stripe, STRIPE_WEBHOOK_SECRET: 'secret' })).toThrow(/whsec_/);
+  });
+
+  it('keeps test and live money apart', () => {
+    expect(() => cfg({ ...stripe, STRIPE_SECRET_KEY: 'sk_live_x' })).toThrow(/only be used in production/);
+    expect(() => cfg({ ...stripe, ...deployed })).toThrow(/Production needs a live Stripe key/);
+    expect(cfg({ ...stripe, ...deployed, STRIPE_SECRET_KEY: 'rk_live_x' }).STRIPE_SECRET_KEY).toBe('rk_live_x');
+    expect(() => cfg({ ...stripe, ...deployed, STRIPE_SECRET_KEY: 'sk_live_x', STRIPE_API_BASE: 'http://127.0.0.1:1' })).toThrow(/STRIPE_API_BASE is for tests only/);
+    // Staging uses test keys.
+    expect(cfg({ ...stripe, ...deployed, NODE_ENV: 'staging' }).STRIPE_SECRET_KEY).toBe('sk_test_x');
   });
 });

@@ -12,6 +12,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   flutter_webrtc: ^1.6.3
   http: ^1.6.0
+  url_launcher: ^6.3.3
   web_socket_channel: ^3.0.3
 
 dev_dependencies:

@@ -6,7 +6,7 @@ import { ManageBusiness } from './manage';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ManagePage({ params }: { params: Promise<{ handle: string }> }) {
+export default async function ManagePage({ params, searchParams }: { params: Promise<{ handle: string }>; searchParams: Promise<{ tab?: string }> }) {
   const ref = encodeURIComponent((await params).handle.toLowerCase());
   let b: Business;
   try {
@@ -18,5 +18,6 @@ export default async function ManagePage({ params }: { params: Promise<{ handle:
   // The back office is only for the business's own staff.
   if (!b.myRole) notFound();
   const me = await authed<{ id: string }>('GET', '/v1/me');
-  return <ManageBusiness initial={b} me={me.id} />;
+  // The payment provider sends owners back to ?tab=payments after setup or checkout.
+  return <ManageBusiness initial={b} me={me.id} initialTab={(await searchParams).tab} />;
 }

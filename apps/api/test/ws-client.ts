@@ -33,15 +33,20 @@ export class Client {
       return Promise.resolve(seen);
     }
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(`timed out waiting for frame; got ${JSON.stringify(this.frames)}`)), timeoutMs);
-      this.waiters.push({
+      const waiter = {
         pred,
-        resolve: (f) => {
+        resolve: (f: Frame) => {
           clearTimeout(t);
           this.frames.splice(this.frames.indexOf(f), 1);
           resolve(f);
         },
-      });
+      };
+      // A waiter that timed out must not swallow a matching frame that arrives later.
+      const t = setTimeout(() => {
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        reject(new Error(`timed out waiting for frame; got ${JSON.stringify(this.frames)}`));
+      }, timeoutMs);
+      this.waiters.push(waiter);
     });
   }
 
