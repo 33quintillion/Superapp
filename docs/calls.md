@@ -44,12 +44,23 @@ Without TURN, calls fail for roughly 10–20% of people (strict NATs, many mobil
 
 | `TURN_PROVIDER` | What you need | Notes |
 | --- | --- | --- |
-| `none` | Nothing | STUN only. Fine for development on one network |
+| `none` | Nothing | STUN only, free. Fine for development and a small beta (see below) |
 | `coturn` | Your own coturn server(s) | Cheapest at scale. You run and monitor it |
 | `twilio` | Twilio account | Pay per GB relayed, global anycast |
 | `cloudflare` | Cloudflare account with Realtime TURN | Pay per GB relayed, global anycast |
 
 Common settings: `STUN_URLS` (comma-separated, e.g. `stun:stun.cloudflare.com:3478`), `TURN_CREDENTIAL_TTL_SECONDS` (default 4 hours; longer than your longest expected call), and `ICE_TRANSPORT_POLICY`. Setting it to `relay` sends every call through TURN, which hides each person's IP address from the other, at the cost of relay bandwidth. The API refuses to start with `relay` and no TURN provider.
+
+### STUN only (no TURN, free)
+Managed TURN is paid, so the beta runs without a relay:
+```
+TURN_PROVIDER=none
+STUN_URLS=stun:stun.cloudflare.com:3478
+ICE_TRANSPORT_POLICY=all
+```
+Cloudflare's public STUN server needs no account. Most calls connect directly. Calls between two people behind strict NATs (some mobile carriers, corporate and hotel Wi-Fi) can't, and end as `failed` after `CALL_CONNECT_SECONDS`. When that happens on a device that had no relay, the apps say "your networks couldn't connect directly" and suggest trying Wi-Fi or another network, instead of a generic error. In staging and production the API refuses to start with `TURN_PROVIDER=none` and an empty `STUN_URLS`, because then calls would connect only between devices on the same network.
+
+If too many beta calls end as `failed` (count them with `SELECT count(*) FILTER (WHERE end_reason = 'failed') * 100.0 / count(*) FROM calls WHERE answered_at IS NOT NULL`), add a relay. Self-hosted coturn (below) costs only a small server; switching is a config change and needs no app update.
 
 ### coturn (self-hosted)
 1. Install coturn on a server with a public IP (`apt install coturn`), open UDP/TCP 3478, TCP 5349 (TLS), and the relay port range (e.g. UDP 49152–65535).

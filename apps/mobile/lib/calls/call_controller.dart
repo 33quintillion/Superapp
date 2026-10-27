@@ -29,8 +29,10 @@ class Call {
   bool get answered => j['answeredAt'] != null;
 }
 
-/// One sentence for how a call ended, from this person's side.
-String callEndedText(Call c, String me, String peerName) {
+/// One sentence for how a call ended, from this person's side. [relay] is whether this device
+/// was given a TURN relay; without one, a failed call usually means the two networks can't
+/// reach each other directly, and the person can do something about that.
+String callEndedText(Call c, String me, String peerName, {bool? relay}) {
   final caller = c.callerId == me;
   return switch (c.endReason) {
     'completed' => 'Call ended · ${formatDuration(c.durationSeconds)}',
@@ -38,7 +40,9 @@ String callEndedText(Call c, String me, String peerName) {
     'missed' => caller ? 'No answer' : 'Missed call',
     'busy' => caller ? '$peerName is on another call' : 'Missed call',
     'cancelled' => caller ? 'Call cancelled' : 'Missed call',
-    'failed' => 'Call failed: the connection couldn’t be set up',
+    'failed' => relay == false
+        ? 'Call failed: your networks couldn’t connect directly. Try again on Wi-Fi or another network'
+        : 'Call failed: the connection couldn’t be set up',
     'connection_lost' => 'Call ended: the connection was lost',
     _ => 'Call ended',
   };
@@ -76,6 +80,8 @@ class CallController extends ChangeNotifier {
   CallEngine? engine;
 
   Future<void>? _peerReady;
+  /// Whether the API handed this device a TURN relay for the current call (null before asking).
+  bool? _relayOffered;
   Future<void> _signals = Future.value();
   bool _reportedConnected = false;
   DateTime? _brokenSince;
@@ -299,6 +305,7 @@ class CallController extends ChangeNotifier {
   Future<void> _ensurePeer() => _peerReady ??= () async {
         final e = engine!;
         final ice = await chat.auth.authed('GET', '/v1/calls/ice-servers').catchError((_) => null) ?? const {'iceServers': [], 'iceTransportPolicy': 'all'};
+        _relayOffered = ice['relay'] as bool? ?? false;
         e.onCandidate = (c) => unawaited(_signal({'kind': 'candidate', 'candidate': c}).catchError((_) {}));
         e.onState = _onPeerState;
         await e.createPeer(
@@ -392,12 +399,12 @@ class CallController extends ChangeNotifier {
   // ---------------------------------------------------------------- ending
 
   void _ended(Call c) {
-    final peer = peerName.isEmpty ? 'They' : peerName;
+    final text = callEndedText(c, me, peerName.isEmpty ? 'They' : peerName, relay: _relayOffered);
     _teardown();
     _set(() {
       phase = CallPhase.ended;
       call = c;
-      notice = callEndedText(c, me, peer);
+      notice = text;
       quality = null;
     });
     _later(const Duration(seconds: 4), dismiss);
@@ -437,6 +444,7 @@ class CallController extends ChangeNotifier {
     final e = engine;
     engine = null;
     _peerReady = null;
+    _relayOffered = null;
     if (e != null) unawaited(e.close());
   }
 
