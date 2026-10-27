@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-26, Stage 5): API 184 tests passed; web e2e all steps passed; Flutter 11 tests passed and `flutter analyze` clean.
+Last full run (2026-10-27, Stage 6): API 209 tests passed; web e2e all steps passed, including calls through a real coturn relay; Flutter 20 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -143,5 +143,29 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |
 | Feed performance at scale (fan-out on write, caching) | ⬜ | Fan-out on read today; measure in Stage 9 |
 
-## Stages 6 to 10
-Not started. See `plan.md`. Calls, business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.
+## Stage 6: Calls
+One-to-one voice and video over WebRTC. The API signals and keeps history; media goes between the devices or through TURN. Details and provider setup: [`calls.md`](calls.md).
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| Signalling over the WebSocket: start, ring every device, answer on one, offer/answer/ICE relayed only to the device in the call | ✅ | `calls.e2e › rings every device of the callee, and only the answering device takes part`; web e2e `callsFlow`; Flutter `calls_test` |
+| Same rules as direct messages: blocks and "who can message me"; people outside the chat and group chats refused | ✅ | `calls.e2e › who can call whom` |
+| One live call per person; busy; two devices answering at once; two people calling each other at once | ✅ | `calls.e2e › calling someone already on a call…`, `› only one of two devices answering…`, `› two people calling each other…` |
+| Accept, decline, cancel, end; mute, camera on/off; speaker and flip camera (phones) | ✅ web, ✅ Flutter with fake media | Web e2e (real browsers, fake devices); Flutter `calls_test › outgoing video call…` |
+| Incoming and outgoing call screens | ✅ | Web e2e; Flutter `calls_test` |
+| Call history (both sides, paging, call back) and call notices in the chat | ✅ | `calls.e2e › records a completed call…`, `› pages call history…`; web e2e; Flutter `calls_test › call history…` |
+| Missed calls: ring timeout, notice in the chat, push notification | ✅ | `calls.e2e › a call nobody answers rings out as missed…` (decrypts the real Web Push payload); web e2e "No answer" / "Missed voice call" |
+| Connection failures: answered but never connected, device reports failure, TURN relay down | ✅ | `calls.e2e › failures and recovery`; web e2e "relay unreachable: the call fails cleanly on both sides"; Flutter `calls_test › media that breaks…` |
+| Recovery: signalling socket drops mid-call and resumes; ICE restart; grace period then `connection_lost` | ✅ | `calls.e2e › a dropped connection can come back…`, `› …ends the call as connection lost`; web e2e (browser goes offline mid-call, call continues); Flutter `calls_test › a dropped socket resumes…` |
+| Network quality: RTT and loss from WebRTC stats, "Poor connection" hint, video bitrate caps | ✅ Flutter (fake stats), 🟡 web | Flutter `calls_test › poor network…`. On the web the same logic runs, but the e2e network is never poor, so the hint itself is not browser-tested |
+| Permission denial (microphone or camera blocked) handled for outgoing and incoming calls | ✅ | Web e2e (permissions cleared in Chromium); Flutter `calls_test › blocked microphone…` |
+| TURN credentials: coturn (shared secret), Twilio, Cloudflare; STUN-only fallback; relay-only option; startup checks | ✅ coturn for real, ✅ Twilio and Cloudflare against local stand-ins, ⛔ against the real services | `calls.e2e › ICE servers`, `› managed TURN providers`; web e2e relays through a real coturn. **Twilio or Cloudflare need an account to try for real** |
+| Export includes call history | ✅ | `calls.e2e › includes call history in the data export` |
+| Flutter media engine (flutter_webrtc) on real Android and iOS devices | 🟡 | Written and type-checked; camera and microphone permissions declared. Not run on a device in this environment |
+| Ring when the phone app is closed (PushKit/CallKit on iOS, high-priority FCM on Android) | ⛔ | Needs the Apple and Firebase accounts from Stage 4. Until then, a closed app gets a missed-call notification |
+| Group calls | ⬜ | Needs a media server (SFU), e.g. LiveKit or mediasoup |
+| Verified end-to-end encryption of calls (key comparison, SFrame) | ⬜ | Calls use DTLS-SRTP between devices; keys are not verified (see `security-privacy.md`) |
+| Call quality reporting to the server for monitoring | ⬜ | Stage 10 |
+
+## Stages 7 to 10
+Not started. See `plan.md`. Business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.

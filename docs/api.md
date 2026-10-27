@@ -154,6 +154,20 @@ A post is `{ id, author: { id, username, displayName }, community: { id, slug, n
 | POST | `/v1/realtime/tickets` | ✓ | `{ ticket, expiresIn: 60, path }`. Single use |
 | GET (WebSocket) | `/v1/realtime?ticket=` | ticket | See [`realtime.md`](realtime.md) for frames and events |
 
+## Calls
+See [`calls.md`](calls.md). Starting, answering and signalling happen on the WebSocket (`call.*` frames in [`realtime.md`](realtime.md)), because each call is tied to one connection per side.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/calls` | ✓ | Call history, newest first: `{ calls: [call + { direction: "incoming" \| "outgoing", peer: { id, username, displayName } }], nextCursor }`. `limit` (1–100, default 30), `cursor` |
+| GET | `/v1/calls/ice-servers` | ✓ | `{ iceServers: [{ urls, username?, credential? }], iceTransportPolicy: "all" \| "relay", relay, expiresAt }`. Pass straight to `RTCPeerConnection`. TURN credentials are per user and short-lived. 60 per 10 minutes |
+| GET | `/v1/calls/active` | ✓ | `{ call }`: the call you are on or being rung for, or `null`. Devices check it after connecting |
+| GET | `/v1/calls/:id` | ✓ | The call. 404 unless you are the caller or callee |
+| POST | `/v1/calls/:id/decline` | ✓ | The callee declines while it rings. 409 `call_not_ringing` otherwise |
+| POST | `/v1/calls/:id/hangup` | ✓ | `{ failed?: boolean }`. Either side ends the call; repeating it is harmless |
+
+A call is `{ id, conversationId, callerId, calleeId, media: "audio" \| "video", state: "ringing" \| "accepted" \| "connected" \| "ended", endReason, endedBy, callerConnectionId, calleeConnectionId, callerReconnecting, calleeReconnecting, createdAt, answeredAt, connectedAt, endedAt, durationSeconds }`. `endReason` is one of `completed`, `cancelled`, `missed`, `declined`, `busy`, `failed`, `connection_lost`. Each ended call also adds a `system` message to the chat: `{ type: "call", callId, media, outcome, durationSeconds }`.
+
 ## Push notifications
 See [`push.md`](push.md) for how delivery works and how to configure each provider.
 
