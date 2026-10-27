@@ -75,6 +75,16 @@ describe('config', () => {
       loadConfig({ ...TEST_ENV, NODE_ENV: 'production', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://x', RATE_LIMIT_DISABLED: 'true' } as NodeJS.ProcessEnv),
     ).toThrow(/RATE_LIMIT_DISABLED/);
   });
+  it('reads TRUST_PROXY as off or a list of proxy addresses, and refuses trusting everyone when deployed', () => {
+    const prod = { ...TEST_ENV, NODE_ENV: 'production', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://x', STUN_URLS: 'stun:stun.example:3478', S3_AUTO_CREATE_BUCKET: 'false' };
+    expect(loadConfig({ ...TEST_ENV } as NodeJS.ProcessEnv).TRUST_PROXY).toBe(false);
+    expect(loadConfig({ ...TEST_ENV, TRUST_PROXY: 'true' } as NodeJS.ProcessEnv).TRUST_PROXY).toBe(true);
+    // A bare hop count can't tell a proxy from a client that sent the header itself.
+    expect(() => loadConfig({ ...prod, TRUST_PROXY: '2' } as NodeJS.ProcessEnv)).toThrow(/TRUST_PROXY/);
+    expect(loadConfig({ ...prod, TRUST_PROXY: '10.0.0.0/8, 192.168.1.4' } as NodeJS.ProcessEnv).TRUST_PROXY).toEqual(['10.0.0.0/8', '192.168.1.4']);
+    expect(() => loadConfig({ ...prod, TRUST_PROXY: 'true' } as NodeJS.ProcessEnv)).toThrow(/TRUST_PROXY=true/);
+    expect(() => loadConfig({ ...TEST_ENV, TRUST_PROXY: 'yes please' } as NodeJS.ProcessEnv)).toThrow(/TRUST_PROXY/);
+  });
   it('rejects a wrong-sized encryption key', () => {
     expect(() => loadConfig({ ...TEST_ENV, DATA_ENCRYPTION_KEY: 'abcd' } as NodeJS.ProcessEnv)).toThrow(/DATA_ENCRYPTION_KEY/);
   });

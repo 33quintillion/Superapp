@@ -44,7 +44,7 @@ Read positions are shared only when **both** people have read receipts switched 
 ## The WebSocket
 
 1. `POST /v1/realtime/tickets` (authenticated) returns `{ ticket, expiresIn: 60, path: "/v1/realtime" }`. A ticket works once.
-2. Open `ws(s)://<api>/v1/realtime?ticket=<ticket>`. A missing, used or expired ticket, or a signed-out session, gets HTTP 401. A browser `Origin` outside `CORS_ORIGINS` gets 403.
+2. Open `ws(s)://<api>/v1/realtime?ticket=<ticket>`. A missing, used or expired ticket, or a signed-out session, gets HTTP 401. A browser `Origin` outside `CORS_ORIGINS` gets 403. A person who already has 20 sockets open on that API instance gets 429.
 
 The ticket keeps the access token out of URLs and logs. On the web, only the server layer holds tokens. It asks for a ticket, and the browser opens the socket with it.
 

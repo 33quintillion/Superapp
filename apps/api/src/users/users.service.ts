@@ -6,6 +6,8 @@ import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
 import { verifyPassword } from '../auth/password';
+import { PASSWORD_CONFIRM_RULE } from '../auth/auth.service';
+import { RateLimitService } from '../common/rate-limit.service';
 import { MediaService } from '../media/media.service';
 import { GroupsService } from '../messaging/groups.service';
 import { MessagingService } from '../messaging/messaging.service';
@@ -68,6 +70,7 @@ export class UsersService {
     private readonly businesses: BusinessesService,
     private readonly integrations: IntegrationsService,
     private readonly payments: PaymentsService,
+    private readonly limits: RateLimitService,
   ) {}
 
   async me(userId: string) {
@@ -149,6 +152,8 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
+    // One export reads every table the person appears in, so it is not something to repeat in a loop.
+    await this.limits.consume({ name: 'account:export', limit: 5, windowSeconds: 3600 }, userId);
     const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls, business, integrations, payments] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
@@ -271,6 +276,7 @@ export class UsersService {
   }
 
   private async confirmPassword(userId: string, password: string) {
+    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
     const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
     if (!(await verifyPassword(u?.password_hash ?? null, password))) throw Errors.invalidCredentials();
   }

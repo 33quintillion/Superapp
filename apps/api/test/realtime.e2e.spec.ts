@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
+import { MAX_CONNECTIONS_PER_USER } from '../src/realtime/realtime.gateway';
 import { Client, rawConnect } from './ws-client';
 import { clientId, registerUser, req, startApp, TestContext, TestUser } from './helpers';
 
@@ -67,6 +68,23 @@ describe('connecting', () => {
     const ok = await rawConnect(base, `?ticket=${await ticket(a)}`, { origin: 'https://app.example.test' });
     expect(ok).toBeInstanceOf(WebSocket);
     (ok as WebSocket).close();
+  });
+
+  it('caps the sockets one person can hold open on an instance', async () => {
+    const a = await user();
+    const socks: WebSocket[] = [];
+    for (let i = 0; i < MAX_CONNECTIONS_PER_USER; i++) {
+      const ws = await rawConnect(base, `?ticket=${await ticket(a)}`);
+      expect(ws).toBeInstanceOf(WebSocket);
+      socks.push(ws as WebSocket);
+    }
+    expect(await rawConnect(base, `?ticket=${await ticket(a)}`)).toBe(429);
+    // Closing one frees a place.
+    socks.pop()!.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const again = await rawConnect(base, `?ticket=${await ticket(a)}`);
+    expect(again).toBeInstanceOf(WebSocket);
+    for (const ws of [...socks, again as WebSocket]) ws.close();
   });
 
   it('refuses a ticket whose session was signed out, and drops open sockets when it is', async () => {

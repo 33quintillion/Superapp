@@ -12,6 +12,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
         <header className="top">
           <Link href="/" className="brand">
             Nexa
@@ -28,7 +31,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             </nav>
           )}
         </header>
-        {children}
+        {/* The skip link's target. Screens put their own <main> inside. */}
+        <div id="main" tabIndex={-1} className="main-target">
+          {children}
+        </div>
       </body>
     </html>
   );

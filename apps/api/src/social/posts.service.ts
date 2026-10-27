@@ -155,15 +155,48 @@ export class PostsService {
   }
 
   /** Home feed: your posts, posts of people you follow, and posts in your communities. */
+  /**
+   * Your posts, posts by people you follow, and posts in your communities, newest first.
+   * Built on read, so it walks each source's own index and takes at most a page from each,
+   * instead of scanning every post newest-first until a page of visible ones turns up
+   * (which took seconds for people who follow few accounts: docs/hardening.md#feed).
+   * The visibility rules are applied inside each source, so a page is never short, and
+   * load() checks every post with can_view_post again.
+   */
   async feed(viewerId: string, opts: { limit: number; cursor?: string }) {
-    return this.page(
-      viewerId,
-      `(p.author_id = $1
-         OR (p.community_id IS NULL AND follows_actively($1, p.author_id))
-         OR p.community_id IN (SELECT community_id FROM community_members WHERE user_id = $1 AND state = 'active'))`,
-      [],
-      opts,
+    const params: unknown[] = [viewerId, opts.limit + 1];
+    let cursorSql = '';
+    if (opts.cursor) {
+      const [ts, id] = decodeCursor(opts.cursor);
+      params.push(ts, id);
+      cursorSql = 'AND (p.created_at, p.id) < ($3::timestamptz, $4::uuid)';
+    }
+    const newest = `ORDER BY p.created_at DESC, p.id DESC LIMIT $2`;
+    const { rows } = await this.db.query<{ id: string; created_at: Date }>(
+      `SELECT id, created_at FROM (
+         (SELECT p.id, p.created_at FROM posts p WHERE p.author_id = $1 ${cursorSql} ${newest})
+         UNION
+         -- Following someone shows their public and followers posts, once they are active and not blocked.
+         (SELECT x.id, x.created_at FROM follows f
+            JOIN users u ON u.id = f.followee_id AND u.state = 'active'
+            CROSS JOIN LATERAL (
+              SELECT p.id, p.created_at FROM posts p
+               WHERE p.author_id = f.followee_id AND p.community_id IS NULL AND p.removed_at IS NULL AND p.audience <> 'only_me' ${cursorSql}
+               ${newest}) x
+           WHERE f.follower_id = $1 AND f.state = 'active' AND NOT blocked_either_way($1, f.followee_id))
+         UNION
+         (SELECT x.id, x.created_at FROM community_members m
+            JOIN communities c ON c.id = m.community_id AND c.deleted_at IS NULL
+            CROSS JOIN LATERAL (
+              SELECT p.id, p.created_at FROM posts p WHERE p.community_id = m.community_id AND can_view_post($1, p.id) ${cursorSql} ${newest}) x
+           WHERE m.user_id = $1 AND m.state = 'active')
+       ) feed ORDER BY created_at DESC, id DESC LIMIT $2`,
+      params,
     );
+    const ids = rows.slice(0, opts.limit);
+    const posts = await this.load(viewerId, ids.map((r) => r.id));
+    const last = ids[ids.length - 1];
+    return { posts, nextCursor: rows.length > opts.limit && last ? encodeCursor(last.created_at, last.id) : null };
   }
 
   /** A person's own timeline (not their community posts). */
