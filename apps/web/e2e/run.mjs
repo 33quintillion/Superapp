@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const apiDir = join(here, '..', '..', 'api');
-const API_PORT = 3100, WEB_PORT = 3101, SMTP_PORT = 2525, TURN_PORT = 3479;
+const API_PORT = 3100, WEB_PORT = 3101, SMTP_PORT = 2525, TURN_PORT = 3479, STRIPE_PORT = 12112;
 // A real TURN relay (coturn) for the calls flow. Every call is forced through it.
 const TURN_SECRET = randomBytes(16).toString('hex');
 const WEB = `http://127.0.0.1:${WEB_PORT}`;
@@ -47,6 +47,13 @@ const env = {
   CALL_RING_SECONDS: '8',
   CALL_CONNECT_SECONDS: '10',
   CALL_SWEEP_INTERVAL_MS: '500',
+  // Card payments go to a local stand-in for Stripe's API, with hosted pages and signed webhooks.
+  PAYMENTS_PROVIDER: 'stripe',
+  STRIPE_SECRET_KEY: 'sk_test_e2e',
+  STRIPE_WEBHOOK_SECRET: 'whsec_e2e',
+  STRIPE_API_BASE: `http://127.0.0.1:${STRIPE_PORT}`,
+  PAYMENTS_PLATFORM_FEE_BPS: '500',
+  PAYMENTS_SWEEP_INTERVAL_SECONDS: '5',
 };
 
 /** coturn with the TURN REST API shared secret, as in production, on loopback only. */
@@ -734,7 +741,136 @@ async function businessFlow(browser, API, tag, step) {
   for (const p of Object.values(people)) await p.ctx.close();
 }
 
+/**
+ * Card payments against the local Stripe stand-in: payouts setup, paying on the hosted page,
+ * a partial refund, a business plan bought through hosted checkout, and a balanced ledger.
+ */
+async function paymentsFlow(browser, API, tag, step) {
+  const require = createRequire(import.meta.url);
+  const { totp } = require(join(apiDir, 'dist/src/crypto/totp.js'));
+  const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+  const people = {};
+  for (const [i, name] of ['kim', 'lee', 'max'].entries()) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'payments passphrase 987', displayName: name[0].toUpperCase() + name.slice(1) };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i + 90}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    people[name] = { ...u, token: (await r.json()).accessToken };
+  }
+  const { max } = people;
+  const maxAuth = { authorization: `Bearer ${max.token}`, 'content-type': 'application/json' };
+  const { secret } = await (await fetch(`${API}/v1/auth/mfa/setup`, { method: 'POST', headers: maxAuth, body: '{}' })).json();
+  assert((await fetch(`${API}/v1/auth/mfa/confirm`, { method: 'POST', headers: maxAuth, body: JSON.stringify({ code: totp(secret, Date.now() - 30_000) }) })).status === 204, 'admin MFA on');
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  await pool.query(`INSERT INTO platform_staff (user_id, role) SELECT id, 'admin' FROM users WHERE email = $1`, [max.email]);
+  await pool.end();
+
+  // The owner's shop, set up through the API: the browser part of that is covered by the business flow.
+  const kimAuth = { authorization: `Bearer ${people.kim.token}`, 'content-type': 'application/json' };
+  const handle = `deli-${tag}`;
+  const b = await (await fetch(`${API}/v1/businesses`, { method: 'POST', headers: kimAuth, body: JSON.stringify({ handle, name: 'Corner Deli', category: 'food', timeZone: 'UTC', currency: 'GBP' }) })).json();
+  assert((await fetch(`${API}/v1/businesses/${b.id}`, { method: 'PATCH', headers: kimAuth, body: JSON.stringify({ ordersEnabled: true }) })).ok, 'orders on');
+  assert((await fetch(`${API}/v1/businesses/${b.id}/items`, { method: 'POST', headers: kimAuth, body: JSON.stringify({ name: 'Bagel', priceMinor: 350 }) })).ok, 'item added');
+
+  for (const name of ['kim', 'lee', 'max']) {
+    const ctx = await browser.newContext({ timezoneId: 'UTC' });
+    const page = await ctx.newPage();
+    if (process.env.E2E_DEBUG) page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', people[name].email);
+    await page.fill('input[name=password]', people[name].password);
+    await page.click('button[type=submit]');
+    if (name === 'max') {
+      await page.waitForURL(`${WEB}/sign-in/mfa`);
+      await page.fill('input[name=code]', totp(secret));
+      await page.click('button[type=submit]');
+    }
+    await page.waitForURL(`${WEB}/account`);
+    Object.assign(people[name], { ctx, page });
+  }
+  const { kim, lee } = people;
+
+  // Before payouts are set up, customers can only pay at pickup.
+  await lee.page.goto(`${WEB}/b/${handle}`);
+  await lee.page.click('[aria-label="Add Bagel"]');
+  assert((await lee.page.locator('[data-testid=payment-choice]').count()) === 0, 'no card option before payouts are set up');
+
+  await kim.page.goto(`${WEB}/business/${handle}?tab=payments`);
+  await kim.page.waitForSelector('[data-testid=payouts-not-ready]');
+  await kim.page.click('[data-testid=setup-payouts]');
+  await kim.page.waitForSelector('[data-testid=onboarding-finish]');
+  assert(kim.page.url().startsWith(stripe.url), `onboarding is on the provider's page (${kim.page.url()})`);
+  await kim.page.click('[data-testid=onboarding-finish]');
+  await kim.page.waitForURL(new RegExp(`/business/${handle}\\?tab=payments`));
+  await kim.page.waitForSelector('[data-testid=payouts-ready]');
+  step('owner sets up payouts on the provider’s hosted page and comes back ready to take cards');
+
+  await lee.page.goto(`${WEB}/b/${handle}`);
+  await lee.page.click('[aria-label="Add Bagel"]');
+  await lee.page.click('[aria-label="Add Bagel"]');
+  await lee.page.check('input[name=payment][value=online]');
+  await lee.page.click('[data-testid=basket] button:has-text("Continue to payment")');
+  await lee.page.waitForSelector('[data-testid=checkout-total]');
+  assert(lee.page.url().startsWith(stripe.url), 'card details are taken on the provider’s page');
+  assert((await lee.page.textContent('[data-testid=checkout-total]')).includes('7.00'), `checkout total ${await lee.page.textContent('[data-testid=checkout-total]')}`);
+  await lee.page.click('[data-testid=checkout-pay]');
+  await lee.page.waitForURL(/\/orders\?paid=/);
+  await lee.page.waitForSelector('[data-testid=payment-result][data-status=paid]');
+  await lee.page.waitForSelector('[data-testid=my-order][data-payment=paid]');
+  step('customer pays by card on the hosted checkout, the signed webhook confirms it, and the order shows paid');
+
+  await kim.page.click('role=tab[name="Orders"]');
+  await kim.page.waitForSelector('[data-testid=order] [data-testid=order-payment]:has-text("Paid online")');
+  await kim.page.click('[data-testid=order] button:has-text("Refund")');
+  await kim.page.fill('[data-testid=refund-form] input[name=amount]', '2.00');
+  await kim.page.fill('[data-testid=refund-form] input[name=reason]', 'One bagel was stale');
+  await kim.page.click('[data-testid=refund-form] button[type=submit]');
+  await kim.page.waitForSelector('[data-testid=order]:has-text("£2.00 refunded")');
+  await lee.page.reload();
+  await lee.page.waitForSelector('[data-testid=my-order][data-payment=partially_refunded]');
+  step('owner refunds part of the order and the customer sees it partly refunded');
+
+  await max.page.goto(`${WEB}/admin`);
+  await max.page.click('role=tab[name="Payments and plans"]');
+  const code = `growth-${tag}`;
+  await max.page.fill('[data-testid=new-plan] input[name=code]', code);
+  await max.page.fill('[data-testid=new-plan] input[name=name]', 'Growth');
+  await max.page.fill('[data-testid=new-plan] input[name=price]', '15.00');
+  await max.page.click('[data-testid=new-plan] button[type=submit]');
+  await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${code}"][data-state=draft]`);
+  await max.page.click(`[data-testid=admin-plan][data-code="${code}"] button:has-text("Put on sale")`);
+  await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${code}"][data-state=active]`);
+
+  await kim.page.click('role=tab[name="Payments and plan"]');
+  await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 10 staff")');
+  await kim.page.click(`[data-testid=plan-option][data-code="${code}"] button:has-text("Choose")`);
+  await kim.page.waitForSelector('[data-testid=checkout-pay]');
+  await kim.page.click('[data-testid=checkout-pay]');
+  await kim.page.waitForURL(/subscribed=1/);
+  for (let i = 0; i < 20 && !(await kim.page.isVisible('[data-testid=current-plan][data-status=active]')); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    await kim.page.reload();
+  }
+  await kim.page.waitForSelector('[data-testid=current-plan][data-status=active]:has-text("Growth")');
+  await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 100 staff")');
+  step('admin creates a plan and puts it on sale; the owner subscribes through hosted checkout and gets the higher limits');
+
+  await max.page.reload();
+  await max.page.click('role=tab[name="Payments and plans"]');
+  await max.page.waitForSelector('[data-testid=ledger-check][data-ok=true]');
+  assert((await max.page.locator('[data-testid=admin-payments] .row').count()) >= 1, 'admin sees the card payment');
+  step('the ledger balances and agrees with every payment, refund and subscription invoice');
+
+  for (const p of Object.values(people)) await p.ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
+const { StripeSandbox } = createRequire(import.meta.url)(join(apiDir, 'dist/src/dev/stripe-sandbox.js'));
+const stripe = new StripeSandbox({ secretKey: env.STRIPE_SECRET_KEY, webhookSecret: env.STRIPE_WEBHOOK_SECRET, port: STRIPE_PORT, webhookUrl: `http://127.0.0.1:${API_PORT}/v1/payments/webhooks/stripe` });
+await stripe.start();
 let browser;
 let failed = false;
 try {
@@ -762,8 +898,12 @@ try {
   const pw1 = 'first passphrase 123', pw2 = 'second passphrase 456';
   const step = (s) => console.log(`  ✓ ${s}`);
 
-  // E2E_ONLY=calls or E2E_ONLY=business runs just that flow, for quicker iteration on it.
+  // E2E_ONLY=calls, business or payments runs just that flow, for quicker iteration on it.
   all: {
+    if (process.env.E2E_ONLY === 'payments') {
+      await paymentsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step);
+      break all;
+    }
     if (process.env.E2E_ONLY === 'calls') {
       await callsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step, turn);
       break all;
@@ -872,6 +1012,7 @@ try {
   await chatFlow(browser, API, tag, step);
   await socialFlow(browser, API, tag, step);
   await businessFlow(browser, API, tag, step);
+  await paymentsFlow(browser, API, tag, step);
   // Last: it stops the TURN relay to test a failed connection.
   await callsFlow(browser, API, tag, step, turn);
   }
@@ -883,6 +1024,7 @@ try {
 } finally {
   await browser?.close();
   smtp.close();
+  await stripe.stop();
   for (const p of procs) p.kill('SIGTERM');
   process.exit(failed ? 1 : 0);
 }

@@ -192,8 +192,8 @@ Business accounts, staff roles, the catalogue, orders and bookings. See [`busine
 | POST | `/v1/businesses` | ✓ | `{ handle, name, category, timeZone (IANA), currency (ISO 4217), description?, contactEmail?, phone? (E.164), address? }` → 201 business; you are its owner. 409 `handle_taken`. 3 per day |
 | GET | `/v1/businesses` | ✓ | Search active businesses: `q`, `category`, `limit` (1–50). Verified first |
 | GET | `/v1/me/businesses` | ✓ | Businesses you work at, plus invitations waiting for you |
-| GET | `/v1/businesses/:ref` | ✓ | `{ id, handle, name, description, category, contactEmail, phone, address, timeZone, currency, ordersEnabled, bookingsEnabled, verified, state, suspensionReason (staff only), myRole, permissions, invited }`. Suspended businesses are 404 for customers |
-| PATCH | `/v1/businesses/:id` | ✓ | `business.edit`. Any of the fields above (not `handle` or `currency`), plus `ordersEnabled`, `bookingsEnabled`. 409 `business_suspended` while suspended |
+| GET | `/v1/businesses/:ref` | ✓ | `{ id, handle, name, description, category, contactEmail, phone, address, timeZone, currency, ordersEnabled, bookingsEnabled, verified, state, suspensionReason (staff only), myRole, permissions, invited, payments: { online, inPerson } }`. `payments.online` is true once the business can take card payments. Suspended businesses are 404 for customers |
+| PATCH | `/v1/businesses/:id` | ✓ | `business.edit`. Any of the fields above (not `handle` or `currency`), plus `ordersEnabled`, `bookingsEnabled`, `inPersonPayments`. 409 `business_suspended` while suspended; `inPersonPayments: false` is 409 `online_payments_unavailable` until card payments work |
 | DELETE | `/v1/businesses/:id` | ✓ | Owner. Closes it: open orders and future bookings are cancelled |
 | GET | `/v1/businesses/:ref/hours` | ✓ | `{ hours: [{ weekday (0 = Sunday), opens: "HH:MM", closes: "HH:MM" }] }` in the business's time zone |
 | PUT | `/v1/businesses/:id/hours` | ✓ | `business.edit`. Replaces all opening hours. Several rows per day are allowed; they must not overlap |
@@ -204,15 +204,15 @@ Business accounts, staff roles, the catalogue, orders and bookings. See [`busine
 | DELETE | `/v1/businesses/:id/staff/:userId` | ✓ | Remove someone below you, or leave / decline yourself. 409 `owner_cannot_leave` |
 | POST | `/v1/businesses/:id/transfer` | ✓ | Owner. `{ userId }` of an active manager, who becomes owner; you become a manager |
 | GET | `/v1/businesses/:ref/items` | ✓ | `{ items: [{ id, name, description, priceMinor, currency, available, stock, position }] }`. `all=true` (staff) includes hidden and sold-out items |
-| POST | `/v1/businesses/:id/items` | ✓ | `catalogue.manage`. `{ name, priceMinor, description?, available?, stock? (null = not tracked), position? }`. Up to 500 items |
+| POST | `/v1/businesses/:id/items` | ✓ | `catalogue.manage`. `{ name, priceMinor, description?, available?, stock? (null = not tracked), position? }`. Up to 500 items, or 5,000 with a plan that has `catalogue.extra`. 409 `catalogue_full` |
 | PATCH | `/v1/businesses/:id/items/:itemId` | ✓ | `catalogue.manage`. Any item field. Past orders keep their own copy of name and price |
 | DELETE | `/v1/businesses/:id/items/:itemId` | ✓ | `catalogue.manage`. Archives the item |
-| POST | `/v1/businesses/:ref/orders` | ✓ | `{ clientId, items: [{ itemId, quantity (1–99) }] (1–50 lines), note? }` → 201 order, or 200 with the first order for a repeated `clientId`. Prices come from the catalogue. 409 `orders_closed`, `item_unavailable` (`details.itemId`). 30 per hour |
+| POST | `/v1/businesses/:ref/orders` | ✓ | `{ clientId, items: [{ itemId, quantity (1–99) }] (1–50 lines), note?, payment?: "pay_in_person" \| "online" }` → 201 order, or 200 with the first order for a repeated `clientId`. Prices come from the catalogue. 409 `orders_closed`, `item_unavailable` (`details.itemId`), `online_payments_unavailable`, `nothing_to_pay`, `in_person_not_accepted`. An online order starts as `pending_payment`; pay it with `POST /v1/orders/:id/checkout`. 30 per hour |
 | GET | `/v1/businesses/:id/orders` | ✓ | `orders.view`. `status` (comma-separated), `limit` (1–100), `cursor`. Newest first, with `customer` (id, username, display name only) |
 | GET | `/v1/orders` | ✓ | Orders you placed, newest first. `limit`, `cursor` |
 | GET | `/v1/orders/:id` | ✓ | The customer or the business's staff; 404 for anyone else |
-| POST | `/v1/orders/:id/cancel` | ✓ | The customer, while `placed`. 409 `order_in_progress` after that |
-| POST | `/v1/orders/:id/status` | ✓ | `orders.manage`. `{ status, reason? }`. `placed → accepted \| rejected`, `accepted → ready \| cancelled`, `ready → completed \| cancelled`. 409 `invalid_transition`. Rejected and cancelled orders give their stock back |
+| POST | `/v1/orders/:id/cancel` | ✓ | The customer, while `pending_payment` or `placed`. A paid order is refunded in full. 409 `order_in_progress` after that |
+| POST | `/v1/orders/:id/status` | ✓ | `orders.manage`. `{ status, reason? }`. `placed → accepted \| rejected`, `accepted → ready \| cancelled`, `ready → completed \| cancelled`. 409 `invalid_transition`. Rejected and cancelled orders give their stock back, and paid ones are refunded in full. `pending_payment` orders can't be moved by staff |
 | GET | `/v1/businesses/:ref/services` | ✓ | `{ services: [{ id, name, description, durationMinutes, priceMinor, currency, capacity, active }] }`. `all=true` (staff) includes inactive ones |
 | POST | `/v1/businesses/:id/services` | ✓ | `services.manage`. `{ name, durationMinutes (5–480), priceMinor?, capacity? (1–100, people at once), description?, active? }` |
 | PATCH / DELETE | `/v1/businesses/:id/services/:serviceId` | ✓ | `services.manage`. Delete archives it; existing bookings stay |
@@ -224,7 +224,27 @@ Business accounts, staff roles, the catalogue, orders and bookings. See [`busine
 | POST | `/v1/bookings/:id/cancel` | ✓ | The customer, or staff with `bookings.manage`, before it starts. 409 `booking_started`, `booking_closed` |
 | POST | `/v1/bookings/:id/outcome` | ✓ | `bookings.manage`. `{ status: "completed" \| "no_show" }`, after the start. 409 `booking_not_started` |
 
-An order is `{ id, business: { id, handle, name }, customer? (staff view only), status, statusReason, fulfilment: "pickup", payment: "pay_in_person", note, items: [{ itemId, name, unitPriceMinor, quantity }], totalMinor, currency, createdAt, updatedAt }`. A booking is `{ id, business: { id, handle, name, timeZone }, service: { id, name }, customer? , startsAt, endsAt, status: "confirmed" \| "cancelled" \| "completed" \| "no_show", cancelledBy, note, createdAt }`. Money is always in minor units of the business's currency.
+An order is `{ id, business: { id, handle, name }, customer? (staff view only), status, statusReason, fulfilment: "pickup", payment: "pay_in_person" \| "online", paymentStatus: null \| "unpaid" \| "paid" \| "partially_refunded" \| "refunded" \| "cancelled", refundedMinor, note, items: [{ itemId, name, unitPriceMinor, quantity }], totalMinor, currency, createdAt, updatedAt }`. Staff don't see `pending_payment` orders. A booking is `{ id, business: { id, handle, name, timeZone }, service: { id, name }, customer? , startsAt, endsAt, status: "confirmed" \| "cancelled" \| "completed" \| "no_show", cancelledBy, note, createdAt }`. Money is always in minor units of the business's currency.
+
+## Payments
+Card payments for orders, refunds, payouts and business plans, through Stripe. See [`payments.md`](payments.md). When the server has no provider (`PAYMENTS_PROVIDER=none`) these return 409 `payments_not_enabled`. Provider failures are 502 `payment_provider_unavailable` (safe to retry) or 409 `payment_provider_refused`.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/v1/payments/webhooks/stripe` | Signature | Stripe events. Needs a valid `Stripe-Signature`, else 400 `invalid_signature`; events from the other mode are 400 `livemode_mismatch`. → `{ received: true, duplicate }` |
+| GET | `/v1/businesses/:id/payments/account` | ✓ | `payments.view`. `{ enabled, provider, connected, country, chargesEnabled, payoutsEnabled, detailsSubmitted, onlinePayments, updatedAt }`, refreshed from Stripe |
+| POST | `/v1/businesses/:id/payments/account` | ✓ | `payments.manage` (owner). `{ country }` (two letters) → `{ url, account }`: Stripe's onboarding page. Call again to continue. 409 `account_mode_mismatch` |
+| GET | `/v1/businesses/:id/payments` | ✓ | `payments.view`. `{ payments, totals: [{ currency, paidMinor, refundedMinor, feesMinor }], nextCursor }`. `limit`, `cursor` |
+| POST | `/v1/orders/:id/checkout` | ✓ | The customer, while `pending_payment` → `{ url, expiresAt }`. The same page while it is open. 409 `not_online`, `already_paid`, `payment_closed` |
+| GET | `/v1/orders/:id/payment` | ✓ | The customer or staff with `orders.view` → `{ payment: null \| { id, orderId, status, amountMinor, refundedMinor, refundableMinor, feeMinor, currency, createdAt, paidAt, refunds: [{ id, amountMinor, status, origin, reason, createdAt }] } }` |
+| POST | `/v1/orders/:id/refunds` | ✓ | `orders.refund`. `{ clientId, amountMinor?, reason? }`; no amount refunds what's left → 201 `{ refund, payment }`, or the first refund for a repeated `clientId`. 409 `not_paid`, `refund_too_large` (`details.refundableMinor`) |
+| GET | `/v1/me/payments` | ✓ | Your card payments, newest first |
+| GET | `/v1/plans` | ✓ | Plans on sale: `{ plans: [{ id, code, name, description, priceMinor, currency, interval, entitlements }] }` |
+| GET | `/v1/businesses/:id/subscription` | ✓ | Staff. `{ subscription: null \| { status, plan, currentPeriodEnd, cancelAtPeriodEnd }, entitlements, limits: { staff, catalogue } }` |
+| POST | `/v1/businesses/:id/subscription` | ✓ | `billing.manage` (owner). `{ planCode, clientId }` → `{ url }`: Stripe Checkout. 409 `already_subscribed` |
+| DELETE | `/v1/businesses/:id/subscription` | ✓ | `billing.manage`. Cancels at the end of the period |
+| POST | `/v1/businesses/:id/subscription/resume` | ✓ | `billing.manage`. Undoes that |
+| POST | `/v1/businesses/:id/billing-portal` | ✓ | `billing.manage` → `{ url }`: Stripe's page for the card and invoices |
 
 ## Integrations
 The integration catalogue (phase 1 of mini-apps, ADR 0006). Partners can't call our API yet; these endpoints record what each person allowed.
@@ -258,5 +278,9 @@ Platform staff only. Every route needs a `platform_staff` role, two-step verific
 | PATCH | `/v1/admin/integrations/:id` | admin | Asking for more scopes sends a live integration back to `draft`; fewer scopes trims every grant |
 | POST | `/v1/admin/integrations/:id/state` | admin | `{ state: "live" \| "disabled" \| "draft", reason? }`. `disabled` is the kill switch |
 | GET / POST | `/v1/admin/staff` | admin | List platform staff, or `{ username }` to add a moderator |
+| GET | `/v1/admin/payments` | admin | Every card payment, with its business. `status`, `limit`, `cursor` |
+| GET | `/v1/admin/ledger` | admin | `{ balances: [{ account, currency, balanceMinor }], check: { ok, transactions, problems: [{ type, id, problem }] } }` |
+| GET / POST | `/v1/admin/plans` | admin | All plans, or create one as `draft`: `{ code, name, priceMinor, currency, interval: "month" \| "year", entitlements, description? }`. Makes the Stripe product and price. 409 `plan_code_taken` |
+| POST | `/v1/admin/plans/:id/state` | admin | `{ state: "active" \| "retired" }` |
 | DELETE | `/v1/admin/staff/:userId` | admin | Remove a moderator (admins are removed from the command line) |
 | GET | `/v1/admin/audit` | admin | `action` (prefix), `before` (entry id), `limit` (1–200). Newest first, without IP addresses |

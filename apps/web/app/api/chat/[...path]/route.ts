@@ -112,6 +112,16 @@ const ALLOWED: [string, RegExp][] = [
   ['PATCH', new RegExp(`^admin/integrations/${ID}$`)],
   ['POST', new RegExp(`^admin/integrations/${ID}/state$`)],
   ['DELETE', new RegExp(`^admin/staff/${ID}$`)],
+  // Payments, payouts and plans. Provider webhooks go straight to the API, never through here.
+  ['GET', new RegExp(`^businesses/${ID}/(payments|payments/account|subscription)$`)],
+  ['POST', new RegExp(`^businesses/${ID}/(payments/account|subscription|subscription/resume|billing-portal)$`)],
+  ['DELETE', new RegExp(`^businesses/${ID}/subscription$`)],
+  ['POST', new RegExp(`^orders/${ID}/(checkout|refunds)$`)],
+  ['GET', new RegExp(`^orders/${ID}/payment$`)],
+  ['GET', /^(me\/payments|plans)$/],
+  ['GET', /^admin\/(payments|ledger|plans)$/],
+  ['POST', /^admin\/plans$/],
+  ['POST', new RegExp(`^admin/plans/${ID}/state$`)],
 ];
 
 async function handle(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
@@ -13,6 +14,19 @@ void _snack(BuildContext context, Object e) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(e is ApiException ? e.message : '$e')));
+}
+
+/// Opens a provider's hosted page (card checkout) outside the app. Tests pass their own.
+typedef OpenUrl = Future<void> Function(Uri url);
+
+Future<void> openInBrowser(Uri url) async {
+  if (!await launchUrl(url, mode: LaunchMode.externalApplication)) throw Exception('Could not open the payment page');
+}
+
+/// Asks the API for a checkout page for an order waiting for payment, and opens it.
+Future<void> _payOnline(AuthController auth, String orderId, OpenUrl openUrl) async {
+  final r = await auth.authed('POST', '/v1/orders/$orderId/checkout');
+  await openUrl(Uri.parse(r!['url'] as String));
 }
 
 /// Find businesses to order from or book with.
@@ -78,9 +92,10 @@ class _BusinessesScreenState extends State<BusinessesScreen> {
 
 /// A business's page: order for pickup from the catalogue, or book a time.
 class StorefrontScreen extends StatefulWidget {
-  const StorefrontScreen({super.key, required this.auth, required this.handle});
+  const StorefrontScreen({super.key, required this.auth, required this.handle, this.openUrl = openInBrowser});
   final AuthController auth;
   final String handle;
+  final OpenUrl openUrl;
 
   @override
   State<StorefrontScreen> createState() => _StorefrontScreenState();
@@ -94,6 +109,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // One id per basket, so a retry after a dropped connection can't order twice.
   String _orderKey = newClientId();
   bool _placing = false;
+  String _payment = 'pay_in_person';
 
   AuthController get auth => widget.auth;
 
@@ -114,6 +130,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       if (!mounted) return;
       setState(() {
         _b = Business.fromJson(results[0]!);
+        _payment = _b!.inPersonPayments ? 'pay_in_person' : 'online';
         _items = [for (final i in results[1]!['items'] as List) CatalogueItem.fromJson(i as Map<String, dynamic>)];
         _services = [for (final s in results[2]!['services'] as List) BookableService.fromJson(s as Map<String, dynamic>)];
       });
@@ -133,6 +150,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           for (final e in _basket.entries)
             if (e.value > 0) {'itemId': e.key, 'quantity': e.value},
         ],
+        'payment': _payment,
       });
       final order = Order.fromJson(r!);
       if (!mounted) return;
@@ -140,6 +158,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _basket.clear();
         _orderKey = newClientId();
       });
+      if (order.status == 'pending_payment') {
+        // The order holds its items while the customer pays on the provider's page.
+        await _payOnline(auth, order.id, widget.openUrl);
+        if (!mounted) return;
+        _snack(context, 'Finish paying on the payment page. Your order is held for you; see it in your orders.');
+        return;
+      }
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text('Order placed: ${orderStatusLabels[order.status]}. Pay when you collect.')));
@@ -179,15 +204,32 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                           ])
                         : null,
                   ),
+                if (_total > 0 && b.onlinePayments)
+                  Padding(
+                    padding: const EdgeInsets.only(top: NexaSpace.md),
+                    child: SegmentedButton<String>(
+                      key: const Key('payment-choice'),
+                      segments: [
+                        const ButtonSegment(value: 'online', label: Text('Pay now by card')),
+                        if (b.inPersonPayments) const ButtonSegment(value: 'pay_in_person', label: Text('Pay at pickup')),
+                      ],
+                      selected: {_payment},
+                      onSelectionChanged: (s) => setState(() => _payment = s.first),
+                    ),
+                  ),
                 if (_total > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: NexaSpace.md),
                     child: FilledButton(
                       key: const Key('place-order'),
                       onPressed: _placing ? null : _place,
-                      child: Text('Place order · ${formatMoney(_total, b.currency)} · pay at pickup'),
+                      child: Text(_payment == 'online'
+                          ? 'Continue to payment · ${formatMoney(_total, b.currency)}'
+                          : 'Place order · ${formatMoney(_total, b.currency)} · pay at pickup'),
                     ),
                   ),
+                if (_total > 0 && _payment == 'online')
+                  Text('You pay on our payment provider’s secure page. We never see your card details.', style: Theme.of(context).textTheme.bodySmall),
               ],
               if (_services.isNotEmpty) ...[
                 const SizedBox(height: NexaSpace.lg),
@@ -319,8 +361,9 @@ class _BookingScreenState extends State<BookingScreen> {
 
 /// Orders and bookings you made, with cancelling where it's still allowed.
 class MyOrdersScreen extends StatefulWidget {
-  const MyOrdersScreen({super.key, required this.auth});
+  const MyOrdersScreen({super.key, required this.auth, this.openUrl = openInBrowser});
   final AuthController auth;
+  final OpenUrl openUrl;
 
   @override
   State<MyOrdersScreen> createState() => _MyOrdersScreenState();
@@ -358,9 +401,20 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
     }
   }
 
+  Future<void> _pay(String orderId) async {
+    try {
+      await _payOnline(widget.auth, orderId, widget.openUrl);
+    } on ApiException catch (e) {
+      if (mounted) _snack(context, e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Orders and bookings')),
+        appBar: AppBar(
+          title: const Text('Orders and bookings'),
+          actions: [IconButton(key: const Key('refresh-orders'), tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _load)],
+        ),
         body: _orders == null
             ? const Center(child: CircularProgressIndicator())
             : ListView(children: [
@@ -382,12 +436,17 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
                   ListTile(
                     key: Key('order-${o.id}'),
                     title: Text('${o.businessName} · ${orderStatusLabels[o.status] ?? o.status}'),
-                    subtitle: Text('${o.lines.map((l) => '${l.quantity} × ${l.name}').join(', ')}\n${formatMoney(o.totalMinor, o.currency)}, pay when you collect'
+                    subtitle: Text('${o.lines.map((l) => '${l.quantity} × ${l.name}').join(', ')}\n${formatMoney(o.totalMinor, o.currency)}, ${o.paymentLabel}'
                         '${o.statusReason.isNotEmpty ? ' · ${o.statusReason}' : ''}'),
                     isThreeLine: true,
-                    trailing: o.status == 'placed'
-                        ? TextButton(key: Key('cancel-order-${o.id}'), onPressed: () => _cancel('/v1/orders/${o.id}/cancel'), child: const Text('Cancel'))
-                        : null,
+                    trailing: o.status == 'pending_payment'
+                        ? Row(mainAxisSize: MainAxisSize.min, children: [
+                            TextButton(key: Key('pay-order-${o.id}'), onPressed: () => _pay(o.id), child: const Text('Pay now')),
+                            TextButton(key: Key('cancel-order-${o.id}'), onPressed: () => _cancel('/v1/orders/${o.id}/cancel'), child: const Text('Cancel')),
+                          ])
+                        : o.status == 'placed'
+                            ? TextButton(key: Key('cancel-order-${o.id}'), onPressed: () => _cancel('/v1/orders/${o.id}/cancel'), child: const Text('Cancel'))
+                            : null,
                   ),
               ]),
       );

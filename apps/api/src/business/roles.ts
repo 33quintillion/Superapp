@@ -23,6 +23,11 @@ export const PERMISSIONS = {
   'orders.manage': ALL,
   'bookings.view': ALL,
   'bookings.manage': ALL,
+  'orders.refund': MANAGERS,
+  'payments.view': MANAGERS,
+  // The payout account and the plan are the owner's: they decide where money goes and what is paid for.
+  'payments.manage': ['owner'],
+  'billing.manage': ['owner'],
 } satisfies Record<string, StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { BusinessesService } from '../business/businesses.service';
 import { IntegrationsService } from '../integrations/integrations.service';
+import { PaymentsService } from '../payments/payments.service';
 import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
@@ -66,6 +67,7 @@ export class UsersService {
     private readonly communities: CommunitiesService,
     private readonly businesses: BusinessesService,
     private readonly integrations: IntegrationsService,
+    private readonly payments: PaymentsService,
   ) {}
 
   async me(userId: string) {
@@ -147,7 +149,7 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls, business, integrations] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls, business, integrations, payments] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
@@ -175,6 +177,7 @@ export class UsersService {
       ),
       this.businesses.exportFor(userId),
       this.integrations.exportFor(userId),
+      this.payments.exportFor(userId),
     ]);
     await this.audit.record({ actorId: userId, action: 'account.exported' });
     return {
@@ -206,6 +209,8 @@ export class UsersService {
       bookings: business.bookings,
       // Integrations you connected and the scopes you granted.
       integrations,
+      // Online payments you made and their refunds. Card details are held by the payment provider, not us.
+      payments,
     };
   }
 
@@ -227,13 +232,13 @@ export class UsersService {
    */
   async deleteAccount(userId: string, password: string) {
     await this.confirmPassword(userId, password);
-    const { mediaIds, groupNotices } = await this.db.tx(async (tx) => {
+    const { mediaIds, groupNotices, closedBusinesses } = await this.db.tx(async (tx) => {
       const sentMedia = await this.messaging.scrubUser(userId, tx);
       const groupNotices = await this.groups.leaveAll(userId, tx);
       const postMedia = await this.posts.scrubUser(userId, tx);
       const storyMedia = await this.stories.scrubUser(userId, tx);
       await this.communities.scrubUser(userId, tx);
-      await this.businesses.scrubUser(userId, tx);
+      const closedBusinesses = await this.businesses.scrubUser(userId, tx);
       await this.db.query('DELETE FROM integration_grants WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM platform_staff WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM follows WHERE follower_id = $1 OR followee_id = $1', [userId], tx);
@@ -255,8 +260,11 @@ export class UsersService {
       await this.db.query('UPDATE audit_log SET ip = NULL WHERE actor_id = $1', [userId], tx);
       await this.audit.record({ actorId: userId, action: 'account.deleted' }, tx);
       const owned = await this.db.query<{ id: string }>(`SELECT id FROM media WHERE owner_id = $1`, [userId], tx);
-      return { mediaIds: [...new Set([...sentMedia, ...postMedia, ...storyMedia, ...owned.rows.map((r) => r.id)])], groupNotices };
+      return { mediaIds: [...new Set([...sentMedia, ...postMedia, ...storyMedia, ...owned.rows.map((r) => r.id)])], groupNotices, closedBusinesses };
     });
+    for (const id of closedBusinesses) await this.businesses.afterClose(id);
+    // Their own paid orders that were cancelled are refunded to their card.
+    await this.payments.settleClosedOrders().catch(() => undefined);
     await this.groups.announceAll(groupNotices).catch(() => undefined);
     // Stored files go once nothing references them (a forwarded copy keeps its own reference).
     for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
-import type { Integration } from '@/lib/business-client';
+import { ENTITLEMENT_LABEL, Integration, money, Payment, PAYMENT_LABEL, Plan, toMinor } from '@/lib/business-client';
 import type { UserSummary } from '@/lib/social-client';
 
 export interface Overview {
@@ -30,7 +30,7 @@ interface Report {
   related?: Report[];
 }
 
-type Tab = 'reports' | 'users' | 'businesses' | 'integrations' | 'staff' | 'audit';
+type Tab = 'reports' | 'users' | 'businesses' | 'payments' | 'integrations' | 'staff' | 'audit';
 
 /** The admin dashboard. Every call is checked again by the API (staff role, two-step, session age). */
 export function AdminApp({ overview }: { overview: Overview }) {
@@ -41,6 +41,7 @@ export function AdminApp({ overview }: { overview: Overview }) {
     ...(admin
       ? ([
           ['businesses', 'Businesses'],
+          ['payments', 'Payments and plans'],
           ['integrations', 'Integrations'],
           ['staff', 'Staff'],
           ['audit', 'Audit log'],
@@ -65,6 +66,7 @@ export function AdminApp({ overview }: { overview: Overview }) {
       {tab === 'reports' && <Reports />}
       {tab === 'users' && <Users />}
       {tab === 'businesses' && <Businesses />}
+      {tab === 'payments' && <Payments />}
       {tab === 'integrations' && <Integrations />}
       {tab === 'staff' && <Staff />}
       {tab === 'audit' && <Audit />}
@@ -468,5 +470,161 @@ function Audit() {
         </div>
       ))}
     </section>
+  );
+}
+
+interface Ledger {
+  balances: { account: string; currency: string; balanceMinor: number }[];
+  check: { ok: boolean; transactions: number; problems: { type: string; id: string; problem: string }[] };
+}
+
+const ACCOUNT_LABEL: Record<string, string> = {
+  'external:customers': 'Customers (paid in, net of refunds)',
+  'platform:fees': 'Nexa fees on orders',
+  'platform:subscriptions': 'Nexa plan income',
+};
+
+/** The ledger's reconciliation, recent card payments, and the plans businesses can buy. */
+function Payments() {
+  const [ledger, setLedger] = useState<Ledger | null>(null);
+  const [list, setList] = useState<Payment[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const { err, act } = useAct();
+  const load = useCallback(async () => {
+    const [l, p, pl] = await Promise.all([
+      chatApi<Ledger>('GET', 'admin/ledger'),
+      chatApi<{ payments: Payment[] }>('GET', 'admin/payments?limit=30'),
+      chatApi<{ plans: Plan[] }>('GET', 'admin/plans'),
+    ]);
+    setLedger(l);
+    setList(p.payments);
+    setPlans(pl.plans);
+  }, []);
+  useEffect(() => void load().catch(() => undefined), [load]);
+  // Business sales accounts are summed per currency: one line per business would be too long here.
+  const sales = new Map<string, number>();
+  for (const b of ledger?.balances ?? []) if (b.account.startsWith('business:')) sales.set(b.currency, (sales.get(b.currency) ?? 0) + b.balanceMinor);
+  return (
+    <>
+      <section className="card stack" data-testid="ledger">
+        <h2>Ledger</h2>
+        {ledger && (
+          <>
+            <p data-testid="ledger-check" data-ok={String(ledger.check.ok)}>
+              {ledger.check.ok
+                ? `Balanced: ${ledger.check.transactions} transactions agree with every payment and refund.`
+                : `${ledger.check.problems.length} problems found. Look into these before paying anything out.`}
+            </p>
+            {ledger.check.problems.map((p) => (
+              <p key={`${p.type}:${p.id}`} className="error small">
+                {p.type} {p.id}: {p.problem.replace(/_/g, ' ')}
+              </p>
+            ))}
+            {ledger.balances
+              .filter((b) => !b.account.startsWith('business:'))
+              .map((b) => (
+                <p key={`${b.account}:${b.currency}`} className="small">
+                  {ACCOUNT_LABEL[b.account] ?? b.account}: {money(Math.abs(b.balanceMinor), b.currency)}
+                </p>
+              ))}
+            {[...sales].map(([currency, total]) => (
+              <p key={currency} className="small">
+                Businesses’ sales, net of fees and refunds: {money(total, currency)}
+              </p>
+            ))}
+          </>
+        )}
+      </section>
+
+      <section className="card stack" data-testid="admin-plans">
+        <h2>Plans</h2>
+        {plans.map((p) => (
+          <div className="row" key={p.id} data-testid="admin-plan" data-code={p.code} data-state={p.state}>
+            <span>
+              <strong>{p.name}</strong> ({p.code}) · {money(p.priceMinor, p.currency)} a {p.interval} · <span className="pill">{p.state}</span>
+              <br />
+              <span className="small muted">{p.entitlements.map((e) => ENTITLEMENT_LABEL[e] ?? e).join(' · ')}</span>
+            </span>
+            <span className="actions">
+              {p.state !== 'active' && (
+                <button className="btn small" onClick={() => act(async () => { await chatApi('POST', `admin/plans/${p.id}/state`, { state: 'active' }); await load(); })}>
+                  Put on sale
+                </button>
+              )}
+              {p.state === 'active' && (
+                <button className="btn quiet small" onClick={() => act(async () => { await chatApi('POST', `admin/plans/${p.id}/state`, { state: 'retired' }); await load(); })}>
+                  Stop selling
+                </button>
+              )}
+            </span>
+          </div>
+        ))}
+        <form
+          className="stack"
+          data-testid="new-plan"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const f = new FormData(form);
+            const currency = String(f.get('currency')).toUpperCase();
+            void act(async () => {
+              await chatApi('POST', 'admin/plans', {
+                code: String(f.get('code')),
+                name: String(f.get('name')),
+                description: String(f.get('description') ?? ''),
+                priceMinor: toMinor(String(f.get('price')), currency),
+                currency,
+                interval: String(f.get('interval')),
+                entitlements: f.getAll('entitlements').map(String),
+              });
+              form.reset();
+              await load();
+            });
+          }}
+        >
+          <h3>New plan</h3>
+          <p className="small muted">The price is created at the payment provider and can’t be changed later; make a new plan instead.</p>
+          <div className="composer-row">
+            <input name="code" placeholder="code, e.g. growth" required pattern="[a-z0-9][a-z0-9-]{1,39}" aria-label="Plan code" />
+            <input name="name" placeholder="Name" required maxLength={80} aria-label="Plan name" />
+          </div>
+          <input name="description" placeholder="Description" maxLength={500} aria-label="Plan description" />
+          <div className="composer-row">
+            <input name="price" placeholder="Price, e.g. 15.00" required inputMode="decimal" aria-label="Price" />
+            <input name="currency" defaultValue="GBP" required pattern="[A-Za-z]{3}" aria-label="Currency" />
+            <select name="interval" defaultValue="month" aria-label="Billing interval">
+              <option value="month">monthly</option>
+              <option value="year">yearly</option>
+            </select>
+          </div>
+          <fieldset>
+            <legend>Unlocks</legend>
+            {Object.entries(ENTITLEMENT_LABEL).map(([k, label]) => (
+              <label key={k} className="row small">
+                <span>{label}</span>
+                <input type="checkbox" name="entitlements" value={k} defaultChecked />
+              </label>
+            ))}
+          </fieldset>
+          <button className="btn" type="submit">
+            Create plan
+          </button>
+        </form>
+      </section>
+
+      <section className="card stack" data-testid="admin-payments">
+        <h2>Recent card payments</h2>
+        {list.length === 0 && <p className="muted">None yet.</p>}
+        {list.map((p) => (
+          <div className="row small" key={p.id}>
+            <span>
+              {p.business?.name} · {money(p.amountMinor, p.currency)} · {new Date(p.createdAt).toLocaleString()}
+            </span>
+            <span className="pill">{PAYMENT_LABEL[p.status]}</span>
+          </div>
+        ))}
+      </section>
+      {err && <p className="error">{err}</p>}
+    </>
   );
 }

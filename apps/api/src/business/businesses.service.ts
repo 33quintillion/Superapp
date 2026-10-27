@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditService } from '../common/audit.service';
+import { APP_CONFIG, AppConfig } from '../config/config';
+import { limitFor } from '../payments/entitlements';
 import { Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
@@ -20,7 +22,7 @@ export interface BusinessInput {
   currency: string;
 }
 
-export type BusinessPatch = Partial<Omit<BusinessInput, 'handle' | 'currency'>> & { ordersEnabled?: boolean; bookingsEnabled?: boolean };
+export type BusinessPatch = Partial<Omit<BusinessInput, 'handle' | 'currency'>> & { ordersEnabled?: boolean; bookingsEnabled?: boolean; inPersonPayments?: boolean };
 
 export interface HoursInput {
   weekday: number;
@@ -41,6 +43,9 @@ interface BusinessRow {
   currency: string;
   orders_enabled: boolean;
   bookings_enabled: boolean;
+  in_person_payments: boolean;
+  pay_charges: boolean | null;
+  pay_livemode: boolean | null;
   state: 'active' | 'suspended' | 'deleted';
   suspension_reason: string | null;
   verified_at: Date | null;
@@ -51,10 +56,12 @@ interface BusinessRow {
 
 const SELECT = `
   SELECT b.id, b.handle, b.name, b.description, b.category, b.contact_email, b.phone, b.address, b.time_zone, b.currency,
-         b.orders_enabled, b.bookings_enabled, b.state, b.suspension_reason, b.verified_at, b.created_at,
+         b.orders_enabled, b.bookings_enabled, b.in_person_payments, b.state, b.suspension_reason, b.verified_at, b.created_at,
+         pa.charges_enabled AS pay_charges, pa.livemode AS pay_livemode,
          s.role AS my_role, s.state AS my_state
     FROM businesses b
-    LEFT JOIN business_staff s ON s.business_id = b.id AND s.user_id = $1`;
+    LEFT JOIN business_staff s ON s.business_id = b.id AND s.user_id = $1
+    LEFT JOIN business_payment_accounts pa ON pa.business_id = b.id`;
 
 /** Hidden from customers once suspended; staff still see it (and why) so they can appeal. */
 const VISIBLE = `b.state <> 'deleted' AND (b.state = 'active' OR s.state = 'active')`;
@@ -64,11 +71,26 @@ const CURRENCIES = new Set(Intl.supportedValuesOf('currency'));
 
 @Injectable()
 export class BusinessesService {
+  private readonly logger = new Logger('Businesses');
+  private readonly closeHooks: ((businessId: string) => Promise<unknown>)[] = [];
+
   constructor(
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
     private readonly limits: RateLimitService,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
+
+  /** Work that runs after a business closes (refunds, ending its subscription). */
+  onClose(fn: (businessId: string) => Promise<unknown>) {
+    this.closeHooks.push(fn);
+  }
+
+  /** Online payment is possible when a provider is configured and the payout account (same mode) can take charges. */
+  private onlinePayments(r: BusinessRow) {
+    const key = this.config.STRIPE_SECRET_KEY ?? '';
+    return this.config.PAYMENTS_PROVIDER !== 'none' && !!r.pay_charges && r.pay_livemode === /^(sk|rk)_live_/.test(key);
+  }
 
   private view(r: BusinessRow) {
     const staff = r.my_state === 'active' ? r.my_role : null;
@@ -85,6 +107,8 @@ export class BusinessesService {
       currency: r.currency,
       ordersEnabled: r.orders_enabled,
       bookingsEnabled: r.bookings_enabled,
+      // How customers can pay for orders.
+      payments: { online: this.onlinePayments(r), inPerson: r.in_person_payments || !this.onlinePayments(r) },
       verified: !!r.verified_at,
       state: r.state,
       // Only the business's own staff learn why it was suspended.
@@ -151,9 +175,13 @@ export class BusinessesService {
   async update(userId: string, businessId: string, patch: BusinessPatch) {
     await this.requireStaff(userId, businessId, 'business.edit');
     if (patch.timeZone) await this.checkTimeZone(patch.timeZone);
+    if (patch.inPersonPayments === false && !(await this.get(userId, businessId)).payments.online) {
+      throw Errors.conflict('online_payments_unavailable', 'Set up online payments before turning off payment at pickup');
+    }
     const columns: Record<string, string> = {
       name: 'name', description: 'description', category: 'category', contactEmail: 'contact_email', phone: 'phone',
       address: 'address', timeZone: 'time_zone', ordersEnabled: 'orders_enabled', bookingsEnabled: 'bookings_enabled',
+      inPersonPayments: 'in_person_payments',
     };
     const sets: string[] = [];
     const params: unknown[] = [businessId];
@@ -175,12 +203,18 @@ export class BusinessesService {
     await this.requireStaff(userId, businessId, 'business.delete');
     await this.db.tx(async (tx) => this.close(businessId, tx));
     await this.audit.record({ actorId: userId, action: 'business.deleted', targetType: 'business', targetId: businessId });
+    await this.afterClose(businessId);
+  }
+
+  /** Runs the close hooks. Failures are left to the payments sweep, which settles the same things. */
+  async afterClose(businessId: string) {
+    for (const fn of this.closeHooks) await fn(businessId).catch((e) => this.logger.warn(`after closing ${businessId}: ${(e as Error).message}`));
   }
 
   private async close(businessId: string, tx: Queryable) {
     await this.db.query(`UPDATE businesses SET state = 'deleted', orders_enabled = false, bookings_enabled = false, updated_at = now() WHERE id = $1`, [businessId], tx);
     await this.db.query(
-      `UPDATE orders SET status = 'cancelled', status_reason = 'The business closed', updated_at = now() WHERE business_id = $1 AND status IN ('placed', 'accepted', 'ready')`,
+      `UPDATE orders SET status = 'cancelled', status_reason = 'The business closed', updated_at = now() WHERE business_id = $1 AND status IN ('pending_payment', 'placed', 'accepted', 'ready')`,
       [businessId],
       tx,
     );
@@ -209,7 +243,7 @@ export class BusinessesService {
     if (!r) throw Errors.notFound('Business');
     if (!permissionsOf(r.role).includes(permission)) throw Errors.forbidden('Your role at this business doesn’t allow that');
     // A suspended business can be looked at and wound down, but not changed.
-    if (r.state === 'suspended' && !['business.view', 'staff.view', 'orders.view', 'bookings.view', 'business.delete'].includes(permission)) {
+    if (r.state === 'suspended' && !['business.view', 'staff.view', 'orders.view', 'bookings.view', 'business.delete', 'orders.refund', 'payments.view', 'billing.manage'].includes(permission)) {
       throw Errors.conflict('business_suspended', 'This business is suspended');
     }
     return r.role;
@@ -229,6 +263,9 @@ export class BusinessesService {
     const actor = await this.requireStaff(userId, businessId, 'staff.manage');
     if (!canManageRole(actor, role)) throw Errors.forbidden('You can’t give that role');
     await this.limits.consume({ name: 'business:invite', limit: 50, windowSeconds: 86400 }, userId);
+    const max = await limitFor(this.db, businessId, 'staff');
+    const n = await this.db.one<{ n: string }>('SELECT count(*) AS n FROM business_staff WHERE business_id = $1', [businessId]);
+    if (Number(n!.n) >= max) throw Errors.conflict('staff_limit', `This business can have up to ${max} staff on its plan`, { limit: max });
     const target = await this.db.one<{ id: string }>(`SELECT id FROM users WHERE username = $1 AND state = 'active'`, [username]);
     if (!target) throw Errors.notFound('User');
     const r = await this.db.query(
@@ -348,7 +385,8 @@ export class BusinessesService {
    * Account deletion. An owner's business passes to its longest-serving manager; with no
    * manager it closes. Orders and bookings stay with the business, detached from the person.
    */
-  async scrubUser(userId: string, tx: Queryable) {
+  async scrubUser(userId: string, tx: Queryable): Promise<string[]> {
+    const closed: string[] = [];
     const owned = await this.db.query<{ business_id: string }>(`SELECT business_id FROM business_staff WHERE user_id = $1 AND role = 'owner'`, [userId], tx);
     for (const { business_id } of owned.rows) {
       const heir = await this.db.one<{ user_id: string }>(
@@ -358,13 +396,22 @@ export class BusinessesService {
       );
       await this.db.query('DELETE FROM business_staff WHERE business_id = $1 AND user_id = $2', [business_id, userId], tx);
       if (heir) await this.db.query(`UPDATE business_staff SET role = 'owner' WHERE business_id = $1 AND user_id = $2`, [business_id, heir.user_id], tx);
-      else await this.close(business_id, tx);
+      else {
+        await this.close(business_id, tx);
+        closed.push(business_id);
+      }
     }
     await this.db.query('DELETE FROM business_staff WHERE user_id = $1', [userId], tx);
-    await this.db.query(`UPDATE orders SET status = 'cancelled', status_reason = 'Customer account deleted', updated_at = now() WHERE customer_id = $1 AND status IN ('placed', 'accepted', 'ready')`, [userId], tx);
+    await this.db.query(
+      `UPDATE orders SET status = 'cancelled', status_reason = 'Customer account deleted', updated_at = now() WHERE customer_id = $1 AND status IN ('pending_payment', 'placed', 'accepted', 'ready')`,
+      [userId],
+      tx,
+    );
     await this.db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = 'customer', updated_at = now() WHERE customer_id = $1 AND status = 'confirmed' AND starts_at > now()`, [userId], tx);
     await this.db.query(`UPDATE orders SET customer_id = NULL, note = '' WHERE customer_id = $1`, [userId], tx);
     await this.db.query(`UPDATE bookings SET customer_id = NULL, note = '' WHERE customer_id = $1`, [userId], tx);
+    await this.db.query('UPDATE payments SET payer_id = NULL WHERE payer_id = $1', [userId], tx);
+    return closed;
   }
 
   async exportFor(userId: string) {

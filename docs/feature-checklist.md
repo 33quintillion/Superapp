@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-27, Stage 7): API 249 tests passed; web e2e all steps passed, including calls through a real coturn relay and the business, admin and integration flow; Flutter 25 tests passed and `flutter analyze` clean.
+Last full run (2026-10-27, Stage 8): API 291 tests passed; web e2e all 51 steps passed, including calls through a real coturn relay, the business and admin flow, and card payments against the local Stripe stand-in; Flutter 28 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -185,11 +185,40 @@ Business accounts with staff roles, a catalogue with pickup orders, bookings, th
 | Flutter: browse businesses, order for pickup, book, my orders and bookings | ✅ | `business_test` |
 | Flutter back office for staff (catalogue, orders queue, bookings) | ⬜ | Staff use the web for now |
 | Item photos and viewing reported media in the queue | ⛔ | Needs the media scanning provider (same blocker as chat media) |
-| Online payment for orders and bookings | ⛔ | Stage 8; needs a payment provider account and legal review |
+| Online payment for orders and bookings | ✅ / ⬜ | Orders: Stage 8 below. Bookings: not built |
 | Business verification checks (documents, company registry) | ⛔ | Needs a verification provider; admins mark businesses verified by hand today |
 | Partner API for integrations (OAuth, tokens, webhooks) | ⛔ | Needs a partner agreement and terms; the catalogue and grants are in place |
 | Escalation of child-safety reports to NCMEC or IWF | ⛔ | Needs legal and trust-and-safety sign-up |
 | Push notifications to staff for new orders and bookings | ⛔ | Needs the APNs and Firebase accounts from Stage 4; staff get live updates while the page is open |
 
-## Stages 8 to 10
-Not started. See `plan.md`. Payments, subscriptions and the mini-app runtime are not implemented, and the apps say so.
+## Stage 8: Payments and subscriptions
+Card payments for pickup orders, payouts to businesses, refunds, a double-entry ledger and business plans, through Stripe. **Tested against a local stand-in for Stripe** (`apps/api/src/dev/stripe-sandbox.ts`), which signs webhooks and checks idempotency keys the way Stripe does; nothing has run against a real Stripe account yet. Details: [`payments.md`](payments.md).
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| Payout accounts: owner-only Connect onboarding on the provider's hosted page; status from webhooks, or read from the provider when one was missed; pay-at-pickup can only be turned off once card payment works | ✅ | `payments.e2e › payout accounts`; web e2e `paymentsFlow` |
+| Paying for an order: held as `pending_payment` with its stock, hosted checkout (no card data on our servers), handed to staff once the signed webhook says paid, ledger entries for the sale and fee | ✅ | `payments.e2e › holds the order until it is paid…`; web e2e `paymentsFlow`; Flutter `business_test › pays online…`, `› shows how each order was paid…` |
+| **Idempotency:** one checkout when the provider times out and the customer retries; safe retries of placing an order and of refunds; provider keys made from our row ids | ✅ | `payments.e2e › creates one checkout even when the provider times out…`, `› is safe to retry placing the order…`, `› lets managers refund … once per request…`, `› retries a refund with the same key when the provider was down` |
+| **Webhook signatures:** HMAC-SHA256 with a tolerance window, several secrets while rotating, unsigned or tampered events refused and change nothing, other-mode events refused | ✅ | `payments.e2e › webhooks › rejects events that aren’t signed…`, `› accepts the previous secret while it is being rotated out`, `› refuses events from the other mode…`; `unit › Stripe webhook signatures` |
+| Webhook deduplication: a redelivered event is applied once, even when copies arrive together | ✅ | `payments.e2e › applies a redelivered event once, even when copies arrive together` |
+| Checkouts that expire or that the customer abandons: order cancelled, stock returned; a payment that lands after the order closed is refunded | ✅ | `payments.e2e › cancels the order and gives the stock back…`, `› closes the checkout when the customer cancels…`, `› refunds a payment that arrives after the order was closed` |
+| Sweep for lost webhooks: asks the provider how each checkout ended, resends refunds | ✅ | `payments.e2e › tidies up when webhooks are lost…` |
+| Refunds: managers and owners, partial or full, never more than paid, proportional fee returned, automatic full refund when a paid order is rejected or cancelled, failed refunds give the amount back, dashboard refunds recorded | ✅ | `payments.e2e › refunds`; web e2e `paymentsFlow` |
+| Closing a business or deleting an account refunds open paid orders, ends the plan, and keeps the payment record without the person | ✅ | `payments.e2e › closing and leaving` |
+| Ledger: double-entry, the database refuses unbalanced transactions and changes to past entries, admin check agrees with every payment and refund | ✅ | `payments.e2e › the ledger`; web e2e (admin ledger check shows balanced) |
+| Business plans: admin-only plan creation at the provider, hosted subscription checkout, entitlements raise staff and catalogue limits only while paid for, late events ignored, cancelled stays cancelled, a second subscription is ended | ✅ | `payments.e2e › business plans`; web e2e `paymentsFlow` |
+| Payments configuration: provider off by default, key and secret formats, live keys only in production, the stand-in's address refused when deployed | ✅ | `unit › payments configuration`, `unit › Stripe form encoding` |
+| Web: pay by card, payment result page, refunds for staff, payouts setup, plans and limits, admin ledger, plans and payments | ✅ | web e2e `paymentsFlow` |
+| Flutter: pay by card through the browser, "Pay now" for a held order, payment status in my orders | ✅ | `business_test` |
+| Running against a real Stripe test account, then live | ⛔ | Needs a Stripe account and Connect platform approval |
+| Launch countries, seller and buyer terms, refund policy, consumer-law review | ⛔ | Needs legal review |
+| Plans or digital goods sold to individuals in the mobile apps | ⛔ | Needs App Store and Google Play billing; plans are sold to businesses only for now |
+| Razorpay or another regional provider | ⛔ | Needs a provider decision and an account |
+| Online payment for bookings, deposits and no-show fees | ⬜ | Bookings are paid in person |
+| Disputes and chargebacks | ⬜ | Visible in the Stripe dashboard only |
+| Changing plan in place (upgrade or downgrade with proration) | ⬜ | Cancel and subscribe again |
+| Payout reconciliation against Stripe's balance reports | ⬜ | The ledger check covers our own records |
+| Flutter back office for payouts, refunds and plans | ⬜ | On the web for now |
+
+## Stages 9 and 10
+Not started. See `plan.md`. The mini-app runtime is not implemented, and the apps say so.

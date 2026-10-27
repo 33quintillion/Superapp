@@ -15,6 +15,8 @@ class Business {
     required this.ordersEnabled,
     required this.bookingsEnabled,
     required this.verified,
+    this.onlinePayments = false,
+    this.inPersonPayments = true,
   });
   factory Business.fromJson(Map<String, dynamic> j) => Business(
         id: j['id'] as String,
@@ -28,6 +30,8 @@ class Business {
         ordersEnabled: j['ordersEnabled'] as bool,
         bookingsEnabled: j['bookingsEnabled'] as bool,
         verified: j['verified'] as bool? ?? false,
+        onlinePayments: (j['payments'] as Map<String, dynamic>?)?['online'] as bool? ?? false,
+        inPersonPayments: (j['payments'] as Map<String, dynamic>?)?['inPerson'] as bool? ?? true,
       );
   final String id;
   final String handle;
@@ -40,6 +44,10 @@ class Business {
   final bool ordersEnabled;
   final bool bookingsEnabled;
   final bool verified;
+
+  /// The business has finished payout setup, so customers can pay by card when they order.
+  final bool onlinePayments;
+  final bool inPersonPayments;
 }
 
 class CatalogueItem {
@@ -84,6 +92,7 @@ class Slot {
 }
 
 const orderStatusLabels = {
+  'pending_payment': 'Waiting for payment',
   'placed': 'Waiting for the business',
   'accepted': 'Being prepared',
   'ready': 'Ready to collect',
@@ -99,8 +108,28 @@ class OrderLine {
   final int quantity;
 }
 
+/// What happened to an online payment. Orders paid at pickup have none.
+const paymentStatusLabels = {
+  'unpaid': 'Not paid yet',
+  'paid': 'Paid online',
+  'partially_refunded': 'Partly refunded',
+  'refunded': 'Refunded',
+  'cancelled': 'Payment cancelled',
+};
+
 class Order {
-  Order({required this.id, required this.businessName, required this.status, required this.statusReason, required this.lines, required this.totalMinor, required this.currency});
+  Order({
+    required this.id,
+    required this.businessName,
+    required this.status,
+    required this.statusReason,
+    required this.lines,
+    required this.totalMinor,
+    required this.currency,
+    this.payment = 'pay_in_person',
+    this.paymentStatus,
+    this.refundedMinor = 0,
+  });
   factory Order.fromJson(Map<String, dynamic> j) => Order(
         id: j['id'] as String,
         businessName: (j['business'] as Map<String, dynamic>)['name'] as String,
@@ -112,6 +141,9 @@ class Order {
         ],
         totalMinor: (j['totalMinor'] as num).toInt(),
         currency: j['currency'] as String,
+        payment: j['payment'] as String? ?? 'pay_in_person',
+        paymentStatus: j['paymentStatus'] as String?,
+        refundedMinor: (j['refundedMinor'] as num?)?.toInt() ?? 0,
       );
   final String id;
   final String businessName;
@@ -120,6 +152,18 @@ class Order {
   final List<OrderLine> lines;
   final int totalMinor;
   final String currency;
+
+  /// 'online' or 'pay_in_person'.
+  final String payment;
+  final String? paymentStatus;
+  final int refundedMinor;
+
+  /// How the order is being paid for, in words.
+  String get paymentLabel {
+    if (paymentStatus == null) return 'pay when you collect';
+    final label = paymentStatusLabels[paymentStatus] ?? paymentStatus!;
+    return refundedMinor > 0 && paymentStatus == 'partially_refunded' ? '$label (${formatMoney(refundedMinor, currency)} back)' : label;
+  }
 }
 
 class Booking {

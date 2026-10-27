@@ -128,6 +128,23 @@ const schema = z.object({
 
   // Admin dashboard: platform staff must have signed in with a two-step code within this many hours.
   ADMIN_SESSION_MAX_HOURS: z.coerce.number().int().min(1).max(72).default(12),
+
+  /** Payments (docs/payments.md). none: everything is paid in person and plans can't be bought. */
+  PAYMENTS_PROVIDER: z.enum(['none', 'stripe']).default('none'),
+  /** Secret (sk_) or restricted (rk_) key. Test keys everywhere except production, live keys only there. */
+  STRIPE_SECRET_KEY: z.string().optional(),
+  /** Webhook signing secrets (whsec_...), comma-separated so a secret can be rotated without downtime. */
+  STRIPE_WEBHOOK_SECRET: z.string().default('').transform(list),
+  /** Overrides https://api.stripe.com. Tests and the local sandbox only; refused in staging and production. */
+  STRIPE_API_BASE: z.url().optional(),
+  /** How old a webhook's signature timestamp may be, in seconds. */
+  STRIPE_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+  /** The platform's fee on online orders, in basis points (100 = 1%). */
+  PAYMENTS_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(3000).default(0),
+  /** How long a customer has to pay before an online order is cancelled and its stock released. */
+  PAYMENTS_CHECKOUT_MINUTES: z.coerce.number().int().min(30).max(1440).default(30),
+  /** How often this instance tidies up unpaid orders and retries unsent refunds. 0 turns it off. */
+  PAYMENTS_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
 });
 
 function list(v: string) {
@@ -200,12 +217,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ['FCM_ENDPOINT', cfg.FCM_ENDPOINT],
     ['TWILIO_API_BASE', cfg.TWILIO_API_BASE],
     ['CLOUDFLARE_TURN_API_BASE', cfg.CLOUDFLARE_TURN_API_BASE],
+    ['STRIPE_API_BASE', cfg.STRIPE_API_BASE],
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }
   if (deployed && cfg.TURN_PROVIDER === 'none' && !cfg.STUN_URLS.length) {
     // Without STUN or TURN, devices only offer local addresses, so calls connect only on one network.
     throw new Error('TURN_PROVIDER=none needs STUN_URLS in staging and production (e.g. stun:stun.cloudflare.com:3478)');
+  }
+  if (cfg.PAYMENTS_PROVIDER === 'stripe') {
+    if (!cfg.STRIPE_SECRET_KEY || !cfg.STRIPE_WEBHOOK_SECRET.length) throw new Error('PAYMENTS_PROVIDER=stripe needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET');
+    const live = /^(sk|rk)_live_/.test(cfg.STRIPE_SECRET_KEY);
+    if (!live && !/^(sk|rk)_test_/.test(cfg.STRIPE_SECRET_KEY)) throw new Error('STRIPE_SECRET_KEY must be a Stripe secret or restricted key (sk_ or rk_)');
+    // Sandbox and live money never mix (ADR 0005).
+    if (cfg.NODE_ENV === 'production' && !live) throw new Error('Production needs a live Stripe key (sk_live_ or rk_live_)');
+    if (cfg.NODE_ENV !== 'production' && live) throw new Error(`A live Stripe key can only be used in production, not ${cfg.NODE_ENV}`);
+    if (cfg.STRIPE_WEBHOOK_SECRET.some((s) => !s.startsWith('whsec_'))) throw new Error('STRIPE_WEBHOOK_SECRET values start with whsec_');
   }
   return cfg;
 }
