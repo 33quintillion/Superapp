@@ -1,4 +1,6 @@
-import { authed } from '@/lib/session';
+import Link from 'next/link';
+import { api, ApiError } from '@/lib/api';
+import { authed, requireAccessToken } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
 import { NotificationSettings } from './notifications';
 import { SocialSettings } from './social-settings';
@@ -21,7 +23,7 @@ interface Session {
 }
 
 export default async function AccountPage() {
-  const [me, sessions] = await Promise.all([authed<Me>('GET', '/v1/me'), authed<Session[]>('GET', '/v1/sessions')]);
+  const [me, sessions, staff] = await Promise.all([authed<Me>('GET', '/v1/me'), authed<Session[]>('GET', '/v1/sessions'), platformStaff()]);
   return (
     <main className="wide">
       <h1 data-testid="display-name">{me.displayName}</h1>
@@ -59,6 +61,15 @@ export default async function AccountPage() {
       <h2>Notifications</h2>
       <NotificationSettings />
 
+      {staff && (
+        <>
+          <h2>Platform staff</h2>
+          <div className="card" data-testid="staff-access">
+            {staff === 'ok' ? <Link href="/admin">Open the admin dashboard</Link> : <p className="muted">{staff}</p>}
+          </div>
+        </>
+      )}
+
       <h2>Signed-in devices</h2>
       <div className="card" data-testid="sessions">
         {sessions.map((s) => (
@@ -88,4 +99,15 @@ export default async function AccountPage() {
       </form>
     </main>
   );
+}
+
+/** 'ok' for staff who can open the dashboard, the reason for staff who can't yet, null for everyone else. */
+async function platformStaff(): Promise<string | null> {
+  try {
+    await api('GET', '/v1/admin/overview', { accessToken: await requireAccessToken() });
+    return 'ok';
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 403 && e.code !== 'not_platform_staff') return e.message;
+    return null;
+  }
 }

@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-27, Stage 6): API 209 tests passed; web e2e all steps passed, including calls through a real coturn relay; Flutter 20 tests passed and `flutter analyze` clean.
+Last full run (2026-10-27, Stage 7): API 249 tests passed; web e2e all steps passed, including calls through a real coturn relay and the business, admin and integration flow; Flutter 25 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -35,7 +35,7 @@ Last full run (2026-10-27, Stage 6): API 209 tests passed; web e2e all steps pas
 | Profile photo upload | ⬜ | Object storage now exists (Stage 3); avatar endpoint not built yet |
 | Privacy settings (discoverability, who can message, receipts, online) | ✅ | `users.e2e`; enforced in messaging by `messaging.e2e › permissions`, `› receipts` and `realtime.e2e › presence` |
 | Blocking (hides profiles in both directions) | ✅ | `users.e2e › blocking` |
-| Reporting | ✅ (user side) | `users.e2e`; moderation queue is part of the admin dashboard (Stage 7) |
+| Reporting | ✅ | `users.e2e` (user side); moderation queue in `admin.e2e › the report queue` (Stage 7) |
 | Data export | ✅ | `users.e2e › exports…` |
 | Deactivation (reversible by signing in) | ✅ | `users.e2e › deactivation…` |
 | Deletion (immediate PII scrub, tombstone) | ✅ | `users.e2e › deletion…` |
@@ -43,7 +43,7 @@ Last full run (2026-10-27, Stage 6): API 209 tests passed; web e2e all steps pas
 | Phone number sign-up and verification | ⛔ | Needs an SMS provider account and fraud controls |
 | Contacts discovery (opt-in) | ⬜ | Designed for Stage 3; uploading the address book will never be required |
 | Breached-password check | ⬜ | Planned |
-| Admin MFA enforcement | ⬜ | Admin app is Stage 7 |
+| Admin MFA enforcement | ✅ | `admin.e2e › requires two-step verification to be on`, `› requires the session itself to have been opened with a two-step code, recently` (Stage 7) |
 | Localisation framework | 🟡 | `locale` stored per user; UI strings not yet extracted |
 | Web: sign-in, register, two-step, verify, forgot and reset, devices, sign-out | ✅ | `apps/web/e2e/run.mjs` |
 | Mobile: sign-in, register, two-step, profile, sign-out, secure token storage | ✅ (widget tests with HTTP stubbed) | `apps/mobile/test/auth_flow_test.dart` |
@@ -139,7 +139,7 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Flutter: groups, feed, stories, comments, posting, communities | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/social_test.dart` |
 | Flutter: attach photos to posts and photo stories | ⬜ | The app shows a photo count and text; picking photos needs the same file-picker work as chat attachments |
 | Notifications for follows, likes, comments and requests; live feed updates | ⬜ | Feed refreshes on pull; chat push is unaffected |
-| Moderation dashboard for reports | ⬜ | Stage 7 |
+| Moderation dashboard for reports | ✅ | Built in Stage 7: `admin.e2e › the report queue`; web e2e `businessFlow` |
 | Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |
 | Feed performance at scale (fan-out on write, caching) | ⬜ | Fan-out on read today; measure in Stage 9 |
 
@@ -167,5 +167,29 @@ One-to-one voice and video over WebRTC. The API signals and keeps history; media
 | Verified end-to-end encryption of calls (key comparison, SFrame) | ⬜ | Calls use DTLS-SRTP between devices; keys are not verified (see `security-privacy.md`) |
 | Call quality reporting to the server for monitoring | ⬜ | Stage 10 |
 
-## Stages 7 to 10
-Not started. See `plan.md`. Business, payments, subscriptions, mini-apps and the admin dashboard are not implemented, and the apps say so.
+## Stage 7: Business, admin dashboard and integrations
+Business accounts with staff roles, a catalogue with pickup orders, bookings, the admin dashboard with the moderation queue, and the integration catalogue. No money moves yet: orders are pay in person until Stage 8. Details: [`business.md`](business.md), [`admin.md`](admin.md).
+
+| Item | Status | Evidence / blocker |
+| --- | --- | --- |
+| Business accounts: create, profile, opening hours, time zone and currency checks, search, close | ✅ | `business.e2e › business accounts`; web e2e `businessFlow`; Flutter `business_test` |
+| Staff roles (owner, manager, staff): invitations that must be accepted, role matrix, managing only lower roles, ownership hand-over | ✅ | `business.e2e › staff roles` (every kind of change checked against the matrix); `unit › gives each role exactly the permissions in the matrix`, `› lets people manage only roles below their own` |
+| Catalogue: items with prices, availability, optional stock, archiving | ✅ | `business.e2e › shows customers only what they can buy…`, `› refuses orders while ordering is off, and archives items…` |
+| Pickup orders: server-side pricing, stock taken atomically, safe retries, statuses, restock on cancel or reject, live updates to both sides | ✅ | `business.e2e › prices orders from the catalogue…`, `› never sells the last item twice when orders race`, `› moves orders through their statuses…`; web e2e; Flutter `business_test` |
+| Bookings: slots from opening hours in the business's time zone, capacity, no overbooking under races, cancel, outcome | ✅ | `business.e2e › bookings`; web e2e; Flutter `business_test › books a free time…` |
+| Suspended and closed businesses; account deletion hands a business to a manager or closes it; export includes orders, bookings and roles | ✅ | `business.e2e › suspension, closing and account deletion` |
+| Admin dashboard access: platform staff only, two-step on, session opened with a two-step code within 12 hours, admin-only areas | ✅ | `admin.e2e › who can use the admin dashboard`; web e2e (non-staff refused) |
+| Moderation queue: child safety first, claim, subject preview (only the reported message), remove content, dismiss, suspend or restore authors, staff protected | ✅ | `admin.e2e › the report queue` |
+| Admin: verify, suspend and restore businesses; add and remove moderators; audit log of every admin action; overview counts; CLI to grant the first admin | ✅ | `admin.e2e › businesses, staff and the audit log` |
+| Integration catalogue: admin publishes, people connect with only the scopes they tick and can revoke, kill switch, re-review when scopes widen, grants trimmed when they narrow | ✅ | `admin.e2e › integration catalogue and the kill switch`; web e2e |
+| Flutter: browse businesses, order for pickup, book, my orders and bookings | ✅ | `business_test` |
+| Flutter back office for staff (catalogue, orders queue, bookings) | ⬜ | Staff use the web for now |
+| Item photos and viewing reported media in the queue | ⛔ | Needs the media scanning provider (same blocker as chat media) |
+| Online payment for orders and bookings | ⛔ | Stage 8; needs a payment provider account and legal review |
+| Business verification checks (documents, company registry) | ⛔ | Needs a verification provider; admins mark businesses verified by hand today |
+| Partner API for integrations (OAuth, tokens, webhooks) | ⛔ | Needs a partner agreement and terms; the catalogue and grants are in place |
+| Escalation of child-safety reports to NCMEC or IWF | ⛔ | Needs legal and trust-and-safety sign-up |
+| Push notifications to staff for new orders and bookings | ⛔ | Needs the APNs and Firebase accounts from Stage 4; staff get live updates while the page is open |
+
+## Stages 8 to 10
+Not started. See `plan.md`. Payments, subscriptions and the mini-app runtime are not implemented, and the apps say so.

@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { BusinessesService } from '../business/businesses.service';
+import { IntegrationsService } from '../integrations/integrations.service';
 import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
@@ -62,6 +64,8 @@ export class UsersService {
     private readonly posts: PostsService,
     private readonly stories: StoriesService,
     private readonly communities: CommunitiesService,
+    private readonly businesses: BusinessesService,
+    private readonly integrations: IntegrationsService,
   ) {}
 
   async me(userId: string) {
@@ -143,7 +147,7 @@ export class UsersService {
 
   /** Everything we hold about the user that is theirs to take (GDPR Art. 15/20 style export). */
   async exportData(userId: string) {
-    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls] = await Promise.all([
+    const [profile, privacy, sessions, blocks, reports, audit, messages, media, pushDevices, notifications, social, stories, communities, follows, calls, business, integrations] = await Promise.all([
       this.me(userId),
       this.privacy(userId),
       this.db.query('SELECT id, device_name, user_agent, host(ip) AS ip, created_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at', [userId]),
@@ -169,6 +173,8 @@ export class UsersService {
            FROM calls WHERE caller_id = $1 OR callee_id = $1 ORDER BY created_at`,
         [userId],
       ),
+      this.businesses.exportFor(userId),
+      this.integrations.exportFor(userId),
     ]);
     await this.audit.record({ actorId: userId, action: 'account.exported' });
     return {
@@ -194,6 +200,12 @@ export class UsersService {
       follows: follows.rows,
       // Call history (metadata only: call audio and video never reach the server).
       calls: calls.rows,
+      // Businesses you work at, and orders and bookings you made as a customer.
+      businessRoles: business.businessRoles,
+      orders: business.orders,
+      bookings: business.bookings,
+      // Integrations you connected and the scopes you granted.
+      integrations,
     };
   }
 
@@ -221,6 +233,9 @@ export class UsersService {
       const postMedia = await this.posts.scrubUser(userId, tx);
       const storyMedia = await this.stories.scrubUser(userId, tx);
       await this.communities.scrubUser(userId, tx);
+      await this.businesses.scrubUser(userId, tx);
+      await this.db.query('DELETE FROM integration_grants WHERE user_id = $1', [userId], tx);
+      await this.db.query('DELETE FROM platform_staff WHERE user_id = $1', [userId], tx);
       await this.db.query('DELETE FROM follows WHERE follower_id = $1 OR followee_id = $1', [userId], tx);
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),

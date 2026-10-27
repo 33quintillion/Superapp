@@ -538,6 +538,202 @@ async function callsFlow(browser, API, tag, step, turn) {
   for (const p of [dan, fay]) await p.ctx.close();
 }
 
+/** Businesses, orders, bookings, the integration catalogue and the admin dashboard, across five browsers. */
+async function businessFlow(browser, API, tag, step) {
+  const require = createRequire(import.meta.url);
+  const { totp } = require(join(apiDir, 'dist/src/crypto/totp.js'));
+  const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+  const people = {};
+  for (const [i, name] of ['gus', 'hal', 'ivy', 'jo'].entries()) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'business passphrase 654', displayName: name[0].toUpperCase() + name.slice(1) };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i + 70}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    people[name] = { ...u, token: (await r.json()).accessToken };
+  }
+  // Jo is platform staff: two-step on, admin role granted from the command line's code path.
+  const { jo } = people;
+  const auth = { authorization: `Bearer ${jo.token}`, 'content-type': 'application/json' };
+  const { secret } = await (await fetch(`${API}/v1/auth/mfa/setup`, { method: 'POST', headers: auth, body: '{}' })).json();
+  assert((await fetch(`${API}/v1/auth/mfa/confirm`, { method: 'POST', headers: auth, body: JSON.stringify({ code: totp(secret, Date.now() - 30_000) }) })).status === 204, 'admin MFA on');
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  await pool.query(`INSERT INTO platform_staff (user_id, role) SELECT id, 'admin' FROM users WHERE email = $1`, [jo.email]);
+  await pool.end();
+
+  for (const name of ['gus', 'hal', 'ivy', 'jo']) {
+    const ctx = await browser.newContext({ timezoneId: 'UTC' });
+    const page = await ctx.newPage();
+    page.on('dialog', (d) => d.accept(d.type() === 'prompt' ? 'Under investigation' : undefined));
+    if (process.env.E2E_DEBUG) page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', people[name].email);
+    await page.fill('input[name=password]', people[name].password);
+    await page.click('button[type=submit]');
+    if (name === 'jo') {
+      await page.waitForURL(`${WEB}/sign-in/mfa`);
+      await page.fill('input[name=code]', totp(secret));
+      await page.click('button[type=submit]');
+    }
+    await page.waitForURL(`${WEB}/account`);
+    Object.assign(people[name], { ctx, page });
+  }
+  const { gus, hal, ivy } = people;
+  const handle = `bakery-${tag}`;
+
+  // Gus opens a bakery.
+  await gus.page.goto(`${WEB}/business`);
+  await gus.page.click('text=Add your business');
+  await gus.page.fill('[data-testid=create-business] input[name=name]', 'Sunrise Bakery');
+  await gus.page.fill('[data-testid=create-business] input[name=handle]', handle);
+  await gus.page.fill('[data-testid=create-business] input[name=currency]', 'EUR');
+  await gus.page.fill('[data-testid=create-business] input[name=timeZone]', 'UTC');
+  await gus.page.click('[data-testid=create-business] button[type=submit]');
+  await gus.page.waitForURL(`${WEB}/business/${handle}`);
+  await gus.page.waitForSelector('[data-testid=my-role]:has-text("owner")');
+  await gus.page.click('role=tab[name="Settings"]');
+  await gus.page.click('input[name=ordersEnabled]');
+  await gus.page.waitForFunction(() => document.querySelector('input[name=ordersEnabled]')?.checked);
+  await gus.page.click('input[name=bookingsEnabled]');
+  await gus.page.waitForFunction(() => document.querySelector('input[name=bookingsEnabled]')?.checked);
+  await gus.page.click('role=tab[name="Catalogue"]');
+  for (const [name, price, stock] of [['Sourdough', '4.50', '10'], ['Croissant', '1.80', '']]) {
+    await gus.page.fill('[data-testid=add-item] input[name=name]', name);
+    await gus.page.fill('[data-testid=add-item] input[name=price]', price);
+    await gus.page.fill('[data-testid=add-item] input[name=stock]', stock);
+    await gus.page.click('[data-testid=add-item] button[type=submit]');
+    await gus.page.waitForSelector(`[data-testid=catalogue-item]:has-text("${name}")`);
+  }
+  await gus.page.click('role=tab[name="Services and hours"]');
+  await gus.page.fill('[data-testid=add-service] input[name=name]', 'Cake tasting');
+  await gus.page.fill('[data-testid=add-service] input[name=duration]', '60');
+  await gus.page.click('[data-testid=add-service] button[type=submit]');
+  await gus.page.waitForSelector('[data-testid=service]:has-text("Cake tasting")');
+  await gus.page.click('text=Add opening time');
+  const tomorrowDay = new Date(Date.now() + 86400_000).getUTCDay();
+  await gus.page.selectOption('[data-testid=hours-row] select', String(tomorrowDay));
+  await gus.page.click('[data-testid=save-hours]');
+  await gus.page.waitForSelector('[data-testid=hours-saved]');
+  step('owner creates a business, turns on orders and bookings, adds items, a service and opening hours');
+
+  // Hal is invited as staff and only gets the tabs staff may use.
+  await gus.page.click('role=tab[name="Staff"]');
+  await gus.page.fill('[data-testid=invite-staff] input[name=username]', hal.username);
+  await gus.page.click('[data-testid=invite-staff] button[type=submit]');
+  await gus.page.waitForSelector('[data-testid=staff-member]:has-text("Invited")');
+  await hal.page.goto(`${WEB}/business`);
+  await hal.page.click('[data-testid=business-invite] button:has-text("Accept")');
+  await hal.page.click(`[data-testid=business-row][href="/business/${handle}"]`);
+  await hal.page.waitForSelector('[data-testid=my-role]:has-text("staff")');
+  const halTabs = await hal.page.locator('role=tab').allTextContents();
+  assert(JSON.stringify(halTabs) === JSON.stringify(['Orders', 'Bookings', 'Staff']), `staff tabs ${halTabs}`);
+  assert((await hal.page.locator('[data-testid=invite-staff]').count()) === 0 || !(await hal.page.isVisible('[data-testid=invite-staff]')), 'staff cannot invite');
+  const forbidden = await hal.page.evaluate(async (id) => (await fetch(`/api/chat/businesses/${id}/items`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', priceMinor: 1 }) })).status,
+    await gus.page.evaluate(async (h) => (await (await fetch(`/api/chat/businesses/${h}`)).json()).id, handle));
+  assert(forbidden === 403, `staff adding an item is refused (${forbidden})`);
+  step('invited staff accept, see only orders, bookings and staff, and are refused catalogue changes');
+
+  // Ivy finds the bakery, orders and books.
+  await ivy.page.goto(`${WEB}/business`);
+  await ivy.page.fill('input[name=businessSearch]', 'Sunrise');
+  await ivy.page.click('form.composer-row button');
+  await ivy.page.click(`[data-testid=business-results] a[href="/b/${handle}"]`);
+  await ivy.page.waitForURL(`${WEB}/b/${handle}`);
+  await ivy.page.click('[aria-label="Add Sourdough"]');
+  await ivy.page.click('[aria-label="Add Sourdough"]');
+  await ivy.page.click('[aria-label="Add Croissant"]');
+  assert((await ivy.page.textContent('[data-testid=basket-total]')) === '€10.80', `basket total ${await ivy.page.textContent('[data-testid=basket-total]')}`);
+  await ivy.page.fill('[data-testid=basket] input[name=note]', 'Sliced please');
+  await ivy.page.click('[data-testid=basket] button[type=submit]');
+  await ivy.page.waitForSelector('[data-testid=order-placed]:has-text("Waiting for the business")');
+  await ivy.page.waitForSelector('[data-testid=slot]');
+  const firstSlot = await ivy.page.locator('[data-testid=slot]').first().textContent();
+  assert(firstSlot === '09:00', `first slot ${firstSlot}`);
+  await ivy.page.locator('[data-testid=slot]').first().click();
+  await ivy.page.waitForSelector('[data-testid=booked]:has-text("Cake tasting")');
+  await ivy.page.waitForFunction(() => document.querySelector('[data-testid=slot]')?.textContent === '10:00');
+  step('customer finds the business, orders for pickup with the right total, and books the 09:00 slot, which then disappears');
+
+  // Hal works the order through to collection.
+  await hal.page.reload();
+  await hal.page.waitForSelector('[data-testid=order]:has-text("Sliced please")');
+  for (const label of ['Accept', 'Mark ready', 'Collected']) {
+    await hal.page.click(`[data-testid=order] button:has-text("${label}")`);
+    if (label !== 'Collected') await hal.page.waitForSelector(`[data-testid=order] button:has-text("${label === 'Accept' ? 'Mark ready' : 'Collected'}")`);
+  }
+  await hal.page.waitForSelector('[data-testid=orders-tab] >> text=No orders here.');
+  await hal.page.click('role=tab[name="Bookings"]');
+  await hal.page.waitForSelector('[data-testid=business-booking]:has-text("Cake tasting")');
+  step('staff accept, ready and complete the order, and see the booking');
+
+  await ivy.page.goto(`${WEB}/orders`);
+  await ivy.page.waitForSelector('[data-testid=my-order][data-status=completed]:has-text("Collected")');
+  await ivy.page.click('[data-testid=my-booking] button:has-text("Cancel")');
+  await ivy.page.waitForSelector('[data-testid=my-booking][data-status=cancelled]');
+  step('customer sees the order collected, and cancels the booking');
+
+  // Ivy reports the bakery; Jo works the report in the admin dashboard.
+  await ivy.page.goto(`${WEB}/b/${handle}`);
+  await ivy.page.click('text=Report this business');
+  await ivy.page.fill('input[name=details]', 'Took my money, no bread');
+  await ivy.page.click('text=Send report');
+  await ivy.page.waitForSelector('text=Thanks, our team will look at it.');
+  const ivyAdmin = await ivy.page.goto(`${WEB}/admin`);
+  assert(ivyAdmin.status() === 200, 'admin page renders');
+  await ivy.page.waitForSelector('[data-testid=admin-refused][data-code=not_platform_staff]');
+  await jo.page.goto(`${WEB}/account`);
+  await jo.page.click('[data-testid=staff-access] >> text=Open the admin dashboard');
+  await jo.page.waitForSelector('[data-testid=admin-overview]:has-text("You: admin")');
+  await jo.page.click('[data-testid=report-row][data-subject=business]:has-text("Took my money")');
+  await jo.page.waitForSelector('[data-testid=subject]:has-text("Sunrise Bakery")');
+  await jo.page.fill('input[name=resolutionNote]', 'Fraud reports');
+  await jo.page.click('[data-testid=remove-content]');
+  await jo.page.waitForSelector('[data-testid=report-detail][data-status=actioned]');
+  const gone = await ivy.page.goto(`${WEB}/b/${handle}`);
+  assert(gone.status() === 404, `suspended business hidden (${gone.status()})`);
+  await gus.page.reload();
+  await gus.page.waitForSelector('[data-testid=suspended]:has-text("Fraud reports")');
+  step('non-staff are refused the admin dashboard; an admin signed in with two-step suspends the reported business, which customers can no longer see');
+
+  await jo.page.click('role=tab[name="Audit log"]');
+  await jo.page.waitForSelector('[data-testid=audit-entry][data-action="admin.report.actioned"]');
+  await jo.page.click('role=tab[name="Businesses"]');
+  await jo.page.click(`[data-testid=admin-business][data-handle="${handle}"] button:has-text("Restore")`);
+  await jo.page.waitForSelector(`[data-testid=admin-business][data-handle="${handle}"][data-state=active]`);
+  step('the audit log shows the action, and the admin restores the business');
+
+  // The integration catalogue and its kill switch.
+  await jo.page.click('role=tab[name="Integrations"]');
+  const slug = `tickets-${tag}`;
+  await jo.page.fill('[data-testid=new-integration] input[name=name]', 'City Tickets');
+  await jo.page.fill('[data-testid=new-integration] input[name=slug]', slug);
+  await jo.page.fill('[data-testid=new-integration] input[name=developerName]', 'Tickets Ltd');
+  await jo.page.fill('[data-testid=new-integration] input[name=developerContact]', 'dev@tickets.test');
+  await jo.page.fill('[data-testid=new-integration] input[name=homepageUrl]', 'https://tickets.test');
+  await jo.page.check('[data-testid=new-integration] input[value="profile.basic"]');
+  await jo.page.check('[data-testid=new-integration] input[value="email"]');
+  await jo.page.click('[data-testid=new-integration] button[type=submit]');
+  await jo.page.click(`[data-testid=admin-integration][data-slug="${slug}"] button:has-text("Approve and publish")`);
+  await jo.page.waitForSelector(`[data-testid=admin-integration][data-slug="${slug}"][data-state=live]`);
+  await ivy.page.goto(`${WEB}/apps`);
+  await ivy.page.click('[data-testid=catalogue-app]:has-text("City Tickets") button:has-text("Connect")');
+  await ivy.page.uncheck('[data-testid=consent] input[value=email]');
+  await ivy.page.click('[data-testid=consent] button[type=submit]');
+  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("City Tickets")');
+  const shown = await ivy.page.textContent('[data-testid=connected-app]');
+  assert(shown.includes('display name') && !shown.includes('email'), `granted scopes shown: ${shown}`);
+  await jo.page.click(`[data-testid=admin-integration][data-slug="${slug}"] [data-testid=kill-switch]`);
+  await jo.page.waitForSelector(`[data-testid=admin-integration][data-slug="${slug}"][data-state=disabled]`);
+  await ivy.page.reload();
+  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("Paused by Nexa")');
+  assert((await ivy.page.locator('[data-testid=catalogue-app]:has-text("City Tickets")').count()) === 0, 'switched-off integration leaves the catalogue');
+  step('an admin publishes an integration, a person connects it with only the scopes they tick, and the kill switch pauses it');
+
+  for (const p of Object.values(people)) await p.ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
 let browser;
 let failed = false;
@@ -566,10 +762,14 @@ try {
   const pw1 = 'first passphrase 123', pw2 = 'second passphrase 456';
   const step = (s) => console.log(`  ✓ ${s}`);
 
-  // E2E_ONLY=calls runs just the calls flow, for quicker iteration on it.
+  // E2E_ONLY=calls or E2E_ONLY=business runs just that flow, for quicker iteration on it.
   all: {
     if (process.env.E2E_ONLY === 'calls') {
       await callsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step, turn);
+      break all;
+    }
+    if (process.env.E2E_ONLY === 'business') {
+      await businessFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step);
       break all;
     }
 
@@ -671,6 +871,7 @@ try {
 
   await chatFlow(browser, API, tag, step);
   await socialFlow(browser, API, tag, step);
+  await businessFlow(browser, API, tag, step);
   // Last: it stops the TURN relay to test a failed connection.
   await callsFlow(browser, API, tag, step, turn);
   }

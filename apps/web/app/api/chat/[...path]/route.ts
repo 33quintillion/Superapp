@@ -6,10 +6,13 @@ import { forwardToApi } from '@/lib/api';
 /**
  * The browser screens' only way to reach the API. It attaches the access token from the
  * httpOnly cookie, so browser code still never holds a token. Only the messaging, social
- * notification and call endpoints below can be reached through it (account export, deletion
- * and security settings stay server-side), and writes must come from this site.
+ * notification, call, business, integration and admin endpoints below can be reached through
+ * it (account export, deletion and security settings stay server-side), and writes must come
+ * from this site. The admin endpoints still check platform staff and two-step in the API.
  */
 const ID = '[0-9a-f-]{36}';
+const HANDLE = '[a-z0-9][a-z0-9_-]{2,39}';
+const REF = `(${ID}|${HANDLE})`;
 const ALLOWED: [string, RegExp][] = [
   ['GET', /^conversations(\/[0-9a-f-]{36}(\/(messages|changes|pins))?)?$/],
   ['POST', /^conversations\/direct$/],
@@ -78,6 +81,37 @@ const ALLOWED: [string, RegExp][] = [
   ['GET', new RegExp(`^communities/${ID}/(members|posts)$`)],
   ['PATCH', new RegExp(`^communities/${ID}/members/${ID}$`)],
   ['DELETE', new RegExp(`^communities/${ID}/members/${ID}$`)],
+  // Businesses: profile, staff, catalogue, services and hours.
+  ['GET', /^(businesses|me\/businesses)$/],
+  ['POST', /^businesses$/],
+  ['GET', new RegExp(`^businesses/${REF}(/(hours|items|services|staff|orders|bookings))?$`)],
+  ['GET', new RegExp(`^businesses/${REF}/services/${ID}/slots$`)],
+  ['PATCH', new RegExp(`^businesses/${ID}$`)],
+  ['DELETE', new RegExp(`^businesses/${ID}$`)],
+  ['PUT', new RegExp(`^businesses/${ID}/hours$`)],
+  ['POST', new RegExp(`^businesses/${ID}/(staff|staff/accept|transfer|items|services)$`)],
+  ['PATCH', new RegExp(`^businesses/${ID}/(staff|items|services)/${ID}$`)],
+  ['DELETE', new RegExp(`^businesses/${ID}/(staff|items|services)/${ID}$`)],
+  // Orders and bookings.
+  ['POST', new RegExp(`^businesses/${REF}/(orders|bookings)$`)],
+  ['GET', new RegExp(`^(orders|bookings)(/${ID})?$`)],
+  ['POST', new RegExp(`^orders/${ID}/(cancel|status)$`)],
+  ['POST', new RegExp(`^bookings/${ID}/(cancel|outcome)$`)],
+  // Integration catalogue.
+  ['GET', new RegExp(`^integrations(/${HANDLE})?$`)],
+  ['PUT', new RegExp(`^integrations/${HANDLE}/connection$`)],
+  ['DELETE', new RegExp(`^integrations/${HANDLE}/connection$`)],
+  ['GET', /^me\/integrations$/],
+  // Admin dashboard.
+  ['GET', new RegExp(`^admin/(overview|reports|users|businesses|integrations|staff|audit)$`)],
+  ['GET', new RegExp(`^admin/reports/${ID}$`)],
+  ['POST', new RegExp(`^admin/reports/${ID}/(claim|resolve)$`)],
+  ['POST', new RegExp(`^admin/users/${ID}/(suspend|unsuspend)$`)],
+  ['POST', new RegExp(`^admin/businesses/${ID}/actions$`)],
+  ['POST', /^admin\/(integrations|staff)$/],
+  ['PATCH', new RegExp(`^admin/integrations/${ID}$`)],
+  ['POST', new RegExp(`^admin/integrations/${ID}/state$`)],
+  ['DELETE', new RegExp(`^admin/staff/${ID}$`)],
 ];
 
 async function handle(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {

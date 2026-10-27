@@ -9,6 +9,7 @@ import '../calls/call_engine.dart';
 import '../chat/chat_controller.dart';
 import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
+import 'business_screens.dart';
 import 'call_screens.dart';
 import 'chat_screens.dart';
 import 'social_screens.dart';
@@ -228,6 +229,14 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Communities'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommunitiesScreen(auth: auth))),
+          ),
+          ListTile(
+            key: const Key('open-businesses'),
+            leading: const Icon(Icons.storefront_outlined),
+            title: const Text('Businesses'),
+            subtitle: const Text('Order for pickup and book appointments'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BusinessesScreen(auth: auth))),
           ),
           ListTile(
             key: const Key('open-calls'),

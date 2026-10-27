@@ -33,7 +33,7 @@ Sent emails show up in Mailpit at http://localhost:8025. To work without Docker,
 ## Tests
 
 ```bash
-pnpm --filter @nexa/api test        # 184 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
+pnpm --filter @nexa/api test        # 249 tests, real Postgres + Redis + S3 (SeaweedFS in CI) (database superapp_test)
 pnpm --filter @nexa/web test        # cookie/secret-exposure guards
 pnpm --filter @nexa/web test:e2e    # Chromium → Next → API → Postgres/Redis/SMTP/S3, including two people chatting (needs both apps built)
 pnpm --filter @nexa/design-tokens test
@@ -49,4 +49,5 @@ CI (`.github/workflows/ci.yml`) runs all of these on every pull request.
 - [Risks](docs/risks.md)
 - [Security and privacy](docs/security-privacy.md)
 - [API reference](docs/api.md), [messaging sync and realtime protocol](docs/realtime.md) and [push notifications](docs/push.md)
+- [Businesses, orders and bookings](docs/business.md) and the [admin dashboard](docs/admin.md)
 - [Local development](docs/local-dev.md)
