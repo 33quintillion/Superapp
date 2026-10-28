@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../auth/auth_controller.dart';
 import '../calls/call_controller.dart';
+import '../media/media.dart';
 import 'chat_models.dart';
 import 'outbox_store.dart';
 import 'realtime.dart';
@@ -194,13 +195,33 @@ class ChatController extends ChangeNotifier {
     await _send(cid, {'kind': 'text', 'body': body});
   }
 
+  /// Uploads a photo or voice note, then sends it like any other message. The upload itself
+  /// isn't kept across restarts; once it is done the message is.
+  Future<void> sendMedia(String cid, LocalMedia file, {required String kind, String caption = ''}) async {
+    final media = await uploadMedia(auth, file, kind: kind);
+    await _send(cid, {'kind': kind, 'body': caption.trim(), 'media': media});
+  }
+
   Future<void> retry(ChatMessage m) async {
     _messages[m.conversationId]?.removeWhere((x) => x.id == m.id);
-    await _send(m.conversationId, {'kind': m.kind, 'body': m.body ?? ''});
+    final media = m.media;
+    await _send(m.conversationId, {
+      'kind': m.kind,
+      'body': m.body ?? '',
+      if (media != null)
+        'media': {'id': media.id, 'kind': media.kind, 'contentType': media.contentType, 'byteSize': media.byteSize, 'fileName': media.fileName, 'durationMs': media.durationMs},
+    });
   }
 
   Future<void> _send(String cid, Map<String, dynamic> content) async {
-    final e = OutboxEntry(conversationId: cid, clientId: newClientId(), kind: content['kind'] as String, body: content['body'] as String?, createdAt: DateTime.now());
+    final e = OutboxEntry(
+      conversationId: cid,
+      clientId: newClientId(),
+      kind: content['kind'] as String,
+      body: content['body'] as String?,
+      createdAt: DateTime.now(),
+      media: content['media'] as Map<String, dynamic>?,
+    );
     _unsent.add(e);
     _persist();
     await _deliver(e);
@@ -219,13 +240,14 @@ class ChatController extends ChangeNotifier {
       clientId: e.clientId,
       kind: e.kind,
       body: e.body,
+      media: e.media == null ? null : ChatMedia.fromJson(e.media!),
       createdAt: e.createdAt,
       pending: Pending.sending,
     );
     _upsert(cid, [local]);
     notifyListeners();
     try {
-      final ack = await rt.send(cid, {'clientId': e.clientId, 'kind': e.kind, if (e.body != null) 'body': e.body});
+      final ack = await rt.send(cid, {'clientId': e.clientId, 'kind': e.kind, if (e.body != null) 'body': e.body, if (e.media != null) 'mediaId': e.media!['id']});
       _upsert(cid, [ChatMessage.fromJson(ack['message'] as Map<String, dynamic>)]);
     } on SendRejected catch (err) {
       lastError = err.message;

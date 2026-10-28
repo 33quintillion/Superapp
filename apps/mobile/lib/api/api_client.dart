@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -55,5 +56,19 @@ class ApiClient {
       throw ApiException(res.statusCode, err?['code'] as String? ?? 'http_error', err?['message'] as String? ?? 'Request failed');
     }
     return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  /// Uploads to a presigned storage URL. No access token: the URL itself grants the upload.
+  Future<void> putBytes(Uri url, Uint8List bytes, {Map<String, String> headers = const {}}) async {
+    final req = http.Request('PUT', url)
+      ..headers.addAll(headers)
+      ..bodyBytes = bytes;
+    final http.Response res;
+    try {
+      res = await http.Response.fromStream(await _http.send(req).timeout(const Duration(minutes: 2)));
+    } on Exception {
+      throw ApiException(0, 'network_error', 'The upload didn’t go through. Check your connection and try again.');
+    }
+    if (res.statusCode >= 300) throw ApiException(res.statusCode, 'upload_failed', 'The upload didn’t go through. Try again.');
   }
 }

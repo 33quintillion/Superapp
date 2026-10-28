@@ -6,7 +6,9 @@ import '../api/api_client.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_models.dart';
 import '../chat/realtime.dart';
+import '../media/media.dart';
 import '../theme/tokens.g.dart';
+import 'business_screens.dart' show openInBrowser;
 import 'call_screens.dart';
 
 class ChatListScreen extends StatelessWidget {
@@ -139,6 +141,8 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _text = TextEditingController();
+  VoiceRecording? _recording;
+  bool _busy = false;
   Timer? _idle;
 
   ChatController get chat => widget.chat;
@@ -156,6 +160,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     chat.close(cid);
     _idle?.cancel();
+    unawaited(_recording?.cancel());
     _text.dispose();
     super.dispose();
   }
@@ -173,6 +178,54 @@ class _ChatScreenState extends State<ChatScreen> {
     _idle?.cancel();
     chat.typing(cid, false);
     await chat.sendText(cid, t);
+  }
+
+  Future<void> _upload(Future<void> Function() work) async {
+    setState(() => _busy = true);
+    try {
+      await work();
+    } on Exception catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(uploadError(e))));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _sendPhoto() => _upload(() async {
+        final picked = await MediaDevices.instance.pickPhotos();
+        if (picked.isEmpty) return;
+        await chat.sendMedia(cid, picked.single, kind: 'image', caption: _text.text);
+        _text.clear();
+      });
+
+  Future<void> _startVoice() async {
+    try {
+      final r = await MediaDevices.instance.startVoice();
+      if (r == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Allow the microphone in your phone’s settings to record voice notes.')));
+        return;
+      }
+      if (mounted) setState(() => _recording = r);
+    } on Exception catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(uploadError(e))));
+    }
+  }
+
+  Future<void> _cancelVoice() async {
+    final r = _recording;
+    setState(() => _recording = null);
+    await r?.cancel();
+  }
+
+  Future<void> _sendVoice() async {
+    final r = _recording;
+    setState(() => _recording = null);
+    if (r == null) return;
+    await _upload(() async {
+      final note = await r.stop();
+      if (note == null) return;
+      await chat.sendMedia(cid, note, kind: 'voice');
+    });
   }
 
   @override
@@ -260,7 +313,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 top: false,
                 child: Padding(
                   padding: const EdgeInsets.all(NexaSpace.sm),
-                  child: Row(children: [
+                  child: _recording != null
+                      ? Row(key: const Key('recording'), children: [
+                          const Icon(Icons.fiber_manual_record, color: Colors.red),
+                          const SizedBox(width: NexaSpace.sm),
+                          const Expanded(child: Text('Recording a voice note…')),
+                          TextButton(key: const Key('cancel-voice'), onPressed: _cancelVoice, child: const Text('Cancel')),
+                          IconButton(key: const Key('send-voice'), tooltip: 'Send voice note', icon: const Icon(Icons.send), onPressed: _sendVoice),
+                        ])
+                      : Row(children: [
+                    IconButton(key: const Key('attach-photo'), tooltip: 'Send a photo', icon: const Icon(Icons.photo_outlined), onPressed: _busy ? null : _sendPhoto),
                     Expanded(
                       child: TextField(
                         key: const Key('composer'),
@@ -271,6 +333,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         decoration: const InputDecoration(hintText: 'Message', counterText: ''),
                       ),
                     ),
+                    if (_busy)
+                      const Padding(padding: EdgeInsets.all(NexaSpace.md), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+                    else
+                      IconButton(key: const Key('record-voice'), tooltip: 'Record a voice note', icon: const Icon(Icons.mic_none), onPressed: _startVoice),
                     IconButton(key: const Key('send'), tooltip: 'Send', icon: const Icon(Icons.send), onPressed: _submit),
                   ]),
                 ),
@@ -409,14 +475,29 @@ class _MediaViewState extends State<_MediaView> {
     if (m.kind == 'image') {
       return _url == null
           ? const SizedBox(width: 160, height: 120, child: Center(child: CircularProgressIndicator()))
-          : ClipRRect(borderRadius: BorderRadius.circular(NexaRadius.md), child: Image.network(_url!, width: 220, fit: BoxFit.cover));
+          : ClipRRect(borderRadius: BorderRadius.circular(NexaRadius.md), child: Image.network(_url!, width: 220, fit: BoxFit.cover, semanticLabel: 'Photo', errorBuilder: (_, _, _) => const SizedBox(width: 160, height: 48, child: Center(child: Text('Photo not available')))));
     }
     final label = m.kind == 'voice' ? 'Voice note${m.durationMs == null ? '' : ' (${(m.durationMs! / 1000).round()}s)'}' : (m.fileName.isEmpty ? m.kind : m.fileName);
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(m.kind == 'voice' || m.kind == 'audio' ? Icons.mic_none : Icons.insert_drive_file_outlined),
-      const SizedBox(width: NexaSpace.xs),
-      Flexible(child: Text(label)),
-    ]);
+    // Voice notes and files open in the phone's own player or viewer, from a short-lived link.
+    return InkWell(
+      key: Key('open-media-${m.id}'),
+      onTap: () async {
+        try {
+          final r = await widget.chat.auth.authed('GET', '/v1/media/${m.id}');
+          await openInBrowser(Uri.parse(r!['url'] as String));
+        } on Exception catch (e) {
+          if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(uploadError(e))));
+        }
+      },
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(m.kind == 'voice' || m.kind == 'audio' ? Icons.play_circle_outline : Icons.insert_drive_file_outlined),
+          const SizedBox(width: NexaSpace.xs),
+          Flexible(child: Text(label)),
+        ]),
+      ),
+    );
   }
 }
 

@@ -10,8 +10,10 @@ import 'package:nexa/auth/auth_controller.dart';
 import 'package:nexa/auth/session_store.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
+import 'package:nexa/media/media.dart';
 
 import 'a11y_helpers.dart';
+import 'media_fakes.dart';
 
 // As in chat_test, only the HTTP and socket boundary is faked: the controllers and screens
 // are the real code, and every request they make is checked against what the API expects.
@@ -25,10 +27,13 @@ class FakeApi {
   final bodies = <String, Map<String, dynamic>>{};
   final sockets = <FakeSocket>[];
   final handlers = <String, http.Response Function(http.Request)>{};
+  final media = FakeMedia();
 
   late final http.Client client = MockClient((req) async {
     final key = '${req.method} ${req.url.path}';
     calls.add('$key${req.url.hasQuery ? '?${req.url.query}' : ''}');
+    final m = media.handle(req);
+    if (m != null) return m;
     if (req.body.isNotEmpty) bodies[key] = jsonDecode(req.body) as Map<String, dynamic>;
     if (req.url.path == '/v1/auth/refresh') {
       return json(200, {'accessToken': 'a1', 'refreshToken': 'r1', 'sessionId': 's', 'expiresIn': 900});
@@ -324,6 +329,85 @@ void main() {
     expect(find.text('hello followers'), findsOneWidget);
     expect(find.byKey(const Key('delete-p2')), findsOneWidget); // your own post: delete, not report
 
+    await closeApp(tester);
+  });
+
+  testWidgets('photos: a post with several photos (one removed, no re-upload on retry), a photo story, and both shown', (tester) async {
+    final api = FakeApi();
+    final devices = FakeDevices()
+      ..photos.add([
+        LocalMedia(bytes: jpeg, fileName: 'a.jpg', contentType: 'image/jpeg'),
+        LocalMedia(bytes: png, fileName: 'b.png', contentType: 'image/png'),
+        LocalMedia(bytes: jpeg, fileName: 'c.jpg', contentType: 'image/jpeg'),
+      ])
+      ..photos.add([LocalMedia(bytes: jpeg, fileName: 'story.jpg', contentType: 'image/jpeg')]);
+    MediaDevices.instance = devices;
+    addTearDown(() => MediaDevices.instance = PlatformMediaDevices());
+    final posts = <Map<String, dynamic>>[];
+    final stories = <Map<String, dynamic>>[];
+    var postAttempts = 0;
+    api.on('GET /v1/conversations', (_) => json(200, {'conversations': <Object>[], 'nextCursor': null}));
+    api.on('GET /v1/stories', (_) => json(200, {
+          'groups': [
+            if (stories.isNotEmpty) {'author': user('me', 'Ada'), 'allViewed': true, 'stories': stories},
+          ],
+        }));
+    api.on('GET /v1/feed', (_) => json(200, {'posts': posts, 'nextCursor': null}));
+    api.on('POST /v1/posts', (req) {
+      postAttempts += 1;
+      if (postAttempts == 1) return json(503, {'error': {'code': 'unavailable', 'message': 'Try again'}});
+      final b = jsonDecode(req.body) as Map<String, dynamic>;
+      final p = {
+        'id': 'p9', 'author': user('me', 'Ada'), 'community': null, 'audience': b['audience'], 'body': b['body'], //
+        'media': [for (final id in b['mediaIds'] as List) api.media.created[id]],
+        'likeCount': 0, 'commentCount': 0, 'liked': false, 'createdAt': '2026-10-26T09:00:00.000Z', 'editedAt': null, 'removed': null, 'shared': null,
+      };
+      posts.insert(0, p);
+      return json(201, {'post': p, 'duplicate': false});
+    });
+    api.on('POST /v1/stories', (req) {
+      final b = jsonDecode(req.body) as Map<String, dynamic>;
+      stories.add({
+        'id': 's9', 'author': user('me', 'Ada'), 'kind': b['kind'], 'body': '', 'background': '#3D5AFE', 'audience': 'followers', //
+        'media': api.media.created[b['mediaId']], 'createdAt': '2026-10-26T09:00:00.000Z', 'expiresAt': '2026-10-27T09:00:00.000Z', 'viewed': true, 'viewCount': 0,
+      });
+      return json(201, stories.last);
+    });
+
+    await openApp(tester, api);
+    await tester.tap(find.byKey(const Key('open-feed')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('compose-post')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-photos')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add more photos (3 of 10)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('remove-photo-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add more photos (2 of 10)'), findsOneWidget);
+
+    // A post with photos and no text is allowed. The first attempt fails after the uploads.
+    await tester.tap(find.byKey(const Key('publish-post')));
+    await tester.pumpAndSettle();
+    expect(find.text('Try again'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('publish-post')));
+    await tester.pumpAndSettle();
+    expect(api.calls.where((c) => c == 'POST /v1/media/uploads'), hasLength(2));
+    expect(api.bodies['POST /v1/posts'], containsPair('mediaIds', ['md1', 'md2']));
+    expect(api.media.stored.keys, ['md1', 'md2']);
+    // The new post shows both photos.
+    expect(find.byKey(const Key('photos-p9')), findsOneWidget);
+    expect(api.calls, containsAll(['GET /v1/media/md1', 'GET /v1/media/md2']));
+
+    await tester.tap(find.byTooltip('Add to your story'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-story')));
+    await tester.pumpAndSettle();
+    expect(api.bodies['POST /v1/stories'], {'kind': 'image', 'mediaId': 'md3'});
+    await tester.tap(find.byKey(const Key('story-me')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('story-photo-s9')), findsOneWidget);
+    expect(api.calls, contains('GET /v1/media/md3'));
     await closeApp(tester);
   });
 

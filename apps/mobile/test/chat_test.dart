@@ -12,8 +12,10 @@ import 'package:nexa/chat/chat_controller.dart';
 import 'package:nexa/chat/outbox_store.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
+import 'package:nexa/media/media.dart';
 
 import 'a11y_helpers.dart';
+import 'media_fakes.dart';
 
 // The API is faked at the HTTP and socket boundary only. The chat controller, the
 // realtime connection (outbox, reconnects, resync) and the widgets are the real code.
@@ -31,7 +33,9 @@ class FakeServer {
   String validToken = 'a1';
   int refreshes = 0;
 
-  Map<String, dynamic> store(String sender, String clientId, String body) {
+  final media = FakeMedia();
+
+  Map<String, dynamic> store(String sender, String clientId, String body, {String kind = 'text', String? mediaId}) {
     final dup = messages.where((m) => m['senderId'] == sender && m['clientId'] == clientId).firstOrNull;
     if (dup != null) return {'message': dup, 'duplicate': true};
     seq += 1;
@@ -42,9 +46,9 @@ class FakeServer {
       'changeSeq': seq,
       'senderId': sender,
       'clientId': clientId,
-      'kind': 'text',
+      'kind': kind,
       'body': body,
-      'media': null,
+      'media': mediaId == null ? null : media.created[mediaId],
       'replyTo': null,
       'forwarded': false,
       'mentions': <String>[],
@@ -84,6 +88,8 @@ class FakeServer {
       refreshes += 1;
       return json(200, {'accessToken': validToken, 'refreshToken': 'r$refreshes', 'sessionId': 's', 'expiresIn': 900});
     }
+    final m = media.handle(req);
+    if (m != null) return m;
     if (req.headers['authorization'] != 'Bearer $validToken') return json(401, {'error': {'code': 'unauthorized', 'message': 'expired'}});
     switch ((req.method, path)) {
       case ('GET', '/v1/me'):
@@ -146,7 +152,7 @@ class FakeSocket implements RealtimeSocket {
     sent.add(f);
     if (f['type'] == 'send' && answers) {
       final msg = f['message'] as Map<String, dynamic>;
-      final r = server.store('me', msg['clientId'] as String, msg['body'] as String);
+      final r = server.store('me', msg['clientId'] as String, msg['body'] as String? ?? '', kind: msg['kind'] as String? ?? 'text', mediaId: msg['mediaId'] as String?);
       push({'type': 'ack', 'ref': f['ref'], 'data': r});
       if (r['duplicate'] == false) push({'type': 'message.created', 'data': r['message']});
     }
@@ -228,6 +234,55 @@ void main() {
     expect(find.text('👍'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 7)); // let the typing indicator timer run out
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('sends a photo with a caption and records a voice note; a refused microphone is explained', (tester) async {
+    final server = FakeServer();
+    final devices = FakeDevices()..photos.add([LocalMedia(bytes: jpeg, fileName: 'IMG_1.jpg', contentType: 'image/jpeg')]);
+    MediaDevices.instance = devices;
+    addTearDown(() => MediaDevices.instance = PlatformMediaDevices());
+    final auth = await signedIn(server);
+    await tester.pumpWidget(NexaApp(auth: auth, connectSocket: server.connect));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open-chats')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('conv-ben')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('composer')), 'the view');
+    await tester.tap(find.byKey(const Key('attach-photo')));
+    await tester.pumpAndSettle();
+    // Uploaded to storage with the presigned URL, checked by the API, then sent by id.
+    expect(server.media.stored['md1'], jpeg);
+    expect(server.calls, containsAllInOrder(['POST /v1/media/uploads', 'POST /v1/media/md1/complete']));
+    final photo = server.sockets.single.sent.lastWhere((f) => f['type'] == 'send')['message'] as Map;
+    expect(photo, {'clientId': isA<String>(), 'kind': 'image', 'body': 'the view', 'mediaId': 'md1'});
+    expect(find.byKey(const Key('composer')).evaluate().single.widget, isA<TextField>().having((t) => t.controller!.text, 'text', ''));
+
+    await tester.tap(find.byKey(const Key('record-voice')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('recording')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('send-voice')));
+    await tester.pumpAndSettle();
+    final voice = server.sockets.single.sent.lastWhere((f) => f['type'] == 'send')['message'] as Map;
+    expect(voice, {'clientId': isA<String>(), 'kind': 'voice', 'body': '', 'mediaId': 'md2'});
+    expect(server.media.created['md2'], containsPair('durationMs', 4200));
+    expect(find.text('Voice note (4s)'), findsOneWidget);
+
+    // Cancelling a recording sends nothing.
+    await tester.tap(find.byKey(const Key('record-voice')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('cancel-voice')));
+    await tester.pumpAndSettle();
+    expect(devices.recording!.cancelled, true);
+    expect(server.calls.where((c) => c == 'POST /v1/media/uploads'), hasLength(2));
+
+    devices.micAllowed = false;
+    await tester.tap(find.byKey(const Key('record-voice')));
+    await tester.pumpAndSettle();
+    expect(find.text('Allow the microphone in your phone’s settings to record voice notes.'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });

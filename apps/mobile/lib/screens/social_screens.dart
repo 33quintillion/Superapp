@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
 import '../chat/realtime.dart' show newClientId;
+import '../media/media.dart';
+import '../media/remote_image.dart';
 import '../social/social_models.dart';
 import '../theme/tokens.g.dart';
 
@@ -88,6 +90,32 @@ class _FeedScreenState extends State<FeedScreen> {
       );
 
   Future<void> _addStory() async {
+    final kind = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(key: const Key('text-story'), leading: const Icon(Icons.text_fields), title: const Text('Text story'), onTap: () => Navigator.pop(ctx, 'text')),
+          ListTile(key: const Key('photo-story'), leading: const Icon(Icons.photo_outlined), title: const Text('Photo story'), onTap: () => Navigator.pop(ctx, 'image')),
+        ]),
+      ),
+    );
+    if (kind == 'text') await _addTextStory();
+    if (kind == 'image') await _addPhotoStory();
+  }
+
+  Future<void> _addPhotoStory() async {
+    try {
+      final picked = await MediaDevices.instance.pickPhotos();
+      if (picked.isEmpty) return;
+      final media = await uploadMedia(auth, picked.single, kind: 'image');
+      await auth.authed('POST', '/v1/stories', body: {'kind': 'image', 'mediaId': media['id']});
+      await _loadStories();
+    } on Exception catch (e) {
+      if (mounted) _snack(context, uploadError(e));
+    }
+  }
+
+  Future<void> _addTextStory() async {
     final ctrl = TextEditingController();
     final text = await showDialog<String>(
       context: context,
@@ -180,17 +208,26 @@ class _StoryViewerState extends State<StoryViewer> {
             Navigator.pop(context);
           }
         },
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(NexaSpace.xl),
-            child: Text(
-              s.kind == 'text' ? s.body : (s.body.isEmpty ? 'Photo story: open on the web to view' : s.body),
-              key: const Key('story-body'),
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
-            ),
-          ),
-        ),
+        child: s.kind == 'image' && s.mediaId != null
+            ? Column(children: [
+                Expanded(child: RemoteImage(key: Key('story-photo-${s.id}'), auth: widget.auth, mediaId: s.mediaId!, height: double.infinity, fit: BoxFit.contain, semanticLabel: 'Photo story by ${s.author.displayName}')),
+                if (s.body.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(NexaSpace.lg),
+                    child: Text(s.body, key: const Key('story-body'), textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white)),
+                  ),
+              ])
+            : Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(NexaSpace.xl),
+                  child: Text(
+                    s.kind == 'text' ? s.body : (s.body.isEmpty ? 'This story can’t be shown in the app yet.' : s.body),
+                    key: const Key('story-body'),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
+                  ),
+                ),
+              ),
       ),
     );
   }
@@ -302,7 +339,25 @@ class _PostTileState extends State<PostTile> {
           if (p.removedReason != null)
             Text('Removed by moderators${p.removedReason!.isEmpty ? '' : ': ${p.removedReason}'}. Only you can see it.', key: const Key('post-removed'), style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.error)),
           if (p.body.isNotEmpty) Padding(padding: const EdgeInsets.only(top: NexaSpace.xs), child: Text(p.body)),
-          if (p.mediaCount > 0) Text('📷 ${p.mediaCount} photo${p.mediaCount == 1 ? '' : 's'}', style: text.labelSmall),
+          if (p.mediaIds.length == 1)
+            Padding(padding: const EdgeInsets.only(top: NexaSpace.sm), child: RemoteImage(auth: widget.auth, mediaId: p.mediaIds.single, semanticLabel: 'Photo by ${p.author.displayName}'))
+          else if (p.mediaIds.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: NexaSpace.sm),
+              child: SizedBox(
+                height: 220,
+                child: ListView.separated(
+                  key: Key('photos-${p.id}'),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: p.mediaIds.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: NexaSpace.sm),
+                  itemBuilder: (_, i) => SizedBox(
+                    width: 260,
+                    child: RemoteImage(auth: widget.auth, mediaId: p.mediaIds[i], semanticLabel: 'Photo ${i + 1} of ${p.mediaIds.length} by ${p.author.displayName}'),
+                  ),
+                ),
+              ),
+            ),
           if (p.shared != null || p.sharedUnavailable)
             Container(
               margin: const EdgeInsets.only(top: NexaSpace.xs),
@@ -376,21 +431,40 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
   bool _busy = false;
   // Kept across retries so a resend after a lost response doesn't post twice.
   final _clientId = newClientId();
+  final _photos = <LocalMedia>[];
+  // Photos already uploaded, so a retry after a failed post doesn’t upload them again.
+  final _uploaded = <LocalMedia, String>{};
+
+  static const _maxPhotos = 10;
+
+  Future<void> _addPhotos() async {
+    try {
+      final picked = await MediaDevices.instance.pickPhotos(limit: _maxPhotos - _photos.length);
+      if (mounted) setState(() => _photos.addAll(picked.take(_maxPhotos - _photos.length)));
+    } on Exception catch (e) {
+      if (mounted) _snack(context, uploadError(e));
+    }
+  }
 
   Future<void> _post() async {
-    if (_text.text.trim().isEmpty) return;
+    if (_text.text.trim().isEmpty && _photos.isEmpty) return;
     setState(() => _busy = true);
     try {
+      final ids = <String>[];
+      for (final photo in _photos) {
+        ids.add(_uploaded[photo] ??= (await uploadMedia(widget.auth, photo, kind: 'image'))['id'] as String);
+      }
       final r = await widget.auth.authed('POST', '/v1/posts', body: {
         'clientId': _clientId,
         'body': _text.text,
+        if (ids.isNotEmpty) 'mediaIds': ids,
         if (widget.communityId != null) 'communityId': widget.communityId else 'audience': _audience,
       });
       if (mounted) Navigator.pop(context, Post.fromJson(r!['post'] as Map<String, dynamic>));
-    } on ApiException catch (e) {
+    } on Exception catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        _snack(context, e);
+        _snack(context, uploadError(e));
       }
     }
   }
@@ -404,6 +478,48 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
           padding: const EdgeInsets.all(NexaSpace.lg),
           child: Column(children: [
             TextField(key: const Key('post-text'), controller: _text, autofocus: true, maxLines: 6, maxLength: 5000, decoration: const InputDecoration(hintText: 'What’s on your mind?')),
+            if (_photos.isNotEmpty)
+              SizedBox(
+                height: 96,
+                child: ListView(scrollDirection: Axis.horizontal, children: [
+                  for (final (i, photo) in _photos.indexed)
+                    Padding(
+                      padding: const EdgeInsets.only(right: NexaSpace.sm),
+                      child: Stack(children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(NexaRadius.md),
+                          child: Image.memory(
+                            photo.bytes,
+                            width: 96,
+                            height: 96,
+                            fit: BoxFit.cover,
+                            semanticLabel: 'Photo ${i + 1}',
+                            errorBuilder: (_, _, _) => const SizedBox(width: 96, height: 96, child: Icon(Icons.image_outlined)),
+                          ),
+                        ),
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: IconButton.filledTonal(
+                            key: Key('remove-photo-$i'),
+                            tooltip: 'Remove photo ${i + 1}',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: _busy ? null : () => setState(() => _photos.removeAt(i)),
+                          ),
+                        ),
+                      ]),
+                    ),
+                ]),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('add-photos'),
+                onPressed: _busy || _photos.length >= _maxPhotos ? null : _addPhotos,
+                icon: const Icon(Icons.photo_library_outlined),
+                label: Text(_photos.isEmpty ? 'Add photos' : 'Add more photos (${_photos.length} of $_maxPhotos)'),
+              ),
+            ),
             if (widget.communityId == null)
               DropdownButtonFormField<String>(
                 key: const Key('audience'),

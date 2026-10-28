@@ -73,8 +73,8 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Fan-out across API instances (Redis) | ✅ | `realtime.e2e › fans out across API instances…` |
 | Permissions: outsiders get 404 everywhere; blocks and "who can message" enforced | ✅ | `messaging.e2e › keeps outsiders out…`, `› permissions` |
 | Mute and archive (per person) | ✅ | `messaging.e2e › lists conversations…` |
-| Image, video, audio and file sharing via presigned uploads to object storage | ✅ (API, web) | `media.e2e`; web e2e uploads a photo. **Flutter can show photos but cannot pick or send files yet** |
-| Voice notes | ✅ API, 🟡 web | `media.e2e › sends a voice note…`. Web records with MediaRecorder, but the browser test does not exercise the microphone. Flutter recording not built |
+| Image, video, audio and file sharing via presigned uploads to object storage | ✅ (API, web), ✅ photos in Flutter | `media.e2e`; web e2e uploads a photo; Flutter `chat_test › sends a photo with a caption and records a voice note…` (photo library picker, re-encoded on the phone so location metadata isn't sent). Flutter can't send video or other files yet, and opens voice notes and files in the phone's own player |
+| Voice notes | ✅ API, 🟡 web, 🟡 Flutter | `media.e2e › sends a voice note…`. Web records with MediaRecorder and Flutter with the `record` package (AAC in M4A); both tests use a fake microphone, and neither has run on a real microphone here. Flutter `chat_test › …records a voice note…` covers record, cancel, send and a refused microphone |
 | Upload checks: type allow-list, size limits, file signature, uploader-only completion | ✅ | `media.e2e`, `unit.spec › media signatures` |
 | Media access only for uploader and chat members; file removed when no message uses it | ✅ | `media.e2e › uploads straight to storage…`, `› deletes the stored file…` |
 | Malware scanning and known-CSAM hash matching | ⛔ | Needs a scanning service and a child-safety partner. **Media must not be opened to the public before this** |
@@ -127,10 +127,10 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Role hierarchy for promote, demote and remove; ownership passes on when the owner leaves or deletes their account | ✅ | `groups.e2e › applies the role hierarchy…`, `› passes ownership on…`, `› removes a deleted account…` |
 | Group notices ("Ada added Ben") and live updates to members; removed people are told | ✅ | `groups.e2e › announces changes…`; web e2e; Flutter `social_test` |
 | Follow and unfollow; private accounts approve follow requests | ✅ | `social.e2e › follows`; web e2e approves a request from the account page |
-| Posts with audiences (everyone, followers, only me), photos, likes, comments, shares that never widen the original audience | ✅ | `social.e2e › posts and the feed`; web e2e (followers-only photo post, like, comment, non-follower can't see it); Flutter `social_test › feed` (text posts) |
+| Posts with audiences (everyone, followers, only me), photos, likes, comments, shares that never widen the original audience | ✅ | `social.e2e › posts and the feed`; web e2e (followers-only photo post, like, comment, non-follower can't see it); Flutter `social_test › feed`, `› photos` |
 | Retry-safe posting (clientId) | ✅ | `social.e2e › is idempotent on clientId…` |
 | Home feed (own posts, people you follow, communities you joined), newest first with stable paging | ✅ | `social.e2e › builds the feed…` |
-| Stories: text and photo, 24-hour expiry with a sweep that deletes files, followers-only option, view tracking visible only to the author | ✅ | `social.e2e › stories`; web e2e; Flutter `social_test › feed` (text stories, marked seen) |
+| Stories: text and photo, 24-hour expiry with a sweep that deletes files, followers-only option, view tracking visible only to the author | ✅ | `social.e2e › stories`; web e2e; Flutter `social_test › feed` (text stories, marked seen), `› photos` (photo stories) |
 | Communities and channels: public or private, join and request to join, approve, ban, roles, admins-only posting in channels, owner hand-over and deletion | ✅ | `social.e2e › communities and channels`; web e2e; Flutter `social_test › communities` |
 | Community moderation: remove posts and comments with a reason (audited), ban, rank checks | ✅ | `social.e2e › moderates…`; web e2e (moderator removes a post) |
 | Reports on posts, comments, stories and communities | ✅ (user side) | `social.e2e › accepts reports…`; Flutter reports a post. The review queue is the Stage 7 admin dashboard |
@@ -138,7 +138,7 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Export and account deletion include all social data; deactivated accounts' posts are hidden | ✅ | `social.e2e › exports social data…`, `› hides a deactivated account’s posts` |
 | Web: groups, feed, profiles with follow, stories, communities, privacy settings | ✅ for the flows in the browser test | `apps/web/e2e/run.mjs › socialFlow` |
 | Flutter: groups, feed, stories, comments, posting, communities | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/social_test.dart` |
-| Flutter: attach photos to posts and photo stories | ⬜ | The app shows a photo count and text; picking photos needs the same file-picker work as chat attachments |
+| Flutter: photos on posts (up to 10, removable before posting, not re-uploaded on retry) and photo stories, shown in the feed and story viewer | ✅ | `social_test › photos: a post with several photos…`. Not run on a real phone's photo library here |
 | Notifications for follows, likes, comments and requests; live feed updates | ⬜ | Feed refreshes on pull; chat push is unaffected |
 | Moderation dashboard for reports | ✅ | Built in Stage 7: `admin.e2e › the report queue`; web e2e `businessFlow` |
 | Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |

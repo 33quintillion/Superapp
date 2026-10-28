@@ -4,13 +4,14 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// A message that was sent but not yet stored by the server.
 class OutboxEntry {
-  OutboxEntry({required this.conversationId, required this.clientId, required this.kind, required this.body, required this.createdAt});
+  OutboxEntry({required this.conversationId, required this.clientId, required this.kind, required this.body, required this.createdAt, this.media});
   factory OutboxEntry.fromJson(Map<String, dynamic> j) => OutboxEntry(
         conversationId: j['conversationId'] as String,
         clientId: j['clientId'] as String,
         kind: j['kind'] as String,
         body: j['body'] as String?,
         createdAt: DateTime.parse(j['createdAt'] as String),
+        media: j['media'] as Map<String, dynamic>?,
       );
   final String conversationId;
 
@@ -20,7 +21,10 @@ class OutboxEntry {
   final String? body;
   final DateTime createdAt;
 
-  Map<String, dynamic> toJson() => {'conversationId': conversationId, 'clientId': clientId, 'kind': kind, 'body': body, 'createdAt': createdAt.toIso8601String()};
+  /// A photo or voice note already uploaded; only its id is sent with the message.
+  final Map<String, dynamic>? media;
+
+  Map<String, dynamic> toJson() => {'conversationId': conversationId, 'clientId': clientId, 'kind': kind, 'body': body, 'createdAt': createdAt.toIso8601String(), if (media != null) 'media': media};
 }
 
 /// Keeps unsent messages across app restarts, per account. Cleared on sign-out.
