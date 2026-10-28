@@ -40,6 +40,7 @@ import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
 import { PushController } from './push/push.controller';
 import { PushProviders } from './push/push.providers';
+import { RetentionService } from './retention/retention.service';
 import { PushService } from './push/push.service';
 import { PushWorker } from './push/push.worker';
 import { CommunitiesService } from './social/communities.service';
@@ -112,6 +113,7 @@ export class AppModule {
         BookingsService,
         IntegrationsService,
         AdminService,
+        RetentionService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

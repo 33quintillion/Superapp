@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-28, Stage 1–9 leftovers): API 331 tests passed; web e2e all 60 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 49 tests passed and `flutter analyze` clean.
+Last full run (2026-10-28, Stage 1–9 leftovers): API 343 tests passed; web e2e all 62 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 50 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -39,7 +39,8 @@ Last full run (2026-10-28, Stage 1–9 leftovers): API 331 tests passed; web e2e
 | Data export | ✅ | `users.e2e › exports…` |
 | Deactivation (reversible by signing in) | ✅ | `users.e2e › deactivation…` |
 | Deletion (immediate PII scrub, tombstone) | ✅ | `users.e2e › deletion…` |
-| Scheduled purge of tombstones and backups | ⬜ | Needs backup infrastructure |
+| Scheduled clean-up of old data | ✅ | `retention.e2e`: ended sessions after 90 days, spent links after 7 days, unfinished uploads after a day. Tombstones of deleted accounts and messages are kept on purpose (they hold no personal data and keep chats consistent) |
+| Backup retention (deleted data leaves backups on schedule) | ⛔ | Needs the hosting account and its backups (Stage 10) |
 | Phone number sign-up and verification | ⛔ | Needs an SMS provider account and fraud controls |
 | Contacts discovery (opt-in) | ✅ (phone address-book reading untested on a real device) | `users.e2e › finding people you know…`, web e2e `find people by email address, only those who opted in`, Flutter `find people you know…`. Being findable is off by default; the address book is read only when the person taps the button, and nothing sent is stored. Phone numbers only match once phone sign-up exists |
 | Breached-password check: new passwords (sign-up, reset, change) refused if in Have I Been Pwned's Pwned Passwords, by k-anonymity (only a 5-character hash prefix leaves the server), plus a built-in list of the most common ones; allowed if the service is down | ✅ | `breached-passwords.e2e` (against a local stand-in for the service) |
