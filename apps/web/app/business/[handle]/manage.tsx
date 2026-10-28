@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { chatApi, newClientId } from '@/lib/chat-client';
+import { Tabs } from '../../tabs';
 import {
   Booking,
   BOOKING_STATUS_LABEL,
@@ -60,20 +61,15 @@ export function ManageBusiness({ initial, me, initialTab }: { initial: Business;
           </p>
         )}
       </div>
-      <nav className="tabs" role="tablist">
-        {tabs.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? 'btn small' : 'btn quiet small'} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
-      </nav>
-      {tab === 'orders' && <OrdersTab b={b} />}
-      {tab === 'bookings' && <BookingsTab b={b} />}
-      {tab === 'catalogue' && <CatalogueTab b={b} />}
-      {tab === 'services' && <ServicesTab b={b} />}
-      {tab === 'staff' && <StaffTab b={b} me={me} />}
-      {tab === 'payments' && <PaymentsTab b={b} onChange={setB} />}
-      {tab === 'settings' && <SettingsTab b={b} onChange={setB} />}
+      <Tabs tabs={tabs.map((t) => [t.id, t.label] as const)} selected={tab} onSelect={setTab}>
+        {tab === 'orders' && <OrdersTab b={b} />}
+        {tab === 'bookings' && <BookingsTab b={b} />}
+        {tab === 'catalogue' && <CatalogueTab b={b} />}
+        {tab === 'services' && <ServicesTab b={b} />}
+        {tab === 'staff' && <StaffTab b={b} me={me} />}
+        {tab === 'payments' && <PaymentsTab b={b} onChange={setB} />}
+        {tab === 'settings' && <SettingsTab b={b} onChange={setB} />}
+      </Tabs>
     </main>
   );
 }

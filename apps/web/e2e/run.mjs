@@ -171,6 +171,34 @@ async function chatFlow(browser, API, tag, step) {
   await bubble(ana.page, 'hello from ana').locator('[data-testid=reactions]:has-text("👍")').waitFor();
   step('reaction shows up for the sender');
 
+  // Edit (a prompt asks for the new text), pin, and forward into another chat.
+  const actions = async (page, body) => {
+    const b = bubble(page, body);
+    await b.locator('.actions summary').click();
+    return b.locator('.actions-menu');
+  };
+  ana.page.once('dialog', (d) => d.accept('hello from ana, edited'));
+  await (await actions(ana.page, 'hello from ana')).locator('button:has-text("Edit")').click();
+  await bubble(ben.page, 'hello from ana, edited').locator('.meta:has-text("edited")').waitFor();
+  assert((await bubble(ben.page, 'hello from ana').count()) === 0, 'the old text is gone for the other person');
+  await (await actions(ben.page, 'hi ana')).locator('button:has-text("Pin")').click();
+  await ana.page.waitForSelector('[data-testid=pinned]:has-text("hi ana")');
+  step('edit shows for both with an "edited" mark; a pinned message shows in the other person’s pinned bar');
+
+  await ana.page.click('[data-testid=new-group]');
+  await ana.page.fill('input[name=groupTitle]', 'Ana and Ben');
+  await ana.page.fill('input[name=groupMembers]', ben.username);
+  await ana.page.click('[data-testid=new-group-form] button[type=submit]');
+  await ana.page.waitForSelector('[data-testid=peer-name]:has-text("Ana and Ben")');
+  await ana.page.click(`[data-testid=conv-${ben.username}]`);
+  await bubble(ana.page, 'missed one').waitFor();
+  await (await actions(ana.page, 'missed one')).locator('select[aria-label="Forward to"]').selectOption({ label: 'Ana and Ben' });
+  await ben.page.click('[data-testid=conv-group]');
+  await bubble(ben.page, 'missed one').locator('text=Forwarded').waitFor();
+  await ben.page.click(`[data-testid=conv-${ana.username}]`);
+  await bubble(ben.page, 'missed two').waitFor();
+  step('forwarded into a group: arrives there marked as forwarded');
+
   await ana.page.setInputFiles('[data-testid=file-input]', { name: 'dot.png', mimeType: 'image/png', buffer: PNG });
   const img = ben.page.locator('[data-testid=media-image]');
   await img.waitFor();
@@ -1045,9 +1073,10 @@ async function a11yFlow(browser, API, tag, step) {
       await audit(page, `${label} (${scheme})`);
     }
   }
-  for (const { ctx, page } of Object.values(contexts)) {
+  for (const [who, { ctx, page }] of Object.entries(contexts)) {
     if (page.cspViolations.length) failures.push(`CSP blocked something the app needs: ${page.cspViolations[0]}`);
-    await ctx.close();
+    // Amy stays signed in for the keyboard checks on the admin tabs (a two-step code can't be reused).
+    if (who !== 'amy') await ctx.close();
   }
   if (failures.length) throw new Error(`accessibility violations:\n  ${failures.join('\n  ')}`);
   step(`axe-core WCAG 2.2 AA: no violations on ${audited.length / 2} screens, in light and dark mode`);
@@ -1079,6 +1108,29 @@ async function a11yFlow(browser, API, tag, step) {
   assert(outlines.length >= 5, `only ${outlines.length} focusable controls on the feed: ${JSON.stringify(outlines)}`);
   assert(outlines.every((o) => o.visible), `every focused control shows a focus ring: ${JSON.stringify(outlines.filter((o) => !o.visible))}`);
   step(`keyboard: skip link first, focus ring on all ${outlines.length} controls of the feed`);
+
+  // Tabs: one Tab stop for the row; arrow keys, Home and End move between tabs and select them.
+  const { ctx: admin, page: ap } = contexts.amy;
+  await ap.emulateMedia({ colorScheme: 'light' });
+  await ap.goto(`${WEB}/admin`);
+  await ap.waitForSelector('[role=tablist]');
+  await ap.focus('role=tab[selected=true]');
+  const selectedTab = () => ap.evaluate(() => ({ focused: document.activeElement?.textContent, selected: document.querySelector('[role=tab][aria-selected=true]')?.textContent }));
+  const names = await ap.locator('role=tab').allTextContents();
+  await ap.keyboard.press('ArrowRight');
+  assert(JSON.stringify(await selectedTab()) === JSON.stringify({ focused: names[1], selected: names[1] }), `ArrowRight selects the next tab: ${JSON.stringify(await selectedTab())}`);
+  await ap.keyboard.press('End');
+  assert((await selectedTab()).selected === names.at(-1), 'End selects the last tab');
+  await ap.keyboard.press('ArrowRight');
+  assert((await selectedTab()).selected === names[0], 'ArrowRight wraps to the first tab');
+  await ap.keyboard.press('ArrowLeft');
+  await ap.keyboard.press('Home');
+  assert((await selectedTab()).selected === names[0], 'Home selects the first tab');
+  assert((await ap.locator('role=tab[selected=false] >> visible=true').evaluateAll((els) => els.map((e) => e.tabIndex))).every((t) => t === -1), 'only the selected tab is in the Tab order');
+  await ap.keyboard.press('Tab');
+  assert(await ap.evaluate(() => document.activeElement?.getAttribute('role') !== 'tab'), 'Tab leaves the row of tabs');
+  await admin.close();
+  step(`keyboard: arrow keys, Home and End move between the ${names.length} admin tabs; one Tab stop for the row`);
 
   // CSP: a nonce on each page, and a script injected without it never runs.
   const res = await page.goto(`${WEB}/feed`);

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
 import { Dispute, DISPUTE_STATUS_LABEL, ENTITLEMENT_LABEL, Integration, money, Payment, PAYMENT_LABEL, Plan, toMinor } from '@/lib/business-client';
 import type { UserSummary } from '@/lib/social-client';
+import { Tabs } from '../tabs';
 
 export interface Overview {
   role: 'moderator' | 'admin';
@@ -56,20 +57,15 @@ export function AdminApp({ overview }: { overview: Overview }) {
         You: {overview.role} · {overview.reports.open} open reports ({overview.reports.childSafety} child safety) · {overview.reports.inReview} in review ·{' '}
         {overview.users.suspended} suspended accounts · {overview.businesses} businesses · {overview.liveIntegrations} live integrations
       </p>
-      <nav className="tabs" role="tablist">
-        {tabs.map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'btn small' : 'btn quiet small'} onClick={() => setTab(id)}>
-            {label}
-          </button>
-        ))}
-      </nav>
-      {tab === 'reports' && <Reports />}
-      {tab === 'users' && <Users />}
-      {tab === 'businesses' && <Businesses />}
-      {tab === 'payments' && <Payments />}
-      {tab === 'integrations' && <Integrations />}
-      {tab === 'staff' && <Staff />}
-      {tab === 'audit' && <Audit />}
+      <Tabs tabs={tabs} selected={tab} onSelect={setTab}>
+        {tab === 'reports' && <Reports />}
+        {tab === 'users' && <Users />}
+        {tab === 'businesses' && <Businesses />}
+        {tab === 'payments' && <Payments />}
+        {tab === 'integrations' && <Integrations />}
+        {tab === 'staff' && <Staff />}
+        {tab === 'audit' && <Audit />}
+      </Tabs>
     </main>
   );
 }

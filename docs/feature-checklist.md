@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 28 tests passed and `flutter analyze` clean.
+Last full run (2026-10-28, Stage 1–9 leftovers): API 331 tests passed; web e2e all 60 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 49 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -80,7 +80,7 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Malware scanning and known-CSAM hash matching | ⛔ | Needs a scanning service and a child-safety partner. **Media must not be opened to the public before this** |
 | Thumbnails and video transcoding | ⬜ | Planned with the media pipeline |
 | Account deletion wipes sent messages and files; export includes sent messages | ✅ | `messaging.e2e › account deletion and export` |
-| Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ for the flows in the browser test; 🟡 for the rest | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, photo, search and proxy limits. Edit, pin, forward and voice are in the UI but not browser-tested |
+| Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ except voice in the browser | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, edit, pin, forward into a group, photo, search and proxy limits. Voice recording is in the UI but the browser test has no microphone |
 | Web chat proxy limited to messaging; refuses cross-site writes | ✅ | web e2e |
 | Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
 | Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
@@ -238,7 +238,7 @@ Details and numbers in `hardening.md`.
 | Multi-instance and soak load tests | ⬜ | Needs staging |
 | Flutter accessibility: automated checks (48×48 and 44×44 tap targets, labels on everything tappable, WCAG text contrast) on sign-in, home, chat, feed, calls, shopping and every back-office tab, in light and dark mode | ✅ | `a11y_test`, plus checks inside `chat_test`, `social_test`, `calls_test` |
 | Trying the phone app with TalkBack and VoiceOver, and a manual screen-reader pass on the web | ⛔ | Needs real devices and a person |
-| Arrow-key navigation for tabs | ⬜ | Tab and Enter work |
+| Arrow-key navigation for tabs (WAI-ARIA tabs: one Tab stop, arrows, Home and End) | ✅ | Web e2e `a11yFlow` › keyboard on the admin tabs; the same component runs the business back office |
 
 ## Stage 10
 Not started. See `plan.md`. The mini-app runtime is not implemented, and the apps say so.
