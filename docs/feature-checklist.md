@@ -183,7 +183,7 @@ Business accounts with staff roles, a catalogue with pickup orders, bookings, th
 | Admin: verify, suspend and restore businesses; add and remove moderators; audit log of every admin action; overview counts; CLI to grant the first admin | ✅ | `admin.e2e › businesses, staff and the audit log` |
 | Integration catalogue: admin publishes, people connect with only the scopes they tick and can revoke, kill switch, re-review when scopes widen, grants trimmed when they narrow | ✅ | `admin.e2e › integration catalogue and the kill switch`; web e2e |
 | Flutter: browse businesses, order for pickup, book, my orders and bookings | ✅ | `business_test` |
-| Flutter back office for staff (catalogue, orders queue, bookings) | ⬜ | Staff use the web for now |
+| Flutter back office for staff: orders queue, bookings with came/no-show/cancel, item catalogue, tabs by role | ✅ | `back_office_test` |
 | Item photos and viewing reported media in the queue | ⛔ | Needs the media scanning provider (same blocker as chat media) |
 | Online payment for orders and bookings | ✅ / ⬜ | Orders: Stage 8 below. Bookings: not built |
 | Business verification checks (documents, company registry) | ⛔ | Needs a verification provider; admins mark businesses verified by hand today |
@@ -219,7 +219,7 @@ Card payments for pickup orders, payouts to businesses, refunds, a double-entry 
 | Changing plan in place: preview of today's cost, upgrade charges the difference, downgrade gives credit, monthly to yearly, declined card keeps the old plan | ✅ | `payments-more.e2e › changing plan`; web e2e `paymentsFlow` |
 | Payouts list for the business, and reconciliation of the ledger against the provider's balance records (admin) | ✅ | `payments-more.e2e › payouts and reconciliation`; web e2e `paymentsFlow` |
 | No-show fees charged beyond the deposit | ⬜ | Needs saved cards (off-session charges); the deposit is kept instead |
-| Flutter back office for payouts, refunds and plans | ⬜ | On the web for now |
+| Flutter back office for payouts, refunds, disputes and plans; booking deposits for customers | ✅ | `back_office_test` |
 
 ## Stage 9: Hardening
 Details and numbers in `hardening.md`.

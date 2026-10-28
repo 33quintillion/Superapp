@@ -8,6 +8,7 @@ import '../auth/auth_controller.dart';
 import '../business/business_models.dart';
 import '../chat/realtime.dart' show newClientId;
 import '../theme/tokens.g.dart';
+import 'back_office_screens.dart';
 
 void _snack(BuildContext context, Object e) {
   if (!context.mounted) return;
@@ -23,9 +24,9 @@ Future<void> openInBrowser(Uri url) async {
   if (!await launchUrl(url, mode: LaunchMode.externalApplication)) throw Exception('Could not open the payment page');
 }
 
-/// Asks the API for a checkout page for an order waiting for payment, and opens it.
-Future<void> _payOnline(AuthController auth, String orderId, OpenUrl openUrl) async {
-  final r = await auth.authed('POST', '/v1/orders/$orderId/checkout');
+/// Asks the API for a checkout page for an order or booking waiting for payment, and opens it.
+Future<void> _payOnline(AuthController auth, String orderId, OpenUrl openUrl, {String kind = 'orders'}) async {
+  final r = await auth.authed('POST', '/v1/$kind/$orderId/checkout');
   await openUrl(Uri.parse(r!['url'] as String));
 }
 
@@ -61,6 +62,12 @@ class _BusinessesScreenState extends State<BusinessesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Businesses'), actions: [
+          IconButton(
+            key: const Key('open-my-businesses'),
+            tooltip: 'Businesses you run',
+            icon: const Icon(Icons.storefront_outlined),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MyBusinessesScreen(auth: widget.auth))),
+          ),
           IconButton(
             key: const Key('open-my-orders'),
             tooltip: 'Your orders and bookings',
@@ -239,10 +246,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                   ListTile(
                     key: Key('service-${s.id}'),
                     title: Text(s.name),
-                    subtitle: Text('${s.durationMinutes} min${s.priceMinor > 0 ? ' · ${formatMoney(s.priceMinor, s.currency)}' : ''}'),
+                    subtitle: Text('${s.durationMinutes} min${s.priceMinor > 0 ? ' · ${formatMoney(s.priceMinor, s.currency)}' : ''}'
+                        '${s.depositMinor > 0 ? ' · ${formatMoney(s.depositMinor, s.currency)} deposit by card, refunded if you cancel ${s.freeCancelHours} hours ahead' : ''}'),
                     trailing: const Icon(Icons.event_available_outlined),
                     enabled: b.bookingsEnabled,
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BookingScreen(auth: auth, business: b, service: s))),
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BookingScreen(auth: auth, business: b, service: s, openUrl: widget.openUrl))),
                   ),
               ],
               const SizedBox(height: NexaSpace.lg),
@@ -263,8 +271,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
 /// Pick a day and a free time. Times are shown in this phone's time zone.
 class BookingScreen extends StatefulWidget {
-  const BookingScreen({super.key, required this.auth, required this.business, required this.service, this.today});
+  const BookingScreen({super.key, required this.auth, required this.business, required this.service, this.today, this.openUrl = openInBrowser});
   final AuthController auth;
+  final OpenUrl openUrl;
   final Business business;
   final BookableService service;
   /// Tests pin "today".
@@ -309,6 +318,14 @@ class _BookingScreenState extends State<BookingScreen> {
       });
       final k = Booking.fromJson(r!);
       if (!mounted) return;
+      if (k.status == 'pending_payment') {
+        // The place is held while the customer pays the deposit on the provider's page.
+        await _payOnline(widget.auth, k.id, widget.openUrl, kind: 'bookings');
+        if (!mounted) return;
+        _snack(context, 'Pay the deposit on the payment page to confirm. Your time is held for you; see it in your bookings.');
+        Navigator.of(context).pop();
+        return;
+      }
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -401,9 +418,28 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
     }
   }
 
-  Future<void> _pay(String orderId) async {
+  /// A paid deposit may be kept by the business, so say what happens before cancelling.
+  Future<void> _cancelBooking(Booking k) async {
+    final note = k.cancellationNote(DateTime.now());
+    if (note != null) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          content: Text('Cancel this booking? $note'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep it')),
+            TextButton(key: const Key('confirm-cancel-booking'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Cancel booking')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await _cancel('/v1/bookings/${k.id}/cancel');
+  }
+
+  Future<void> _pay(String id, {String kind = 'orders'}) async {
     try {
-      await _payOnline(widget.auth, orderId, widget.openUrl);
+      await _payOnline(widget.auth, id, widget.openUrl, kind: kind);
     } on ApiException catch (e) {
       if (mounted) _snack(context, e);
     }
@@ -424,11 +460,21 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
                   ListTile(
                     key: Key('booking-${k.id}'),
                     title: Text('${k.serviceName} · ${k.businessName}'),
-                    subtitle: Text('${isoDate(k.startsAt.toLocal())} ${hhmm(k.startsAt.toLocal())} · '
-                        '${k.status == 'cancelled' ? (k.cancelledBy == 'business' ? 'Cancelled by the business' : 'Cancelled') : k.status.replaceAll('_', ' ')}'),
-                    trailing: k.status == 'confirmed' && k.startsAt.isAfter(DateTime.now())
-                        ? TextButton(key: Key('cancel-booking-${k.id}'), onPressed: () => _cancel('/v1/bookings/${k.id}/cancel'), child: const Text('Cancel'))
-                        : null,
+                    subtitle: Text([
+                      '${isoDate(k.startsAt.toLocal())} ${hhmm(k.startsAt.toLocal())} · '
+                          '${k.status == 'cancelled' ? (k.cancelledBy == 'business' ? 'Cancelled by the business' : 'Cancelled') : bookingStatusLabels[k.status] ?? k.status}',
+                      if (k.depositLabel != null) k.depositLabel!,
+                      if (k.status == 'confirmed' && k.cancellationNote(DateTime.now()) != null) k.cancellationNote(DateTime.now())!,
+                    ].join('\n')),
+                    isThreeLine: k.depositLabel != null,
+                    trailing: k.status == 'pending_payment'
+                        ? Row(mainAxisSize: MainAxisSize.min, children: [
+                            TextButton(key: Key('pay-booking-${k.id}'), onPressed: () => _pay(k.id, kind: 'bookings'), child: const Text('Pay deposit')),
+                            TextButton(key: Key('cancel-booking-${k.id}'), onPressed: () => _cancel('/v1/bookings/${k.id}/cancel'), child: const Text('Cancel')),
+                          ])
+                        : k.status == 'confirmed' && k.startsAt.isAfter(DateTime.now())
+                            ? TextButton(key: Key('cancel-booking-${k.id}'), onPressed: () => _cancelBooking(k), child: const Text('Cancel'))
+                            : null,
                   ),
                 const ListTile(title: Text('Orders')),
                 if (_orders!.isEmpty) const ListTile(title: Text('No orders yet.')),
