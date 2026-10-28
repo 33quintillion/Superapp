@@ -268,8 +268,9 @@ export class UsersService {
       return { mediaIds: [...new Set([...sentMedia, ...postMedia, ...storyMedia, ...owned.rows.map((r) => r.id)])], groupNotices, closedBusinesses };
     });
     for (const id of closedBusinesses) await this.businesses.afterClose(id);
-    // Their own paid orders that were cancelled are refunded to their card.
+    // Their own paid orders that were cancelled, and deposits still due back, are refunded to their card.
     await this.payments.settleClosedOrders().catch(() => undefined);
+    await this.payments.settleBookings().catch(() => undefined);
     await this.groups.announceAll(groupNotices).catch(() => undefined);
     // Stored files go once nothing references them (a forwarded copy keeps its own reference).
     for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);

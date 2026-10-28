@@ -214,10 +214,11 @@ Card payments for pickup orders, payouts to businesses, refunds, a double-entry 
 | Launch countries, seller and buyer terms, refund policy, consumer-law review | ⛔ | Needs legal review |
 | Plans or digital goods sold to individuals in the mobile apps | ⛔ | Needs App Store and Google Play billing; plans are sold to businesses only for now |
 | Razorpay or another regional provider | ⛔ | Needs a provider decision and an account |
-| Online payment for bookings, deposits and no-show fees | ⬜ | Bookings are paid in person |
-| Disputes and chargebacks | ⬜ | Visible in the Stripe dashboard only |
-| Changing plan in place (upgrade or downgrade with proration) | ⬜ | Cancel and subscribe again |
-| Payout reconciliation against Stripe's balance reports | ⬜ | The ledger check covers our own records |
+| Booking deposits: optional per service, held as `pending_payment` until paid through hosted checkout, refunded when cancelled in time or by the business, kept after a late cancel or a no-show, managers can refund | ✅ | `payments-more.e2e › booking deposits`; web e2e `paymentsFlow` |
+| Disputes and chargebacks: the business's share is taken back while the bank decides and returned if the business wins, refunds refused meanwhile, the business sends its side from the payments tab, admin list | ✅ | `payments-more.e2e › disputes`; web e2e `paymentsFlow` |
+| Changing plan in place: preview of today's cost, upgrade charges the difference, downgrade gives credit, monthly to yearly, declined card keeps the old plan | ✅ | `payments-more.e2e › changing plan`; web e2e `paymentsFlow` |
+| Payouts list for the business, and reconciliation of the ledger against the provider's balance records (admin) | ✅ | `payments-more.e2e › payouts and reconciliation`; web e2e `paymentsFlow` |
+| No-show fees charged beyond the deposit | ⬜ | Needs saved cards (off-session charges); the deposit is kept instead |
 | Flutter back office for payouts, refunds and plans | ⬜ | On the web for now |
 
 ## Stage 9: Hardening

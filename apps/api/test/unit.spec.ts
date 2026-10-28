@@ -137,8 +137,8 @@ describe('business staff roles', () => {
     expect(permissionsOf('owner')).toEqual(Object.keys(PERMISSIONS));
     expect(permissionsOf('manager').sort()).toEqual(
       [
-        'bookings.manage', 'bookings.view', 'business.edit', 'business.view', 'catalogue.manage', 'orders.manage', 'orders.refund', 'orders.view',
-        'payments.view', 'services.manage', 'staff.manage', 'staff.view',
+        'bookings.manage', 'bookings.refund', 'bookings.view', 'business.edit', 'business.view', 'catalogue.manage', 'disputes.respond', 'orders.manage',
+        'orders.refund', 'orders.view', 'payments.view', 'services.manage', 'staff.manage', 'staff.view',
       ].sort(),
     );
     expect(permissionsOf('staff').sort()).toEqual(['bookings.manage', 'bookings.view', 'business.view', 'orders.manage', 'orders.view', 'staff.view'].sort());
@@ -147,6 +147,8 @@ describe('business staff roles', () => {
     expect(can('manager', 'payments.manage')).toBe(false);
     expect(can('manager', 'billing.manage')).toBe(false);
     expect(can('staff', 'orders.refund')).toBe(false);
+    expect(can('staff', 'bookings.refund')).toBe(false);
+    expect(can('staff', 'disputes.respond')).toBe(false);
   });
 
   it('lets people manage only roles below their own', () => {

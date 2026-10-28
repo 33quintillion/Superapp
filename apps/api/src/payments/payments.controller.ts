@@ -6,9 +6,11 @@ import { Auth, AuthGuard } from '../auth/auth.guard';
 import type { AccessClaims } from '../auth/token.service';
 import { AdminService } from '../admin/admin.service';
 import { clientIdSchema } from '../messaging/messaging.schemas';
+import { DisputesService } from './disputes.service';
 import { ENTITLEMENTS } from './entitlements';
 import { LedgerService } from './ledger';
 import { PaymentsService } from './payments.service';
+import { ReconciliationService } from './reconciliation.service';
 import { SubscriptionsService } from './subscriptions.service';
 
 const id = (v: string) => parse(z.uuid(), v);
@@ -23,6 +25,9 @@ const Refund = z
 const Page = z.object({ limit: z.coerce.number().int().min(1).max(100).default(30), cursor: z.string().max(200).optional() });
 const AdminPaymentsQuery = Page.extend({ status: z.enum(['requires_payment', 'succeeded', 'cancelled']).optional() });
 const Subscribe = z.object({ planCode: z.string().max(40), clientId: clientIdSchema }).strict();
+const PlanChoice = z.object({ planCode: z.string().max(40) }).strict();
+const DisputeResponse = z.object({ text: z.string().trim().min(20, 'Explain what happened in a few sentences').max(20_000) }).strict();
+const Period = z.object({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }) });
 const CreatePlan = z
   .object({
     code: z
@@ -47,6 +52,8 @@ export class PaymentsController {
     private readonly subscriptions: SubscriptionsService,
     private readonly ledger: LedgerService,
     private readonly admin: AdminService,
+    private readonly disputes: DisputesService,
+    private readonly reconciliation: ReconciliationService,
   ) {}
 
   /**
@@ -81,6 +88,27 @@ export class PaymentsController {
     return this.payments.forBusiness(a.userId, id(bid), p.limit, p.cursor);
   }
 
+  @Get('businesses/:id/payouts')
+  @UseGuards(AuthGuard)
+  payouts(@Auth() a: AccessClaims, @Param('id') bid: string) {
+    return this.payments.payouts(a.userId, id(bid));
+  }
+
+  // ---------------------------------------------------------------- disputes
+
+  @Get('businesses/:id/disputes')
+  @UseGuards(AuthGuard)
+  businessDisputes(@Auth() a: AccessClaims, @Param('id') bid: string) {
+    return this.disputes.forBusiness(a.userId, id(bid));
+  }
+
+  @Post('disputes/:id/response')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  respond(@Auth() a: AccessClaims, @Param('id') did: string, @Body() body: unknown) {
+    return this.disputes.respond(a.userId, id(did), parse(DisputeResponse, body).text);
+  }
+
   // ---------------------------------------------------------------- orders
 
   @Post('orders/:id/checkout')
@@ -101,6 +129,28 @@ export class PaymentsController {
   async refund(@Auth() a: AccessClaims, @Param('id') oid: string, @Body() body: unknown) {
     const refund = await this.payments.refund(a.userId, id(oid), parse(Refund, body));
     return { refund, ...(await this.payments.forOrder(a.userId, id(oid))) };
+  }
+
+  // ---------------------------------------------------------------- booking deposits
+
+  @Post('bookings/:id/checkout')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  bookingCheckout(@Auth() a: AccessClaims, @Param('id') kid: string) {
+    return this.payments.bookingCheckout(a.userId, id(kid));
+  }
+
+  @Get('bookings/:id/payment')
+  @UseGuards(AuthGuard)
+  bookingPayment(@Auth() a: AccessClaims, @Param('id') kid: string) {
+    return this.payments.forBooking(a.userId, id(kid));
+  }
+
+  @Post('bookings/:id/refunds')
+  @UseGuards(AuthGuard)
+  async bookingRefund(@Auth() a: AccessClaims, @Param('id') kid: string, @Body() body: unknown) {
+    const refund = await this.payments.refundBooking(a.userId, id(kid), parse(Refund, body));
+    return { refund, ...(await this.payments.forBooking(a.userId, id(kid))) };
   }
 
   @Get('me/payments')
@@ -145,6 +195,21 @@ export class PaymentsController {
     return this.subscriptions.setCancelAtPeriodEnd(a.userId, id(bid), false);
   }
 
+  @Post('businesses/:id/subscription/preview')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  previewChange(@Auth() a: AccessClaims, @Param('id') bid: string, @Body() body: unknown) {
+    return this.subscriptions.previewChange(a.userId, id(bid), parse(PlanChoice, body).planCode);
+  }
+
+  @Post('businesses/:id/subscription/change')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  changePlan(@Auth() a: AccessClaims, @Param('id') bid: string, @Body() body: unknown) {
+    const b = parse(Subscribe, body);
+    return this.subscriptions.changePlan(a.userId, id(bid), b.planCode, b.clientId);
+  }
+
   @Post('businesses/:id/billing-portal')
   @UseGuards(AuthGuard)
   @HttpCode(200)
@@ -168,6 +233,22 @@ export class PaymentsController {
     await this.admin.require(a, 'admin');
     const [balances, check] = await Promise.all([this.ledger.balances(), this.ledger.check()]);
     return { balances, check };
+  }
+
+  @Get('admin/disputes')
+  @UseGuards(AuthGuard)
+  async adminDisputes(@Auth() a: AccessClaims) {
+    await this.admin.require(a, 'admin');
+    return this.disputes.all();
+  }
+
+  /** Our ledger against the provider's balance records for a period (at most 31 days). */
+  @Get('admin/reconciliation')
+  @UseGuards(AuthGuard)
+  async adminReconciliation(@Auth() a: AccessClaims, @Query() q: unknown) {
+    await this.admin.require(a, 'admin');
+    const p = parse(Period, q);
+    return this.reconciliation.run(new Date(p.from), new Date(p.to));
   }
 
   @Get('admin/plans')

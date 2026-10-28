@@ -66,15 +66,16 @@ export class StripeClient {
     return this.request<T>('POST', path, formEncode(params), idempotencyKey);
   }
 
-  async get<T = Record<string, any>>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
+  /** `account` acts on a connected account's own objects (its payouts, its balance). */
+  async get<T = Record<string, any>>(path: string, opts: { account?: string } = {}): Promise<T> {
+    return this.request<T>('GET', path, undefined, undefined, opts.account);
   }
 
   async delete<T = Record<string, any>>(path: string, idempotencyKey: string): Promise<T> {
     return this.request<T>('DELETE', path, undefined, idempotencyKey);
   }
 
-  private async request<T>(method: string, path: string, body?: string, idempotencyKey?: string): Promise<T> {
+  private async request<T>(method: string, path: string, body?: string, idempotencyKey?: string, account?: string): Promise<T> {
     let res: Response;
     try {
       res = await fetch(`${this.base}${path}`, {
@@ -84,6 +85,7 @@ export class StripeClient {
           'stripe-version': STRIPE_API_VERSION,
           ...(body !== undefined ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
           ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+          ...(account ? { 'stripe-account': account } : {}),
         },
         body,
         signal: AbortSignal.timeout(TIMEOUT_MS),

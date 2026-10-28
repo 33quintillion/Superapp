@@ -9,28 +9,48 @@ import { BusinessesService } from '../business/businesses.service';
 import { businessSales, LedgerService } from './ledger';
 import { ProviderError, SignatureError, StripeClient, StripeEvent, verifyStripeSignature } from './stripe';
 
-/** What the orders module does when a payment settles. Registered by OrdersService. */
-export interface OrderHooks {
-  /** pending_payment → placed. False when the order had already been closed. */
-  paid(orderId: string, tx: Queryable): Promise<boolean>;
-  /** pending_payment → cancelled, giving the stock back. False when it wasn't pending. */
-  unpaid(orderId: string, reason: string, tx: Queryable): Promise<boolean>;
-  /** Tells the customer and staff, after commit. `created` the first time staff see the order. */
-  announce(orderId: string, created: boolean): Promise<void>;
-}
+/** What can be paid for online: a pickup order or a booking's deposit. */
+export type PayableKind = 'order' | 'booking';
 
-/** Handles subscription events. Registered by SubscriptionsService. */
-export interface BillingHooks {
+/**
+ * What the orders or bookings module does when a payment settles. Registered by
+ * OrdersService and BookingsService.
+ */
+export interface PayableHooks {
+  /** pending_payment → placed or confirmed. False when it had already been closed. */
+  paid(id: string, tx: Queryable): Promise<boolean>;
+  /** pending_payment → cancelled, giving the stock or the time back. False when it wasn't pending. */
+  unpaid(id: string, reason: string, tx: Queryable): Promise<boolean>;
+  /** Tells the customer and staff, after commit. `created` the first time staff see it. */
+  announce(id: string, created: boolean): Promise<void>;
+}
+export type OrderHooks = PayableHooks;
+
+/** Handles provider events of its own kind. Registered by SubscriptionsService and DisputesService. */
+export interface EventHandler {
   handles(type: string): boolean;
   apply(event: StripeEvent, tx: Queryable, after: After): Promise<void>;
+  /** Backstop work for the payments sweep, such as provider calls that failed. */
+  sweep?(): Promise<void>;
 }
+export type BillingHooks = EventHandler;
+
+interface Subject {
+  kind: PayableKind;
+  id: string;
+}
+const COLUMN: Record<PayableKind, 'order_id' | 'booking_id'> = { order: 'order_id', booking: 'booking_id' };
+
+/** Dispute statuses during which the bank holds the money and refunds are refused. */
+export const OPEN_DISPUTE_STATUSES = ['warning_needs_response', 'warning_under_review', 'needs_response', 'under_review'];
 
 /** Work to do once the transaction has committed (provider calls, live updates). */
 export type After = (() => Promise<unknown>)[];
 
-interface PaymentRow {
+export interface PaymentRow {
   id: string;
-  order_id: string;
+  order_id: string | null;
+  booking_id: string | null;
   business_id: string;
   payer_id: string | null;
   livemode: boolean;
@@ -40,6 +60,7 @@ interface PaymentRow {
   destination_account: string;
   status: 'requires_payment' | 'succeeded' | 'cancelled';
   refunded_minor: string;
+  disputed_minor: string;
   checkout_id: string | null;
   checkout_url: string | null;
   checkout_expires_at: Date | null;
@@ -98,8 +119,9 @@ const MIN_SESSION_MS = 30 * 60_000;
 export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger('Payments');
   readonly stripe: StripeClient | null;
-  private orders?: OrderHooks;
+  private readonly hooks: Partial<Record<PayableKind, PayableHooks>> = {};
   private billing?: BillingHooks;
+  private readonly handlers: EventHandler[] = [];
   private timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -113,11 +135,18 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     this.stripe = config.PAYMENTS_PROVIDER === 'stripe' ? new StripeClient(config.STRIPE_SECRET_KEY!, config.STRIPE_API_BASE) : null;
   }
 
-  useOrders(hooks: OrderHooks) {
-    this.orders = hooks;
+  useOrders(hooks: PayableHooks) {
+    this.hooks.order = hooks;
+  }
+  useBookings(hooks: PayableHooks) {
+    this.hooks.booking = hooks;
   }
   useBilling(hooks: BillingHooks) {
     this.billing = hooks;
+    this.handlers.push(hooks);
+  }
+  useHandler(handler: EventHandler) {
+    this.handlers.push(handler);
   }
 
   get enabled() {
@@ -227,28 +256,55 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     return this.accountView(await this.loadAccount(businessId, q)).onlinePayments;
   }
 
-  // ---------------------------------------------------------------- order payments
+  // ---------------------------------------------------------------- order and booking payments
 
   /**
    * Called inside OrdersService.place's transaction for an online order: records what is
    * owed. The checkout itself is created afterwards, outside the transaction.
    */
   async prepareForOrder(tx: Queryable, o: { orderId: string; businessId: string; payerId: string; amountMinor: number; currency: string }) {
+    await this.prepare(tx, { kind: 'order', id: o.orderId }, o, 'This business can’t take payment online yet; choose pay at pickup');
+  }
+
+  /** The same for a booking's deposit, inside BookingsService.book's transaction. */
+  async prepareForBooking(tx: Queryable, o: { bookingId: string; businessId: string; payerId: string; amountMinor: number; currency: string }) {
+    await this.prepare(tx, { kind: 'booking', id: o.bookingId }, o, 'This business can’t take deposits online yet, so this service can’t be booked right now');
+  }
+
+  private async prepare(tx: Queryable, s: Subject, o: { businessId: string; payerId: string; amountMinor: number; currency: string }, unavailableMessage: string) {
     const stripe = this.provider();
     const a = await this.loadAccount(o.businessId, tx);
-    if (!this.accountView(a).onlinePayments) throw Errors.conflict('online_payments_unavailable', 'This business can’t take payment online yet; choose pay at pickup');
+    if (!this.accountView(a).onlinePayments) throw Errors.conflict('online_payments_unavailable', unavailableMessage);
     if (o.amountMinor <= 0) throw Errors.conflict('nothing_to_pay', 'This order is free; choose pay at pickup');
     const fee = Math.floor((o.amountMinor * this.config.PAYMENTS_PLATFORM_FEE_BPS) / 10_000);
     await this.db.query(
-      `INSERT INTO payments (order_id, business_id, payer_id, provider, livemode, amount_minor, fee_minor, currency, destination_account)
+      `INSERT INTO payments (${COLUMN[s.kind]}, business_id, payer_id, provider, livemode, amount_minor, fee_minor, currency, destination_account)
        VALUES ($1, $2, $3, 'stripe', $4, $5, $6, $7, $8)`,
-      [o.orderId, o.businessId, o.payerId, stripe.livemode, o.amountMinor, fee, o.currency, a!.account_id],
+      [s.id, o.businessId, o.payerId, stripe.livemode, o.amountMinor, fee, o.currency, a!.account_id],
       tx,
     );
   }
 
+  private loadFor(s: Subject, q: Queryable = this.db.pool, lock = false) {
+    return this.db.one<PaymentRow>(`SELECT * FROM payments WHERE ${COLUMN[s.kind]} = $1 ${lock ? 'FOR UPDATE' : ''}`, [s.id], q);
+  }
+
   private loadByOrder(orderId: string, q: Queryable = this.db.pool, lock = false) {
-    return this.db.one<PaymentRow>(`SELECT * FROM payments WHERE order_id = $1 ${lock ? 'FOR UPDATE' : ''}`, [orderId], q);
+    return this.loadFor({ kind: 'order', id: orderId }, q, lock);
+  }
+
+  private subjectOf(p: { order_id: string | null; booking_id: string | null }): Subject {
+    return p.order_id ? { kind: 'order', id: p.order_id } : { kind: 'booking', id: p.booking_id! };
+  }
+
+  private announce(s: Subject, created = false) {
+    return this.hooks[s.kind]?.announce(s.id, created) ?? Promise.resolve();
+  }
+
+  /** Tells the customer and staff that something about this payment changed (a refund, a dispute). */
+  async announcePayment(paymentId: string) {
+    const p = await this.db.one<PaymentRow>('SELECT * FROM payments WHERE id = $1', [paymentId]);
+    if (p) await this.announce(this.subjectOf(p));
   }
 
   /**
@@ -256,7 +312,7 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
    * link; a retry after a timeout reuses the idempotency key, so only one session exists.
    */
   async checkout(customerId: string, orderId: string) {
-    const stripe = this.provider();
+    this.provider();
     const o = await this.db.one<{ customer_id: string | null; status: string; handle: string }>(
       'SELECT o.customer_id, o.status, b.handle FROM orders o JOIN businesses b ON b.id = o.business_id WHERE o.id = $1',
       [orderId],
@@ -266,10 +322,55 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     if (!p) throw Errors.conflict('not_online', 'This order is paid at pickup');
     if (p.status === 'succeeded') throw Errors.conflict('already_paid', 'This order is already paid');
     if (p.status === 'cancelled' || o.status !== 'pending_payment') throw Errors.conflict('payment_closed', 'This order can no longer be paid; place it again');
+    const reuse = this.openSession(p, 'The time to pay for this order has run out; place it again');
+    if (reuse) return reuse;
+    const items = await this.db.query<{ name: string; unit_price_minor: string; quantity: number }>(
+      'SELECT name, unit_price_minor, quantity FROM order_items WHERE order_id = $1 ORDER BY position',
+      [orderId],
+    );
+    const web = this.config.PUBLIC_WEB_URL;
+    return this.startCheckout(
+      p,
+      customerId,
+      items.rows.map((i) => ({ name: i.name, unitMinor: Number(i.unit_price_minor), quantity: i.quantity })),
+      { success: `${web}/orders?paid=${orderId}`, cancel: `${web}/orders?order=${orderId}` },
+    );
+  }
+
+  /** The hosted checkout for a booking's deposit. Same rules as for an order. */
+  async bookingCheckout(customerId: string, bookingId: string) {
+    this.provider();
+    const k = await this.db.one<{ customer_id: string | null; status: string; service_name: string; starts_at: Date; time_zone: string }>(
+      `SELECT k.customer_id, k.status, s.name AS service_name, k.starts_at, b.time_zone
+         FROM bookings k JOIN booking_services s ON s.id = k.service_id JOIN businesses b ON b.id = k.business_id WHERE k.id = $1`,
+      [bookingId],
+    );
+    if (!k || k.customer_id !== customerId) throw Errors.notFound('Booking');
+    const p = await this.loadFor({ kind: 'booking', id: bookingId });
+    if (!p) throw Errors.conflict('not_online', 'This booking has no deposit to pay');
+    if (p.status === 'succeeded') throw Errors.conflict('already_paid', 'This deposit is already paid');
+    if (p.status === 'cancelled' || k.status !== 'pending_payment') throw Errors.conflict('payment_closed', 'This booking can no longer be paid; book again');
+    const reuse = this.openSession(p, 'The time to pay the deposit has run out; book again');
+    if (reuse) return reuse;
+    const when = new Intl.DateTimeFormat('en-GB', { timeZone: k.time_zone, dateStyle: 'medium', timeStyle: 'short' }).format(k.starts_at);
+    const web = this.config.PUBLIC_WEB_URL;
+    return this.startCheckout(p, customerId, [{ name: `Deposit: ${k.service_name}, ${when}`, unitMinor: Number(p.amount_minor), quantity: 1 }], {
+      success: `${web}/orders?booked=${bookingId}`,
+      cancel: `${web}/orders?booking=${bookingId}`,
+    });
+  }
+
+  /** The open checkout to send the customer back to, if there is one with time left. */
+  private openSession(p: PaymentRow, expiredMessage: string) {
     if (p.checkout_url && p.checkout_expires_at && p.checkout_expires_at.getTime() > Date.now() + 60_000) {
       return { url: p.checkout_url, expiresAt: p.checkout_expires_at };
     }
-    if (p.checkout_id) throw Errors.conflict('payment_closed', 'The time to pay for this order has run out; place it again');
+    if (p.checkout_id) throw Errors.conflict('payment_closed', expiredMessage);
+    return null;
+  }
+
+  private async startCheckout(p: PaymentRow, customerId: string, lines: { name: string; unitMinor: number; quantity: number }[], urls: { success: string; cancel: string }) {
+    const stripe = this.provider();
     await this.limits.consume({ name: 'payments:checkout', limit: 30, windowSeconds: 3600 }, customerId);
 
     // The expiry is part of the request, so it is saved first and reused by retries: same
@@ -279,30 +380,26 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
       expires = new Date(Math.ceil((Date.now() + (this.config.PAYMENTS_CHECKOUT_MINUTES + 5) * 60_000) / 1000) * 1000);
       await this.db.query('UPDATE payments SET checkout_expires_at = $2, updated_at = now() WHERE id = $1 AND checkout_id IS NULL', [p.id, expires]);
     }
-    const items = await this.db.query<{ name: string; unit_price_minor: string; quantity: number }>(
-      'SELECT name, unit_price_minor, quantity FROM order_items WHERE order_id = $1 ORDER BY position',
-      [orderId],
-    );
-    const web = this.config.PUBLIC_WEB_URL;
     const fee = Number(p.fee_minor);
+    const meta = { payment_id: p.id, ...(p.order_id ? { order_id: p.order_id } : { booking_id: p.booking_id! }) };
     const session = await stripe
       .post(
         '/v1/checkout/sessions',
         {
           mode: 'payment',
           client_reference_id: p.id,
-          line_items: items.rows.map((i) => ({
+          line_items: lines.map((i) => ({
             quantity: i.quantity,
-            price_data: { currency: p.currency.toLowerCase(), unit_amount: Number(i.unit_price_minor), product_data: { name: i.name } },
+            price_data: { currency: p.currency.toLowerCase(), unit_amount: i.unitMinor, product_data: { name: i.name } },
           })),
           payment_intent_data: {
             application_fee_amount: fee > 0 ? fee : undefined,
             transfer_data: { destination: p.destination_account },
-            metadata: { payment_id: p.id, order_id: orderId },
+            metadata: meta,
           },
-          metadata: { payment_id: p.id, order_id: orderId },
-          success_url: `${web}/orders?paid=${orderId}`,
-          cancel_url: `${web}/orders?order=${orderId}`,
+          metadata: meta,
+          success_url: urls.success,
+          cancel_url: urls.cancel,
           expires_at: Math.floor(expires.getTime() / 1000),
         },
         `checkout:${p.id}:${Math.floor(expires.getTime() / 1000)}`,
@@ -320,10 +417,42 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     const o = await this.db.one<{ customer_id: string | null; business_id: string }>('SELECT customer_id, business_id FROM orders WHERE id = $1', [orderId]);
     if (!o) throw Errors.notFound('Order');
     if (o.customer_id !== userId) await this.businesses.requireStaff(userId, o.business_id, 'orders.view').catch(() => Promise.reject(Errors.notFound('Order')));
-    const p = await this.loadByOrder(orderId);
+    return this.details({ kind: 'order', id: orderId });
+  }
+
+  /** Deposit details for a booking, for its customer or its business's staff. */
+  async forBooking(userId: string, bookingId: string) {
+    const k = await this.db.one<{ customer_id: string | null; business_id: string }>('SELECT customer_id, business_id FROM bookings WHERE id = $1', [bookingId]);
+    if (!k) throw Errors.notFound('Booking');
+    if (k.customer_id !== userId) await this.businesses.requireStaff(userId, k.business_id, 'bookings.view').catch(() => Promise.reject(Errors.notFound('Booking')));
+    return this.details({ kind: 'booking', id: bookingId });
+  }
+
+  private async details(s: Subject) {
+    const p = await this.loadFor(s);
     if (!p) return { payment: null };
     const refunds = await this.db.query<RefundRow>('SELECT * FROM refunds WHERE payment_id = $1 ORDER BY created_at', [p.id]);
-    return { payment: { ...paymentView(p), refunds: refunds.rows.map(refundView) } };
+    const disputes = await this.db.query<{ id: string; amount_minor: string; status: string; reason: string; evidence_due_by: Date | null; created_at: Date }>(
+      'SELECT id, amount_minor, status, reason, evidence_due_by, created_at FROM disputes WHERE payment_id = $1 ORDER BY created_at',
+      [p.id],
+    );
+    return {
+      payment: {
+        ...paymentView(p),
+        refunds: refunds.rows.map(refundView),
+        disputes: disputes.rows.map((d) => ({ id: d.id, amountMinor: Number(d.amount_minor), status: d.status, reason: d.reason, evidenceDueBy: d.evidence_due_by, createdAt: d.created_at })),
+      },
+    };
+  }
+
+  /**
+   * The key for an automatic refund. A refund the bank refused frees its amount again, so
+   * the next attempt needs a key of its own.
+   */
+  private async autoKey(s: Subject, paymentId: string) {
+    const failed = await this.db.one<{ n: string }>(`SELECT count(*) AS n FROM refunds WHERE payment_id = $1 AND origin = 'auto' AND status = 'failed'`, [paymentId]);
+    const n = Number(failed!.n);
+    return n ? `auto:${s.id}:${n}` : `auto:${s.id}`;
   }
 
   /** Called after an order closes (cancelled, rejected, business closed): stop the checkout or give the money back. */
@@ -331,8 +460,26 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     const p = await this.loadByOrder(orderId);
     if (!p || !this.stripe) return;
     if (p.status === 'requires_payment') await this.closeCheckout(p);
-    else if (p.status === 'succeeded' && Number(p.refunded_minor) < Number(p.amount_minor)) {
-      await this.createRefund(orderId, { origin: 'auto', reason: 'The order was cancelled', clientId: `auto:${orderId}`, requestedBy: null });
+    else if (p.status === 'succeeded' && refundable(p) > 0) {
+      const s: Subject = { kind: 'order', id: orderId };
+      await this.createRefund(s, { origin: 'auto', reason: 'The order was cancelled', clientId: await this.autoKey(s, p.id), requestedBy: null });
+    }
+  }
+
+  /**
+   * Called after a booking changes: closes the checkout of a booking that was cancelled
+   * before it was paid, and refunds a deposit that is due back (refund_due).
+   */
+  async settleBooking(bookingId: string) {
+    const p = await this.loadFor({ kind: 'booking', id: bookingId });
+    if (!p || !this.stripe) return;
+    const k = await this.db.one<{ status: string; refund_due: boolean; cancelled_by: string | null }>('SELECT status, refund_due, cancelled_by FROM bookings WHERE id = $1', [bookingId]);
+    if (!k) return;
+    if (p.status === 'requires_payment' && k.status !== 'pending_payment') await this.closeCheckout(p);
+    else if (p.status === 'succeeded' && k.refund_due && refundable(p) > 0) {
+      const s: Subject = { kind: 'booking', id: bookingId };
+      const reason = k.cancelled_by === 'business' ? 'The business cancelled the booking' : 'The booking was cancelled in time';
+      await this.createRefund(s, { origin: 'auto', reason, clientId: await this.autoKey(s, p.id), requestedBy: null });
     }
   }
 
@@ -360,20 +507,40 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     await this.businesses.requireStaff(userId, o.business_id, 'orders.refund').catch((e) => {
       throw o.customer_id === userId ? Errors.forbidden('Only the business can refund') : e;
     });
-    this.provider();
-    await this.limits.consume({ name: 'payments:refund', limit: 60, windowSeconds: 3600 }, userId);
-    return this.createRefund(orderId, { amountMinor: input.amountMinor, reason: input.reason, origin: 'staff', clientId: `staff:${input.clientId}`, requestedBy: userId });
+    return this.staffRefund(userId, { kind: 'order', id: orderId }, input);
   }
 
-  private async createRefund(orderId: string, r: { amountMinor?: number; reason: string; origin: 'staff' | 'auto'; clientId: string; requestedBy: string | null }) {
+  /** Staff refund all or part of a booking's deposit, for example as a goodwill gesture after a no-show. */
+  async refundBooking(userId: string, bookingId: string, input: { amountMinor?: number; reason: string; clientId: string }) {
+    const k = await this.db.one<{ business_id: string; customer_id: string | null }>('SELECT business_id, customer_id FROM bookings WHERE id = $1', [bookingId]);
+    if (!k) throw Errors.notFound('Booking');
+    await this.businesses.requireStaff(userId, k.business_id, 'bookings.refund').catch((e) => {
+      throw k.customer_id === userId ? Errors.forbidden('Only the business can refund') : e;
+    });
+    return this.staffRefund(userId, { kind: 'booking', id: bookingId }, input);
+  }
+
+  private async staffRefund(userId: string, s: Subject, input: { amountMinor?: number; reason: string; clientId: string }) {
+    this.provider();
+    await this.limits.consume({ name: 'payments:refund', limit: 60, windowSeconds: 3600 }, userId);
+    return this.createRefund(s, { amountMinor: input.amountMinor, reason: input.reason, origin: 'staff', clientId: `staff:${input.clientId}`, requestedBy: userId });
+  }
+
+  private async createRefund(s: Subject, r: { amountMinor?: number; reason: string; origin: 'staff' | 'auto'; clientId: string; requestedBy: string | null }) {
     const refund = await this.db.tx(async (tx) => {
-      const p = await this.loadByOrder(orderId, tx, true);
-      if (!p || p.status !== 'succeeded') throw Errors.conflict('not_paid', 'This order hasn’t been paid online');
+      const p = await this.loadFor(s, tx, true);
+      if (!p || p.status !== 'succeeded') throw Errors.conflict('not_paid', s.kind === 'order' ? 'This order hasn’t been paid online' : 'This booking has no paid deposit');
       const existing = await this.db.one<RefundRow>('SELECT * FROM refunds WHERE payment_id = $1 AND client_id = $2', [p.id, r.clientId], tx);
       if (existing) return existing;
+      // While the bank is deciding a dispute, the money is with the bank; the provider refuses refunds.
+      const open = await this.db.one('SELECT 1 FROM disputes WHERE payment_id = $1 AND status = ANY($2)', [p.id, OPEN_DISPUTE_STATUSES], tx);
+      if (open) {
+        if (r.origin === 'auto') return null;
+        throw Errors.conflict('payment_disputed', 'The customer’s bank is looking into this payment, so it can’t be refunded until that is settled');
+      }
       const amount = Number(p.amount_minor);
       const already = Number(p.refunded_minor);
-      const left = amount - already;
+      const left = refundable(p);
       const want = r.amountMinor ?? left;
       if (want <= 0 || want > left) {
         if (r.origin === 'auto' && left === 0) return null;
@@ -392,7 +559,7 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
         tx,
       );
       await this.db.query('UPDATE payments SET refunded_minor = refunded_minor + $2, updated_at = now() WHERE id = $1', [p.id, want], tx);
-      await this.audit.record({ actorId: r.requestedBy, action: 'payments.refund.requested', targetType: 'order', targetId: orderId, metadata: { amountMinor: want, origin: r.origin } }, tx);
+      await this.audit.record({ actorId: r.requestedBy, action: 'payments.refund.requested', targetType: s.kind, targetId: s.id, metadata: { amountMinor: want, origin: r.origin } }, tx);
       return row!;
     });
     if (!refund) return null;
@@ -437,8 +604,8 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
   }
 
   private async setRefundStatus(refundId: string, to: 'succeeded' | 'failed', tx: Queryable, after: After) {
-    const r = await this.db.one<RefundRow & { business_id: string; order_id: string; currency: string }>(
-      `SELECT r.*, p.business_id, p.order_id, p.currency FROM refunds r JOIN payments p ON p.id = r.payment_id WHERE r.id = $1 FOR UPDATE OF r`,
+    const r = await this.db.one<RefundRow & { business_id: string; order_id: string | null; booking_id: string | null; currency: string }>(
+      `SELECT r.*, p.business_id, p.order_id, p.booking_id, p.currency FROM refunds r JOIN payments p ON p.id = r.payment_id WHERE r.id = $1 FOR UPDATE OF r`,
       [refundId],
       tx,
     );
@@ -465,8 +632,9 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
         tx,
       );
     }
-    await this.audit.record({ actorId: null, action: `payments.refund.${to}`, targetType: 'order', targetId: r.order_id, metadata: { refundId: r.id } }, tx);
-    after.push(() => this.orders?.announce(r.order_id, false) ?? Promise.resolve());
+    const s = this.subjectOf(r);
+    await this.audit.record({ actorId: null, action: `payments.refund.${to}`, targetType: s.kind, targetId: s.id, metadata: { refundId: r.id } }, tx);
+    after.push(() => this.announce(s));
   }
 
   /** A refund object from the provider: ours (matched by id or metadata) or one made in its dashboard. */
@@ -567,7 +735,7 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
         await this.applyAccount(o, tx);
         return;
       default:
-        if (this.billing?.handles(event.type)) await this.billing.apply(event, tx, after);
+        for (const h of this.handlers) if (h.handles(event.type)) await h.apply(event, tx, after);
     }
   }
 
@@ -608,19 +776,21 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
       },
       tx,
     );
-    const placed = (await this.orders?.paid(p.order_id, tx)) ?? false;
-    await this.audit.record({ actorId: null, action: 'payments.payment.succeeded', targetType: 'order', targetId: p.order_id, metadata: { amountMinor: amount } }, tx);
-    // Paid after the order had closed (it expired or was cancelled meanwhile): give it all back.
-    if (!placed) after.push(() => this.settleClosedOrder(p.order_id));
-    after.push(() => this.orders?.announce(p.order_id, placed) ?? Promise.resolve());
+    const s = this.subjectOf(p);
+    const placed = (await this.hooks[s.kind]?.paid(s.id, tx)) ?? false;
+    await this.audit.record({ actorId: null, action: 'payments.payment.succeeded', targetType: s.kind, targetId: s.id, metadata: { amountMinor: amount } }, tx);
+    // Paid after it had closed (it expired or was cancelled meanwhile): give it all back.
+    if (!placed) after.push(() => (s.kind === 'order' ? this.settleClosedOrder(s.id) : this.settleBooking(s.id)));
+    after.push(() => this.announce(s, placed));
   }
 
   private async paymentClosed(session: Record<string, any>, tx: Queryable, after: After) {
     const p = await this.findPayment(session, tx);
     if (!p || p.status !== 'requires_payment') return;
     await this.db.query(`UPDATE payments SET status = 'cancelled', updated_at = now() WHERE id = $1`, [p.id], tx);
-    const changed = (await this.orders?.unpaid(p.order_id, 'Payment wasn’t completed in time', tx)) ?? false;
-    if (changed) after.push(() => this.orders?.announce(p.order_id, false) ?? Promise.resolve());
+    const s = this.subjectOf(p);
+    const changed = (await this.hooks[s.kind]?.unpaid(s.id, 'Payment wasn’t completed in time', tx)) ?? false;
+    if (changed) after.push(() => this.announce(s));
   }
 
   // ---------------------------------------------------------------- sweep
@@ -641,6 +811,8 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     );
     for (const p of stale.rows) await this.closeCheckout(p).catch((e) => this.logger.warn(`closing checkout for ${p.id}: ${e.message}`));
     await this.settleClosedOrders();
+    await this.settleBookings();
+    for (const h of this.handlers) await h.sweep?.().catch((e) => this.logger.warn(`payments sweep: ${(e as Error).message}`));
     const unsent = await this.db.query<{ id: string }>(
       `SELECT id FROM refunds WHERE status = 'pending' AND provider_refund_id IS NULL AND created_at < now() - interval '30 seconds' ORDER BY created_at LIMIT 100`,
     );
@@ -653,12 +825,29 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     const owed = await this.db.query<{ order_id: string }>(
       `SELECT p.order_id FROM payments p JOIN orders o ON o.id = p.order_id
         WHERE o.status IN ('cancelled', 'rejected')
-          AND ((p.status = 'succeeded' AND p.refunded_minor < p.amount_minor
-                AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.payment_id = p.id AND r.origin = 'auto' AND r.status = 'pending'))
+          AND ((p.status = 'succeeded' AND p.refunded_minor + p.disputed_minor < p.amount_minor
+                AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.payment_id = p.id AND r.origin = 'auto' AND r.status = 'pending')
+                AND NOT EXISTS (SELECT 1 FROM disputes d WHERE d.payment_id = p.id AND d.status = ANY($1)))
                OR p.status = 'requires_payment')
         LIMIT 100`,
+      [OPEN_DISPUTE_STATUSES],
     );
-    for (const { order_id } of owed.rows) await this.settleClosedOrder(order_id).catch((e) => this.logger.warn(`settling order ${order_id}: ${e.message}`));
+    for (const { order_id } of owed.rows) await this.settleClosedOrder(order_id!).catch((e) => this.logger.warn(`settling order ${order_id}: ${e.message}`));
+  }
+
+  /** Every cancelled booking with a checkout still open or a deposit still owed back is settled. */
+  async settleBookings() {
+    if (!this.stripe) return;
+    const owed = await this.db.query<{ booking_id: string }>(
+      `SELECT p.booking_id FROM payments p JOIN bookings k ON k.id = p.booking_id
+        WHERE (p.status = 'requires_payment' AND k.status <> 'pending_payment')
+           OR (p.status = 'succeeded' AND k.refund_due AND p.refunded_minor + p.disputed_minor < p.amount_minor
+               AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.payment_id = p.id AND r.origin = 'auto' AND r.status = 'pending')
+               AND NOT EXISTS (SELECT 1 FROM disputes d WHERE d.payment_id = p.id AND d.status = ANY($1)))
+        LIMIT 100`,
+      [OPEN_DISPUTE_STATUSES],
+    );
+    for (const { booking_id } of owed.rows) await this.settleBooking(booking_id).catch((e) => this.logger.warn(`settling booking ${booking_id}: ${e.message}`));
   }
 
   // ---------------------------------------------------------------- listings
@@ -672,11 +861,37 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
   async forBusiness(userId: string, businessId: string, limit: number, cursor?: string) {
     await this.businesses.requireStaff(userId, businessId, 'payments.view');
     const page = await this.page('p.business_id = $1', [businessId], limit, cursor);
-    const totals = await this.db.query<{ currency: string; paid: string; refunded: string; fees: string }>(
-      `SELECT currency, sum(amount_minor) AS paid, sum(refunded_minor) AS refunded, sum(fee_minor) AS fees FROM payments WHERE business_id = $1 AND status = 'succeeded' GROUP BY currency`,
+    const totals = await this.db.query<{ currency: string; paid: string; refunded: string; disputed: string; fees: string }>(
+      `SELECT currency, sum(amount_minor) AS paid, sum(refunded_minor) AS refunded, sum(disputed_minor) AS disputed, sum(fee_minor) AS fees
+         FROM payments WHERE business_id = $1 AND status = 'succeeded' GROUP BY currency`,
       [businessId],
     );
-    return { ...page, totals: totals.rows.map((t) => ({ currency: t.currency, paidMinor: Number(t.paid), refundedMinor: Number(t.refunded), feesMinor: Number(t.fees) })) };
+    return {
+      ...page,
+      totals: totals.rows.map((t) => ({ currency: t.currency, paidMinor: Number(t.paid), refundedMinor: Number(t.refunded), disputedMinor: Number(t.disputed), feesMinor: Number(t.fees) })),
+    };
+  }
+
+  /**
+   * The business's payouts, read from its own account at the provider: the provider pays
+   * out to the business's bank on its own schedule, and we never hold the money.
+   */
+  async payouts(userId: string, businessId: string) {
+    await this.businesses.requireStaff(userId, businessId, 'payments.view');
+    const a = await this.loadAccount(businessId);
+    if (!a || !this.stripe || a.livemode !== this.stripe.livemode) return { connected: !!a, payouts: [] };
+    const res = await this.stripe.get<{ data: Record<string, any>[] }>('/v1/payouts?limit=20', { account: a.account_id }).catch(rethrowProvider);
+    return {
+      connected: true,
+      payouts: res.data.map((p) => ({
+        id: p.id as string,
+        amountMinor: Number(p.amount),
+        currency: String(p.currency).toUpperCase(),
+        status: p.status as string,
+        arrivalDate: p.arrival_date ? new Date(Number(p.arrival_date) * 1000) : null,
+        createdAt: new Date(Number(p.created) * 1000),
+      })),
+    };
   }
 
   /** Every payment, for the admin dashboard. */
@@ -692,8 +907,10 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
       where += ` AND (p.created_at, p.id) < ($${p.length - 1}::timestamptz, $${p.length}::uuid)`;
     }
     p.push(limit + 1);
-    const { rows } = await this.db.query<PaymentRow & { business_name: string; business_handle: string }>(
-      `SELECT p.*, b.name AS business_name, b.handle AS business_handle FROM payments p JOIN businesses b ON b.id = p.business_id
+    const { rows } = await this.db.query<PaymentRow & { business_name: string; business_handle: string; dispute_status: string | null }>(
+      `SELECT p.*, b.name AS business_name, b.handle AS business_handle,
+              (SELECT d.status FROM disputes d WHERE d.payment_id = p.id ORDER BY d.created_at DESC LIMIT 1) AS dispute_status
+         FROM payments p JOIN businesses b ON b.id = p.business_id
         WHERE ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT $${p.length}`,
       p,
     );
@@ -701,14 +918,14 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     return {
-      payments: page.map((r) => ({ ...paymentView(r), business: { id: r.business_id, handle: r.business_handle, name: r.business_name } })),
+      payments: page.map((r) => ({ ...paymentView(r), disputeStatus: r.dispute_status, business: { id: r.business_id, handle: r.business_handle, name: r.business_name } })),
       nextCursor: more && last ? encodeCursor(last.created_at, last.id) : null,
     };
   }
 
   async exportFor(userId: string) {
     const { rows } = await this.db.query(
-      `SELECT p.id, p.order_id, p.business_id, p.amount_minor, p.currency, p.status, p.refunded_minor, p.created_at, p.succeeded_at,
+      `SELECT p.id, p.order_id, p.booking_id, p.business_id, p.amount_minor, p.currency, p.status, p.refunded_minor, p.created_at, p.succeeded_at,
               (SELECT json_agg(json_build_object('amountMinor', r.amount_minor, 'status', r.status, 'reason', r.reason, 'createdAt', r.created_at) ORDER BY r.created_at)
                  FROM refunds r WHERE r.payment_id = p.id) AS refunds
          FROM payments p WHERE p.payer_id = $1 ORDER BY p.created_at`,
@@ -718,16 +935,24 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
   }
 }
 
+/** What can still be refunded: neither refunded already nor held back by the bank in a dispute. */
+export function refundable(p: Pick<PaymentRow, 'status' | 'amount_minor' | 'refunded_minor' | 'disputed_minor'>) {
+  if (p.status !== 'succeeded') return 0;
+  return Math.max(0, Number(p.amount_minor) - Number(p.refunded_minor) - Number(p.disputed_minor ?? 0));
+}
+
 export function paymentView(p: PaymentRow) {
   const amount = Number(p.amount_minor);
   const refunded = Number(p.refunded_minor);
   return {
     id: p.id,
     orderId: p.order_id,
+    bookingId: p.booking_id,
     status: paymentStatus(p.status, amount, refunded),
     amountMinor: amount,
     refundedMinor: refunded,
-    refundableMinor: p.status === 'succeeded' ? amount - refunded : 0,
+    disputedMinor: Number(p.disputed_minor ?? 0),
+    refundableMinor: refundable(p),
     feeMinor: Number(p.fee_minor),
     currency: p.currency,
     createdAt: p.created_at,

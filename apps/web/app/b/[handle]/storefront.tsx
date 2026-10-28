@@ -195,7 +195,14 @@ function BookingPanel({ b, services }: { b: Business; services: Service[] }) {
               onClick={async () => {
                 setErr(null);
                 try {
-                  setBooked(await chatApi<Booking>('POST', `businesses/${b.id}/bookings`, { serviceId, startsAt: s.startsAt, clientId: newClientId() }));
+                  const k = await chatApi<Booking>('POST', `businesses/${b.id}/bookings`, { serviceId, startsAt: s.startsAt, clientId: newClientId() });
+                  if (k.status === 'pending_payment') {
+                    // The time is held while the customer pays the deposit on the provider's page.
+                    const { url } = await chatApi<{ url: string }>('POST', `bookings/${k.id}/checkout`);
+                    window.location.assign(url);
+                    return;
+                  }
+                  setBooked(k);
                 } catch (x) {
                   setErr(x instanceof Error ? x.message : 'Could not book that time');
                 }
@@ -212,6 +219,12 @@ function BookingPanel({ b, services }: { b: Business; services: Service[] }) {
         </p>
       )}
       {svc.description && <p className="small muted">{svc.description}</p>}
+      {svc.depositMinor > 0 && (
+        <p className="small" data-testid="deposit-note">
+          {svc.depositMinor >= svc.priceMinor ? `You pay ${money(svc.depositMinor, svc.currency)} by card when you book.` : `You pay a ${money(svc.depositMinor, svc.currency)} deposit by card when you book, and the rest there.`}{' '}
+          Cancel at least {svc.freeCancelHours} hours before to get it back; after that, or if you don’t come, the business keeps it.
+        </p>
+      )}
       {err && <p className="error">{err}</p>}
     </section>
   );

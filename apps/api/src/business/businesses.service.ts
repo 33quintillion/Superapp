@@ -6,7 +6,7 @@ import { Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { DatabaseService, Queryable } from '../database/database.service';
 import { userSummary } from '../social/follows.service';
-import { canManageRole, Permission, permissionsOf, StaffRole } from './roles';
+import { can, canManageRole, Permission, permissionsOf, StaffRole } from './roles';
 
 export const CATEGORIES = ['food', 'retail', 'beauty', 'health', 'services', 'education', 'entertainment', 'other'] as const;
 
@@ -218,8 +218,10 @@ export class BusinessesService {
       [businessId],
       tx,
     );
+    // Paid deposits go back in full (refund_due; the payments sweep sends them).
     await this.db.query(
-      `UPDATE bookings SET status = 'cancelled', cancelled_by = 'business', updated_at = now() WHERE business_id = $1 AND status = 'confirmed' AND starts_at > now()`,
+      `UPDATE bookings SET status = 'cancelled', cancelled_by = 'business', refund_due = (status = 'confirmed'), updated_at = now()
+        WHERE business_id = $1 AND status IN ('pending_payment', 'confirmed') AND starts_at > now()`,
       [businessId],
       tx,
     );
@@ -243,7 +245,7 @@ export class BusinessesService {
     if (!r) throw Errors.notFound('Business');
     if (!permissionsOf(r.role).includes(permission)) throw Errors.forbidden('Your role at this business doesn’t allow that');
     // A suspended business can be looked at and wound down, but not changed.
-    if (r.state === 'suspended' && !['business.view', 'staff.view', 'orders.view', 'bookings.view', 'business.delete', 'orders.refund', 'payments.view', 'billing.manage'].includes(permission)) {
+    if (r.state === 'suspended' && !['business.view', 'staff.view', 'orders.view', 'bookings.view', 'business.delete', 'orders.refund', 'bookings.refund', 'disputes.respond', 'payments.view', 'billing.manage'].includes(permission)) {
       throw Errors.conflict('business_suspended', 'This business is suspended');
     }
     return r.role;
@@ -337,6 +339,12 @@ export class BusinessesService {
     return rows.map((r) => r.user_id);
   }
 
+  /** Active staff whose role has the permission, e.g. who should hear about money matters. */
+  async staffWith(businessId: string, permission: Permission, db: Queryable = this.db.pool): Promise<string[]> {
+    const { rows } = await this.db.query<{ user_id: string; role: StaffRole }>(`SELECT user_id, role FROM business_staff WHERE business_id = $1 AND state = 'active'`, [businessId], db);
+    return rows.filter((r) => can(r.role, permission)).map((r) => r.user_id);
+  }
+
   // ---------------------------------------------------------------- opening hours
 
   async hours(businessId: string) {
@@ -407,7 +415,13 @@ export class BusinessesService {
       [userId],
       tx,
     );
-    await this.db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = 'customer', updated_at = now() WHERE customer_id = $1 AND status = 'confirmed' AND starts_at > now()`, [userId], tx);
+    // As if they cancelled: a deposit goes back if it is still before the free-cancellation time.
+    await this.db.query(
+      `UPDATE bookings SET status = 'cancelled', cancelled_by = 'customer', refund_due = (status = 'confirmed' AND now() < free_cancel_until), updated_at = now()
+        WHERE customer_id = $1 AND status IN ('pending_payment', 'confirmed') AND starts_at > now()`,
+      [userId],
+      tx,
+    );
     await this.db.query(`UPDATE orders SET customer_id = NULL, note = '' WHERE customer_id = $1`, [userId], tx);
     await this.db.query(`UPDATE bookings SET customer_id = NULL, note = '' WHERE customer_id = $1`, [userId], tx);
     await this.db.query('UPDATE payments SET payer_id = NULL WHERE payer_id = $1', [userId], tx);
@@ -424,7 +438,10 @@ export class BusinessesService {
            FROM orders o WHERE o.customer_id = $1 ORDER BY o.created_at`,
         [userId],
       ),
-      this.db.query(`SELECT id, business_id, service_id, starts_at, ends_at, status, note, created_at FROM bookings WHERE customer_id = $1 ORDER BY starts_at`, [userId]),
+      this.db.query(
+        `SELECT id, business_id, service_id, starts_at, ends_at, status, note, price_minor, deposit_minor, created_at FROM bookings WHERE customer_id = $1 ORDER BY starts_at`,
+        [userId],
+      ),
     ]);
     return { businessRoles: staff.rows, orders: orders.rows, bookings: bookings.rows };
   }

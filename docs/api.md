@@ -213,37 +213,45 @@ Business accounts, staff roles, the catalogue, orders and bookings. See [`busine
 | GET | `/v1/orders/:id` | ✓ | The customer or the business's staff; 404 for anyone else |
 | POST | `/v1/orders/:id/cancel` | ✓ | The customer, while `pending_payment` or `placed`. A paid order is refunded in full. 409 `order_in_progress` after that |
 | POST | `/v1/orders/:id/status` | ✓ | `orders.manage`. `{ status, reason? }`. `placed → accepted \| rejected`, `accepted → ready \| cancelled`, `ready → completed \| cancelled`. 409 `invalid_transition`. Rejected and cancelled orders give their stock back, and paid ones are refunded in full. `pending_payment` orders can't be moved by staff |
-| GET | `/v1/businesses/:ref/services` | ✓ | `{ services: [{ id, name, description, durationMinutes, priceMinor, currency, capacity, active }] }`. `all=true` (staff) includes inactive ones |
-| POST | `/v1/businesses/:id/services` | ✓ | `services.manage`. `{ name, durationMinutes (5–480), priceMinor?, capacity? (1–100, people at once), description?, active? }` |
-| PATCH / DELETE | `/v1/businesses/:id/services/:serviceId` | ✓ | `services.manage`. Delete archives it; existing bookings stay |
+| GET | `/v1/businesses/:ref/services` | ✓ | `{ services: [{ id, name, description, durationMinutes, priceMinor, currency, capacity, active, depositMinor, freeCancelHours }] }`. `all=true` (staff) includes inactive ones |
+| POST | `/v1/businesses/:id/services` | ✓ | `services.manage`. `{ name, durationMinutes (5–480), priceMinor?, capacity? (1–100, people at once), description?, active?, depositMinor? (0 to the price, paid online when booking), freeCancelHours? (0–168, default 24) }`. A deposit needs card payments: 409 `online_payments_unavailable` |
+| PATCH / DELETE | `/v1/businesses/:id/services/:serviceId` | ✓ | `services.manage`. Delete archives it; existing bookings stay, and keep the price and deposit they were booked with |
 | GET | `/v1/businesses/:ref/services/:serviceId/slots` | ✓ | `date=YYYY-MM-DD` (the business's local date) → `{ date, timeZone, slots: [{ startsAt, endsAt, remaining }] }`. Steps of the service's length inside opening hours, in the future, up to 90 days ahead, with room left |
-| POST | `/v1/businesses/:ref/bookings` | ✓ | `{ serviceId, startsAt (one of the slots), clientId, note? }` → 201 booking, or 200 for a repeated `clientId`. 409 `slot_unavailable`, `slot_full`, `bookings_closed`. 20 per hour |
+| POST | `/v1/businesses/:ref/bookings` | ✓ | `{ serviceId, startsAt (one of the slots), clientId, note? }` → 201 booking, or 200 for a repeated `clientId`. 409 `slot_unavailable`, `slot_full`, `bookings_closed`. 20 per hour. With a deposit the booking starts as `pending_payment`, holding the place; pay with `POST /v1/bookings/:id/checkout` |
 | GET | `/v1/businesses/:id/bookings` | ✓ | `bookings.view`. `from`, `to` (ISO times, up to 62 days apart) |
-| GET | `/v1/bookings` | ✓ | Your bookings. `upcoming=false` for all of them, newest first |
+| GET | `/v1/bookings` | ✓ | Your bookings (upcoming ones include those waiting for a deposit). `upcoming=false` for all of them, newest first |
 | GET | `/v1/bookings/:id` | ✓ | The customer or the business's staff |
-| POST | `/v1/bookings/:id/cancel` | ✓ | The customer, or staff with `bookings.manage`, before it starts. 409 `booking_started`, `booking_closed` |
-| POST | `/v1/bookings/:id/outcome` | ✓ | `bookings.manage`. `{ status: "completed" \| "no_show" }`, after the start. 409 `booking_not_started` |
+| POST | `/v1/bookings/:id/cancel` | ✓ | The customer, or staff with `bookings.manage`, before it starts. 409 `booking_started`, `booking_closed`, `booking_unpaid` (staff, while waiting for the deposit). A paid deposit is refunded when staff cancel or the customer cancels by `deposit.freeCancelUntil`; otherwise it is kept |
+| POST | `/v1/bookings/:id/outcome` | ✓ | `bookings.manage`. `{ status: "completed" \| "no_show" }`, after the start. 409 `booking_not_started`. A deposit is kept either way |
 
-An order is `{ id, business: { id, handle, name }, customer? (staff view only), status, statusReason, fulfilment: "pickup", payment: "pay_in_person" \| "online", paymentStatus: null \| "unpaid" \| "paid" \| "partially_refunded" \| "refunded" \| "cancelled", refundedMinor, note, items: [{ itemId, name, unitPriceMinor, quantity }], totalMinor, currency, createdAt, updatedAt }`. Staff don't see `pending_payment` orders. A booking is `{ id, business: { id, handle, name, timeZone }, service: { id, name }, customer? , startsAt, endsAt, status: "confirmed" \| "cancelled" \| "completed" \| "no_show", cancelledBy, note, createdAt }`. Money is always in minor units of the business's currency.
+An order is `{ id, business: { id, handle, name }, customer? (staff view only), status, statusReason, fulfilment: "pickup", payment: "pay_in_person" \| "online", paymentStatus: null \| "unpaid" \| "paid" \| "partially_refunded" \| "refunded" \| "cancelled", refundedMinor, note, items: [{ itemId, name, unitPriceMinor, quantity }], totalMinor, currency, createdAt, updatedAt }`. Staff don't see `pending_payment` orders. A booking is `{ id, business: { id, handle, name, timeZone }, service: { id, name }, customer? , startsAt, endsAt, status: "pending_payment" \| "confirmed" \| "cancelled" \| "completed" \| "no_show", cancelledBy, note, currency, priceMinor, deposit: null \| { amountMinor, status (as paymentStatus), refundedMinor, freeCancelUntil, refundDue }, createdAt }`. Staff don't see `pending_payment` bookings. Money is always in minor units of the business's currency.
 
 ## Payments
-Card payments for orders, refunds, payouts and business plans, through Stripe. See [`payments.md`](payments.md). When the server has no provider (`PAYMENTS_PROVIDER=none`) these return 409 `payments_not_enabled`. Provider failures are 502 `payment_provider_unavailable` (safe to retry) or 409 `payment_provider_refused`.
+Card payments for orders and booking deposits, refunds, disputes, payouts and business plans, through Stripe. See [`payments.md`](payments.md). When the server has no provider (`PAYMENTS_PROVIDER=none`) these return 409 `payments_not_enabled`. Provider failures are 502 `payment_provider_unavailable` (safe to retry) or 409 `payment_provider_refused`.
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
 | POST | `/v1/payments/webhooks/stripe` | Signature | Stripe events. Needs a valid `Stripe-Signature`, else 400 `invalid_signature`; events from the other mode are 400 `livemode_mismatch`. → `{ received: true, duplicate }` |
 | GET | `/v1/businesses/:id/payments/account` | ✓ | `payments.view`. `{ enabled, provider, connected, country, chargesEnabled, payoutsEnabled, detailsSubmitted, onlinePayments, updatedAt }`, refreshed from Stripe |
 | POST | `/v1/businesses/:id/payments/account` | ✓ | `payments.manage` (owner). `{ country }` (two letters) → `{ url, account }`: Stripe's onboarding page. Call again to continue. 409 `account_mode_mismatch` |
-| GET | `/v1/businesses/:id/payments` | ✓ | `payments.view`. `{ payments, totals: [{ currency, paidMinor, refundedMinor, feesMinor }], nextCursor }`. `limit`, `cursor` |
+| GET | `/v1/businesses/:id/payments` | ✓ | `payments.view`. `{ payments, totals: [{ currency, paidMinor, refundedMinor, disputedMinor, feesMinor }], nextCursor }`. `limit`, `cursor`. Each payment has `orderId` or `bookingId`, and `disputeStatus` |
+| GET | `/v1/businesses/:id/payouts` | ✓ | `payments.view`. `{ connected, payouts: [{ id, amountMinor, currency, status, arrivalDate, createdAt }] }`, read from the business's own Stripe account (newest 20) |
+| GET | `/v1/businesses/:id/disputes` | ✓ | `payments.view`. `{ disputes: [{ id, paymentId, orderId, bookingId, amountMinor, currency, reason, status, open, canRespond, evidenceDueBy, evidenceSubmittedAt, createdAt }] }` |
+| POST | `/v1/disputes/:id/response` | ✓ | `disputes.respond` (owners and managers). `{ text }` (20–20,000 characters): the business's side, sent to the bank once. 409 `dispute_closed` |
 | POST | `/v1/orders/:id/checkout` | ✓ | The customer, while `pending_payment` → `{ url, expiresAt }`. The same page while it is open. 409 `not_online`, `already_paid`, `payment_closed` |
-| GET | `/v1/orders/:id/payment` | ✓ | The customer or staff with `orders.view` → `{ payment: null \| { id, orderId, status, amountMinor, refundedMinor, refundableMinor, feeMinor, currency, createdAt, paidAt, refunds: [{ id, amountMinor, status, origin, reason, createdAt }] } }` |
-| POST | `/v1/orders/:id/refunds` | ✓ | `orders.refund`. `{ clientId, amountMinor?, reason? }`; no amount refunds what's left → 201 `{ refund, payment }`, or the first refund for a repeated `clientId`. 409 `not_paid`, `refund_too_large` (`details.refundableMinor`) |
+| GET | `/v1/orders/:id/payment` | ✓ | The customer or staff with `orders.view` → `{ payment: null \| { id, orderId, bookingId, status, amountMinor, refundedMinor, disputedMinor, refundableMinor, feeMinor, currency, createdAt, paidAt, refunds: [{ id, amountMinor, status, origin, reason, createdAt }], disputes: [{ id, amountMinor, status, reason, evidenceDueBy, createdAt }] } }` |
+| POST | `/v1/orders/:id/refunds` | ✓ | `orders.refund`. `{ clientId, amountMinor?, reason? }`; no amount refunds what's left → 201 `{ refund, payment }`, or the first refund for a repeated `clientId`. 409 `not_paid`, `refund_too_large` (`details.refundableMinor`), `payment_disputed` |
+| POST | `/v1/bookings/:id/checkout` | ✓ | The customer, while `pending_payment` → `{ url, expiresAt }` for the deposit. Same rules as orders |
+| GET | `/v1/bookings/:id/payment` | ✓ | The customer or staff with `bookings.view`. Same shape as an order's |
+| POST | `/v1/bookings/:id/refunds` | ✓ | `bookings.refund` (owners and managers). Same as an order's, for the deposit |
 | GET | `/v1/me/payments` | ✓ | Your card payments, newest first |
 | GET | `/v1/plans` | ✓ | Plans on sale: `{ plans: [{ id, code, name, description, priceMinor, currency, interval, entitlements }] }` |
 | GET | `/v1/businesses/:id/subscription` | ✓ | Staff. `{ subscription: null \| { status, plan, currentPeriodEnd, cancelAtPeriodEnd }, entitlements, limits: { staff, catalogue } }` |
 | POST | `/v1/businesses/:id/subscription` | ✓ | `billing.manage` (owner). `{ planCode, clientId }` → `{ url }`: Stripe Checkout. 409 `already_subscribed` |
 | DELETE | `/v1/businesses/:id/subscription` | ✓ | `billing.manage`. Cancels at the end of the period |
 | POST | `/v1/businesses/:id/subscription/resume` | ✓ | `billing.manage`. Undoes that |
+| POST | `/v1/businesses/:id/subscription/preview` | ✓ | `billing.manage`. `{ planCode }` → `{ plan, from, amountDueNowMinor (below zero is credit), currency, intervalChanges }` |
+| POST | `/v1/businesses/:id/subscription/change` | ✓ | `billing.manage`. `{ planCode, clientId }`: switches in place, billing the difference now. 409 `same_plan`, `currency_mismatch`, `subscription_not_active`, `subscription_ending`, `payment_provider_refused` (card declined; nothing changes) |
 | POST | `/v1/businesses/:id/billing-portal` | ✓ | `billing.manage` → `{ url }`: Stripe's page for the card and invoices |
 
 ## Integrations
@@ -280,6 +288,8 @@ Platform staff only. Every route needs a `platform_staff` role, two-step verific
 | GET / POST | `/v1/admin/staff` | admin | List platform staff, or `{ username }` to add a moderator |
 | GET | `/v1/admin/payments` | admin | Every card payment, with its business. `status`, `limit`, `cursor` |
 | GET | `/v1/admin/ledger` | admin | `{ balances: [{ account, currency, balanceMinor }], check: { ok, transactions, problems: [{ type, id, problem }] } }` |
+| GET | `/v1/admin/reconciliation` | admin | `from`, `to` (ISO, at most 31 days) → `{ ok, matched, problems: [{ problem: "missing_at_provider" \| "unknown_at_provider" \| "amount_mismatch", kind, ref, currency, ourAmountMinor, providerAmountMinor }], subscriptions: [{ currency, ledgerMinor, providerMinor, differenceMinor }] }`: our ledger against Stripe's balance transactions |
+| GET | `/v1/admin/disputes` | admin | Every dispute, newest 100 |
 | GET / POST | `/v1/admin/plans` | admin | All plans, or create one as `draft`: `{ code, name, priceMinor, currency, interval: "month" \| "year", entitlements, description? }`. Makes the Stripe product and price. 409 `plan_code_taken` |
 | POST | `/v1/admin/plans/:id/state` | admin | `{ state: "active" \| "retired" }` |
 | DELETE | `/v1/admin/staff/:userId` | admin | Remove a moderator (admins are removed from the command line) |

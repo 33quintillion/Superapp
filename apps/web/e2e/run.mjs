@@ -833,6 +833,45 @@ async function paymentsFlow(browser, API, tag, step) {
   await lee.page.waitForSelector('[data-testid=my-order][data-payment=partially_refunded]');
   step('owner refunds part of the order and the customer sees it partly refunded');
 
+  // Bookings with a deposit. Opening hours and bookings are switched on through the API.
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, opens: '09:00', closes: '12:00' }));
+  assert((await fetch(`${API}/v1/businesses/${b.id}/hours`, { method: 'PUT', headers: kimAuth, body: JSON.stringify({ hours: allWeek }) })).ok, 'hours set');
+  assert((await fetch(`${API}/v1/businesses/${b.id}`, { method: 'PATCH', headers: kimAuth, body: JSON.stringify({ bookingsEnabled: true }) })).ok, 'bookings on');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=services`);
+  await kim.page.fill('[data-testid=add-service] input[name=name]', 'Catering tasting');
+  await kim.page.fill('[data-testid=add-service] input[name=price]', '20.00');
+  await kim.page.fill('[data-testid=add-service] input[name=deposit]', '5.00');
+  await kim.page.click('[data-testid=add-service] button[type=submit]');
+  await kim.page.waitForSelector('[data-testid=service-deposit]:has-text("£5.00 deposit")');
+  await lee.page.goto(`${WEB}/b/${handle}`);
+  await lee.page.waitForSelector('[data-testid=deposit-note]:has-text("£5.00 deposit")');
+  // Three days ahead, so it is well before the 24-hour free cancellation time.
+  await lee.page.fill('[data-testid=booking] input[name=date]', new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10));
+  await lee.page.click('[data-testid=slot] >> nth=0');
+  await lee.page.waitForSelector('[data-testid=checkout-total]');
+  assert((await lee.page.textContent('[data-testid=checkout-total]')).includes('5.00'), 'the deposit is charged, not the full price');
+  await lee.page.click('[data-testid=checkout-pay]');
+  await lee.page.waitForURL(/\/orders\?booked=/);
+  await lee.page.waitForSelector('[data-testid=booking-result][data-status=confirmed]');
+  await lee.page.waitForSelector('[data-testid=my-booking][data-status=confirmed] [data-testid=my-booking-deposit]:has-text("paid online")');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=bookings`);
+  await kim.page.waitForSelector('[data-testid=business-booking][data-status=confirmed] [data-testid=booking-deposit]');
+  lee.page.once('dialog', (d) => d.accept());
+  await lee.page.click('[data-testid=my-booking][data-status=confirmed] [data-testid=cancel-booking]');
+  await lee.page.waitForSelector('[data-testid=my-booking][data-status=cancelled] [data-testid=my-booking-deposit]:has-text("refunded")');
+  step('customer pays a booking deposit on the hosted checkout, the business sees it paid, and cancelling in time refunds it');
+
+  // The customer's bank disputes the order payment; the owner answers from the payments tab.
+  const intent = [...stripe.intents.values()].find((pi) => pi.amount === 700);
+  await stripe.dispute(intent.id, { reason: 'product_not_received' });
+  await kim.page.goto(`${WEB}/business/${handle}?tab=payments`);
+  await kim.page.waitForSelector('[data-testid=dispute][data-status=needs_response]');
+  await kim.page.fill('[data-testid=dispute-response] textarea[name=text]', 'Lee collected both bagels at the counter at 9:15 and paid by card.');
+  kim.page.once('dialog', (d) => d.accept());
+  await kim.page.click('[data-testid=dispute-response] button[type=submit]');
+  await kim.page.waitForSelector('[data-testid=dispute][data-status=under_review]');
+  step('a disputed payment shows up for the owner, who sends their side to the bank');
+
   await max.page.goto(`${WEB}/admin`);
   await max.page.click('role=tab[name="Payments and plans"]');
   const code = `growth-${tag}`;
@@ -844,7 +883,7 @@ async function paymentsFlow(browser, API, tag, step) {
   await max.page.click(`[data-testid=admin-plan][data-code="${code}"] button:has-text("Put on sale")`);
   await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${code}"][data-state=active]`);
 
-  await kim.page.click('role=tab[name="Payments and plan"]');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=payments`);
   await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 10 staff")');
   await kim.page.click(`[data-testid=plan-option][data-code="${code}"] button:has-text("Choose")`);
   await kim.page.waitForSelector('[data-testid=checkout-pay]');
@@ -858,11 +897,28 @@ async function paymentsFlow(browser, API, tag, step) {
   await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 100 staff")');
   step('admin creates a plan and puts it on sale; the owner subscribes through hosted checkout and gets the higher limits');
 
+  const bigger = `scale-${tag}`;
+  await max.page.fill('[data-testid=new-plan] input[name=code]', bigger);
+  await max.page.fill('[data-testid=new-plan] input[name=name]', 'Scale');
+  await max.page.fill('[data-testid=new-plan] input[name=price]', '45.00');
+  await max.page.click('[data-testid=new-plan] button[type=submit]');
+  await max.page.click(`[data-testid=admin-plan][data-code="${bigger}"] button:has-text("Put on sale")`);
+  await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${bigger}"][data-state=active]`);
+  await kim.page.reload();
+  await kim.page.click(`[data-testid=switch-option][data-code="${bigger}"] button:has-text("See the cost")`);
+  await kim.page.waitForSelector('[data-testid=plan-preview]:has-text("today")');
+  await kim.page.click('[data-testid=confirm-switch]');
+  await kim.page.waitForSelector('[data-testid=current-plan]:has-text("Scale")');
+  step('the owner sees what switching plan costs today and switches in place');
+
   await max.page.reload();
   await max.page.click('role=tab[name="Payments and plans"]');
   await max.page.waitForSelector('[data-testid=ledger-check][data-ok=true]');
   assert((await max.page.locator('[data-testid=admin-payments] .row').count()) >= 1, 'admin sees the card payment');
-  step('the ledger balances and agrees with every payment, refund and subscription invoice');
+  await max.page.waitForSelector('[data-testid=admin-disputes] .row');
+  await max.page.click('[data-testid=run-reconciliation]');
+  await max.page.waitForSelector('[data-testid=reconciliation-result][data-ok=true]');
+  step('the ledger balances, agrees with every payment, refund, dispute and invoice, and matches the provider’s own records');
 
   for (const p of Object.values(people)) await p.ctx.close();
 }
@@ -1046,6 +1102,13 @@ await stripe.start();
 let browser;
 let failed = false;
 try {
+  // A fresh schema each run, as in CI: the provider check compares the ledger with this run's stand-in.
+  {
+    const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+    const pool = new Pool({ connectionString: env.DATABASE_URL });
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    await pool.end();
+  }
   await exec('node', ['dist/src/database/migrate.cli.js'], { cwd: apiDir, env });
   // Start each run with empty rate-limit counters, as CI does.
   const Redis = createRequire(join(apiDir, 'package.json'))('ioredis');

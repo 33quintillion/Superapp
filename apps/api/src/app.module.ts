@@ -9,6 +9,8 @@ import { IntegrationsController } from './integrations/integrations.controller';
 import { LedgerService } from './payments/ledger';
 import { PaymentsController } from './payments/payments.controller';
 import { PaymentsService } from './payments/payments.service';
+import { DisputesService } from './payments/disputes.service';
+import { ReconciliationService } from './payments/reconciliation.service';
 import { SubscriptionsService } from './payments/subscriptions.service';
 import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
@@ -102,6 +104,8 @@ export class AppModule {
         LedgerService,
         PaymentsService,
         SubscriptionsService,
+        DisputesService,
+        ReconciliationService,
         OrdersService,
         BookingsService,
         IntegrationsService,

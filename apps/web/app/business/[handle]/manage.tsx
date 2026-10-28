@@ -6,8 +6,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { chatApi, newClientId } from '@/lib/chat-client';
 import {
   Booking,
+  BOOKING_STATUS_LABEL,
   Business,
   BusinessSubscription,
+  Dispute,
+  DISPUTE_STATUS_LABEL,
   ENTITLEMENT_LABEL,
   Item,
   localTime,
@@ -17,8 +20,10 @@ import {
   ORDER_STATUS_LABEL,
   Payment,
   PAYMENT_LABEL,
+  Payout,
   PayoutAccount,
   Plan,
+  PlanChangePreview,
   Service,
   StaffMember,
   StaffRole,
@@ -128,7 +133,7 @@ function OrdersTab({ b }: { b: Business }) {
               {o.note && ` · “${o.note}”`}
             </div>
             {b.permissions.includes('orders.refund') && (o.paymentStatus === 'paid' || o.paymentStatus === 'partially_refunded') && (
-              <RefundForm order={o} onDone={() => void load()} />
+              <RefundForm path={`orders/${o.id}/refunds`} leftMinor={o.totalMinor - o.refundedMinor} currency={o.currency} onDone={() => void load()} />
             )}
           </div>
           {b.permissions.includes('orders.manage') && (
@@ -169,8 +174,16 @@ function BookingsTab({ b }: { b: Business }) {
           <div className="row" key={k.id} data-testid="business-booking" data-status={k.status}>
             <div>
               <strong>{localTime(k.startsAt, b.timeZone, true)}</strong> {k.service.name} · {k.customer?.displayName ?? 'Deleted account'}
-              <span className="pill">{k.status.replace('_', ' ')}</span>
+              <span className="pill">{BOOKING_STATUS_LABEL[k.status]}</span>
+              {k.deposit?.status && (
+                <span className="pill" data-testid="booking-deposit">
+                  Deposit {money(k.deposit.amountMinor, k.currency)}: {PAYMENT_LABEL[k.deposit.status].toLowerCase()}
+                </span>
+              )}
               {k.note && <div className="small muted">“{k.note}”</div>}
+              {b.permissions.includes('bookings.refund') && k.deposit && (k.deposit.status === 'paid' || k.deposit.status === 'partially_refunded') && (
+                <RefundForm path={`bookings/${k.id}/refunds`} leftMinor={k.deposit.amountMinor - k.deposit.refundedMinor} currency={k.currency} onDone={() => void load()} />
+              )}
             </div>
             {k.status === 'confirmed' && (
               <span className="actions">
@@ -184,7 +197,13 @@ function BookingsTab({ b }: { b: Business }) {
                     </button>
                   </>
                 ) : (
-                  <button className="btn quiet small danger" onClick={() => act(async () => { await chatApi('POST', `bookings/${k.id}/cancel`); await load(); })}>
+                  <button
+                    className="btn quiet small danger"
+                    onClick={() => {
+                      if (k.deposit?.status === 'paid' && !confirm(`Cancel this booking? The ${money(k.deposit.amountMinor, k.currency)} deposit will be refunded.`)) return;
+                      void act(async () => { await chatApi('POST', `bookings/${k.id}/cancel`); await load(); });
+                    }}
+                  >
                     Cancel
                   </button>
                 )}
@@ -278,6 +297,12 @@ function ServicesTab({ b }: { b: Business }) {
             <span>
               <strong>{s.name}</strong> · {s.durationMinutes} min · {money(s.priceMinor, s.currency)}
               {s.capacity > 1 && ` · ${s.capacity} at a time`}
+              {s.depositMinor > 0 && (
+                <span className="small muted" data-testid="service-deposit">
+                  {' '}
+                  · {money(s.depositMinor, s.currency)} deposit, free cancellation up to {s.freeCancelHours} h before
+                </span>
+              )}
             </span>
             <button className="btn quiet small danger" onClick={() => act(async () => { await chatApi('DELETE', `businesses/${b.id}/services/${s.id}`); await load(); })}>
               Remove
@@ -297,6 +322,8 @@ function ServicesTab({ b }: { b: Business }) {
                 durationMinutes: Number(f.get('duration')),
                 priceMinor: toMinor(String(f.get('price') || '0'), b.currency),
                 capacity: Number(f.get('capacity') || 1),
+                depositMinor: toMinor(String(f.get('deposit') || '0'), b.currency),
+                freeCancelHours: Number(f.get('freeCancelHours') || 24),
               });
               form.reset();
               await load();
@@ -309,6 +336,14 @@ function ServicesTab({ b }: { b: Business }) {
             <input name="price" placeholder={`Price in ${b.currency}`} inputMode="decimal" aria-label="Service price" />
             <input name="capacity" type="number" min={1} max={100} defaultValue={1} aria-label="People at a time" />
           </div>
+          {b.payments.online ? (
+            <div className="composer-row">
+              <input name="deposit" placeholder={`Deposit paid when booking (${b.currency}, optional)`} inputMode="decimal" aria-label="Deposit" />
+              <input name="freeCancelHours" type="number" min={0} max={168} defaultValue={24} aria-label="Free cancellation, hours before" />
+            </div>
+          ) : (
+            <p className="small muted">Set up payouts under Payments and plan to ask for a deposit when people book.</p>
+          )}
           <button className="btn" type="submit">
             Add service
           </button>
@@ -494,12 +529,11 @@ function SettingsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
   );
 }
 
-/** Staff refund part or all of a paid order. The id makes a double click or a retry harmless. */
-function RefundForm({ order: o, onDone }: { order: Order; onDone: () => void }) {
+/** Staff refund part or all of a paid order or deposit. The id makes a double click or a retry harmless. */
+function RefundForm({ path, leftMinor: left, currency, onDone }: { path: string; leftMinor: number; currency: string; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState(newClientId);
   const { err, act } = useAct();
-  const left = o.totalMinor - o.refundedMinor;
   if (!open)
     return (
       <button className="link-btn small" onClick={() => setOpen(true)}>
@@ -515,10 +549,10 @@ function RefundForm({ order: o, onDone }: { order: Order; onDone: () => void }) 
         const f = new FormData(e.currentTarget);
         const amount = String(f.get('amount') ?? '').trim();
         void act(async () => {
-          await chatApi('POST', `orders/${o.id}/refunds`, {
+          await chatApi('POST', path, {
             clientId: key,
             reason: String(f.get('reason') ?? ''),
-            ...(amount ? { amountMinor: toMinor(amount, o.currency) } : {}),
+            ...(amount ? { amountMinor: toMinor(amount, currency) } : {}),
           });
           setKey(newClientId());
           setOpen(false);
@@ -526,7 +560,7 @@ function RefundForm({ order: o, onDone }: { order: Order; onDone: () => void }) 
         });
       }}
     >
-      <input name="amount" inputMode="decimal" placeholder={`Amount (blank = all ${money(left, o.currency)})`} aria-label="Refund amount" />
+      <input name="amount" inputMode="decimal" placeholder={`Amount (blank = all ${money(left, currency)})`} aria-label="Refund amount" />
       <input name="reason" placeholder="Reason (optional)" maxLength={300} aria-label="Refund reason" />
       <button className="btn small danger" type="submit">
         Refund
@@ -536,7 +570,7 @@ function RefundForm({ order: o, onDone }: { order: Order; onDone: () => void }) 
   );
 }
 
-type PaymentList = { payments: Payment[]; totals: { currency: string; paidMinor: number; refundedMinor: number; feesMinor: number }[] };
+type PaymentList = { payments: Payment[]; totals: { currency: string; paidMinor: number; refundedMinor: number; disputedMinor: number; feesMinor: number }[] };
 
 const COUNTRIES = ['GB', 'IE', 'US', 'CA', 'AU', 'NZ', 'DE', 'FR', 'ES', 'IT', 'NL', 'IN', 'SG'];
 
@@ -546,19 +580,26 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
   const [sub, setSub] = useState<BusinessSubscription | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [payments, setPayments] = useState<PaymentList | null>(null);
+  const [payoutList, setPayoutList] = useState<Payout[]>([]);
+  const [disputes, setDisputes] = useState<Dispute[]>([]);
+  const [preview, setPreview] = useState<PlanChangePreview | null>(null);
   const { err, act } = useAct();
   const owner = b.permissions.includes('payments.manage');
   const load = useCallback(async () => {
-    const [a, s, p, list] = await Promise.all([
+    const [a, s, p, list, d] = await Promise.all([
       chatApi<PayoutAccount>('GET', `businesses/${b.id}/payments/account`),
       chatApi<BusinessSubscription>('GET', `businesses/${b.id}/subscription`),
       chatApi<{ plans: Plan[] }>('GET', 'plans'),
       chatApi<PaymentList>('GET', `businesses/${b.id}/payments?limit=20`),
+      chatApi<{ disputes: Dispute[] }>('GET', `businesses/${b.id}/disputes`),
     ]);
     setAccount(a);
     setSub(s);
     setPlans(p.plans);
     setPayments(list);
+    setDisputes(d.disputes);
+    // Payouts come from the provider; the rest of the page works without them.
+    if (a.connected) setPayoutList((await chatApi<{ payouts: Payout[] }>('GET', `businesses/${b.id}/payouts`).catch(() => ({ payouts: [] }))).payouts);
     // Payout status decides whether customers see "pay now"; keep the header in step.
     if (a.onlinePayments !== b.payments.online) onChange(await chatApi<Business>('GET', `businesses/${b.id}`));
   }, [b.id, b.payments.online, onChange]);
@@ -612,7 +653,44 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
             )}
           </>
         )}
+        {payoutList.length > 0 && (
+          <div className="stack" data-testid="payout-list">
+            <h3>Recent payouts to your bank</h3>
+            {payoutList.map((p) => (
+              <div className="row small" key={p.id} data-testid="payout">
+                <span>
+                  {money(p.amountMinor, p.currency)}
+                  {p.arrivalDate && ` · arrives ${new Date(p.arrivalDate).toLocaleDateString()}`}
+                </span>
+                <span className="pill">{p.status.replace('_', ' ')}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
+
+      {disputes.length > 0 && (
+        <section className="card stack" data-testid="disputes">
+          <h2>Disputes</h2>
+          <p className="small muted">
+            A customer asked their bank to take back a card payment. The bank holds the money while it decides; tell it your side before the date shown. If you win, the money comes back to you.
+          </p>
+          {disputes.map((d) => (
+            <div className="stack" key={d.id} data-testid="dispute" data-status={d.status}>
+              <div className="row">
+                <span>
+                  {money(d.amountMinor, d.currency)} · {d.orderId ? 'order' : 'booking deposit'} · {d.reason.replace(/_/g, ' ') || 'no reason given'}
+                  {d.evidenceDueBy && d.canRespond && <span className="small muted"> · respond by {new Date(d.evidenceDueBy).toLocaleDateString()}</span>}
+                </span>
+                <span className="pill">{DISPUTE_STATUS_LABEL[d.status]}</span>
+              </div>
+              {d.canRespond && b.permissions.includes('disputes.respond') && (
+                <DisputeResponse dispute={d} onSent={(x) => setDisputes(disputes.map((y) => (y.id === x.id ? x : y)))} />
+              )}
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="card stack" data-testid="plan">
         <h2>Plan</h2>
@@ -638,6 +716,51 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
                 <button className="btn quiet small" onClick={() => go(`businesses/${b.id}/billing-portal`)}>
                   Card and invoices
                 </button>
+              </div>
+            )}
+            {b.permissions.includes('billing.manage') && !sub.subscription.cancelAtPeriodEnd && sub.subscription.status === 'active' && (
+              <div className="stack" data-testid="change-plan">
+                {plans
+                  .filter((p) => p.id !== sub.subscription!.plan.id && p.currency === sub.subscription!.plan.currency)
+                  .map((p) => (
+                    <div className="row small" key={p.id} data-testid="switch-option" data-code={p.code}>
+                      <span>
+                        Switch to <strong>{p.name}</strong> · {money(p.priceMinor, p.currency)} a {p.interval}
+                      </span>
+                      <button className="btn quiet small" onClick={() => act(async () => setPreview(await chatApi<PlanChangePreview>('POST', `businesses/${b.id}/subscription/preview`, { planCode: p.code })))}>
+                        See the cost
+                      </button>
+                    </div>
+                  ))}
+                {preview && (
+                  <div className="stack" data-testid="plan-preview">
+                    <p>
+                      Switching to <strong>{preview.plan.name}</strong>{' '}
+                      {preview.amountDueNowMinor > 0
+                        ? `costs ${money(preview.amountDueNowMinor, preview.currency)} today, for the rest of this period.`
+                        : preview.amountDueNowMinor < 0
+                          ? `gives you ${money(-preview.amountDueNowMinor, preview.currency)} of credit towards your next bills.`
+                          : 'costs nothing extra today.'}
+                      {preview.intervalChanges && ' A new billing period starts today.'}
+                      {' '}Then {money(preview.plan.priceMinor, preview.currency)} a {preview.plan.interval}.
+                    </p>
+                    <div className="composer-row">
+                      <button
+                        className="btn small"
+                        data-testid="confirm-switch"
+                        onClick={() => act(async () => {
+                          setSub(await chatApi<BusinessSubscription>('POST', `businesses/${b.id}/subscription/change`, { planCode: preview.plan.code, clientId: newClientId() }));
+                          setPreview(null);
+                        })}
+                      >
+                        Switch now
+                      </button>
+                      <button className="btn quiet small" onClick={() => setPreview(null)}>
+                        Not now
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -673,20 +796,50 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
           <h2>Card payments</h2>
           {payments.totals.map((t) => (
             <p key={t.currency} className="small">
-              Paid {money(t.paidMinor, t.currency)} · refunded {money(t.refundedMinor, t.currency)} · Nexa fee {money(t.feesMinor, t.currency)}
+              Paid {money(t.paidMinor, t.currency)} · refunded {money(t.refundedMinor, t.currency)}
+              {t.disputedMinor > 0 && ` · held in disputes ${money(t.disputedMinor, t.currency)}`} · Nexa fee {money(t.feesMinor, t.currency)}
             </p>
           ))}
           {payments.payments.map((p) => (
             <div className="row small" key={p.id}>
               <span>
-                {money(p.amountMinor, p.currency)} · {localTime(p.createdAt, b.timeZone, true)}
+                {money(p.amountMinor, p.currency)} · {p.bookingId ? 'deposit' : 'order'} · {localTime(p.createdAt, b.timeZone, true)}
               </span>
-              <span className="pill">{PAYMENT_LABEL[p.status]}</span>
+              <span className="actions">
+                {p.disputeStatus && <span className="pill">{DISPUTE_STATUS_LABEL[p.disputeStatus]}</span>}
+                <span className="pill">{PAYMENT_LABEL[p.status]}</span>
+              </span>
             </div>
           ))}
         </section>
       )}
       {err && <p className="error">{err}</p>}
     </>
+  );
+}
+
+/** The business's side of a dispute, sent to the customer's bank once. */
+function DisputeResponse({ dispute: d, onSent }: { dispute: Dispute; onSent: (d: Dispute) => void }) {
+  const { err, act } = useAct();
+  return (
+    <form
+      className="stack"
+      data-testid="dispute-response"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const text = String(new FormData(e.currentTarget).get('text') ?? '');
+        if (!confirm('Send this to the bank? You can only send it once.')) return;
+        void act(async () => onSent(await chatApi<Dispute>('POST', `disputes/${d.id}/response`, { text })));
+      }}
+    >
+      <label className="field">
+        <span>What happened? Include dates, what the customer got, and any messages with them.</span>
+        <textarea name="text" required minLength={20} maxLength={20000} rows={4} />
+      </label>
+      <button className="btn small" type="submit">
+        Send to the bank
+      </button>
+      {err && <p className="error small">{err}</p>}
+    </form>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
-import { ENTITLEMENT_LABEL, Integration, money, Payment, PAYMENT_LABEL, Plan, toMinor } from '@/lib/business-client';
+import { Dispute, DISPUTE_STATUS_LABEL, ENTITLEMENT_LABEL, Integration, money, Payment, PAYMENT_LABEL, Plan, toMinor } from '@/lib/business-client';
 import type { UserSummary } from '@/lib/social-client';
 
 export interface Overview {
@@ -478,6 +478,13 @@ interface Ledger {
   check: { ok: boolean; transactions: number; problems: { type: string; id: string; problem: string }[] };
 }
 
+interface Reconciliation {
+  ok: boolean;
+  matched: number;
+  problems: { problem: string; kind: string; ref: string; currency: string; ourAmountMinor: number | null; providerAmountMinor: number | null }[];
+  subscriptions: { currency: string; ledgerMinor: number; providerMinor: number; differenceMinor: number }[];
+}
+
 const ACCOUNT_LABEL: Record<string, string> = {
   'external:customers': 'Customers (paid in, net of refunds)',
   'platform:fees': 'Nexa fees on orders',
@@ -489,16 +496,19 @@ function Payments() {
   const [ledger, setLedger] = useState<Ledger | null>(null);
   const [list, setList] = useState<Payment[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [disputes, setDisputes] = useState<Dispute[]>([]);
   const { err, act } = useAct();
   const load = useCallback(async () => {
-    const [l, p, pl] = await Promise.all([
+    const [l, p, pl, d] = await Promise.all([
       chatApi<Ledger>('GET', 'admin/ledger'),
       chatApi<{ payments: Payment[] }>('GET', 'admin/payments?limit=30'),
       chatApi<{ plans: Plan[] }>('GET', 'admin/plans'),
+      chatApi<{ disputes: Dispute[] }>('GET', 'admin/disputes'),
     ]);
     setLedger(l);
     setList(p.payments);
     setPlans(pl.plans);
+    setDisputes(d.disputes);
   }, []);
   useEffect(() => void load().catch(() => undefined), [load]);
   // Business sales accounts are summed per currency: one line per business would be too long here.
@@ -512,7 +522,7 @@ function Payments() {
           <>
             <p data-testid="ledger-check" data-ok={String(ledger.check.ok)}>
               {ledger.check.ok
-                ? `Balanced: ${ledger.check.transactions} transactions agree with every payment and refund.`
+                ? `Balanced: ${ledger.check.transactions} transactions agree with every payment, refund and dispute.`
                 : `${ledger.check.problems.length} problems found. Look into these before paying anything out.`}
             </p>
             {ledger.check.problems.map((p) => (
@@ -534,6 +544,21 @@ function Payments() {
             ))}
           </>
         )}
+      </section>
+
+      <ProviderCheck />
+
+      <section className="card stack" data-testid="admin-disputes">
+        <h2>Disputes</h2>
+        {disputes.length === 0 && <p className="muted">None.</p>}
+        {disputes.map((d) => (
+          <div className="row small" key={d.id}>
+            <span>
+              {money(d.amountMinor, d.currency)} · {d.orderId ? 'order' : 'deposit'} · {d.reason.replace(/_/g, ' ')} · {new Date(d.createdAt).toLocaleDateString()}
+            </span>
+            <span className="pill">{DISPUTE_STATUS_LABEL[d.status]}</span>
+          </div>
+        ))}
       </section>
 
       <section className="card stack" data-testid="admin-plans">
@@ -626,5 +651,55 @@ function Payments() {
       </section>
       {err && <p className="error">{err}</p>}
     </>
+  );
+}
+
+/** Our ledger against the payment provider's own balance records, for a chosen period. */
+function ProviderCheck() {
+  const [days, setDays] = useState(7);
+  const [result, setResult] = useState<Reconciliation | null>(null);
+  const { err, act } = useAct();
+  return (
+    <section className="card stack" data-testid="reconciliation">
+      <h2>Check against the payment provider</h2>
+      <p className="small muted">Compares what we recorded with the provider’s balance records, to catch anything a lost notification missed.</p>
+      <div className="composer-row">
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Period">
+          <option value={1}>Last day</option>
+          <option value={7}>Last 7 days</option>
+          <option value={31}>Last 31 days</option>
+        </select>
+        <button
+          className="btn small"
+          data-testid="run-reconciliation"
+          onClick={() => act(async () => {
+            const to = new Date();
+            const from = new Date(to.getTime() - days * 86400_000);
+            setResult(await chatApi<Reconciliation>('GET', `admin/reconciliation?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`));
+          })}
+        >
+          Run check
+        </button>
+      </div>
+      {result && (
+        <>
+          <p data-testid="reconciliation-result" data-ok={String(result.ok)}>
+            {result.ok ? `All ${result.matched} payments, refunds and disputes match.` : `${result.problems.length} differences found; ${result.matched} match.`}
+          </p>
+          {result.problems.map((p) => (
+            <p key={`${p.kind}:${p.ref}`} className="error small">
+              {p.kind} {p.ref}: {p.problem.replace(/_/g, ' ')} (ours {p.ourAmountMinor === null ? 'none' : money(p.ourAmountMinor, p.currency)}, provider{' '}
+              {p.providerAmountMinor === null ? 'none' : money(p.providerAmountMinor, p.currency)})
+            </p>
+          ))}
+          {result.subscriptions.map((t) => (
+            <p key={t.currency} className={t.differenceMinor ? 'error small' : 'small'}>
+              Plan charges in {t.currency}: ours {money(t.ledgerMinor, t.currency)}, provider {money(t.providerMinor, t.currency)}
+            </p>
+          ))}
+        </>
+      )}
+      {err && <p className="error">{err}</p>}
+    </section>
   );
 }

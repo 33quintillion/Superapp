@@ -83,6 +83,7 @@ A frame that fails gets `{ type: "error", ref, error: { code, message, details? 
 | `call.signal` | `{ callId, from, signal }`, only to the one connection taking part on the receiving side |
 | `order.updated`, `booking.updated` | The order or booking, as REST returns it to the customer, when the business (or you, on another device) changes it |
 | `business.order.created`, `business.order.updated`, `business.booking.created`, `business.booking.updated` | The order or booking with its `customer`, to every active staff member of the business |
+| `business.dispute.updated` | A dispute on one of the business's payments (see [`payments.md`](payments.md#disputes)), to owners and managers |
 
 Events go to every device of every member, including the device that made the change. Clients deduplicate by message id.
 

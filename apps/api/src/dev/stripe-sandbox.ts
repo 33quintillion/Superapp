@@ -5,11 +5,14 @@ import { signStripePayload } from '../payments/stripe';
 
 /**
  * A local stand-in for the parts of Stripe that Nexa uses: Connect accounts, hosted
- * Checkout (payments and subscriptions), refunds, products and prices, subscriptions,
- * the billing portal, and signed webhooks. It checks what Stripe checks (the secret key,
- * idempotency keys reused with different parameters, refunds larger than what is left)
- * and serves simple hosted pages, so payments can be clicked through in local development
- * and the browser tests without a Stripe account. Not for production: it holds no money.
+ * Checkout (payments and subscriptions), refunds, products and prices, subscriptions and
+ * plan changes with proration, disputes, transfers and their reversals, connected-account
+ * payouts, the platform's balance transactions, the billing portal, and signed webhooks.
+ * It checks what Stripe checks (the secret key, idempotency keys reused with different
+ * parameters, refunds larger than what is left or on a disputed charge, reversals larger
+ * than the transfer) and serves simple hosted pages, so payments can be clicked through in
+ * local development and the browser tests without a Stripe account. Not for production:
+ * it holds no money. Card fees, tax, 3-D Secure and payout timing aren't imitated.
  */
 
 type Obj = Record<string, any>;
@@ -46,6 +49,13 @@ export class StripeSandbox {
   readonly prices = new Map<string, Obj>();
   readonly subscriptions = new Map<string, Obj>();
   readonly invoices = new Map<string, Obj>();
+  readonly charges = new Map<string, Obj>();
+  readonly transfers = new Map<string, Obj>();
+  readonly disputes = new Map<string, Obj>();
+  /** Payouts per connected account, newest first. */
+  readonly payouts = new Map<string, Obj[]>();
+  /** The platform's balance transactions, oldest first. */
+  readonly balance: Obj[] = [];
   autoDeliver: boolean;
   refundStatus: 'succeeded' | 'pending';
   /** Where events are POSTed; can be set once the receiving server has a port. */
@@ -147,6 +157,7 @@ export class StripeSandbox {
     if (s.status !== 'open') throw new Error(`session ${sessionId} is ${s.status}`);
     const out: Obj[] = [];
     if (s.mode === 'payment') {
+      const fee = s.payment_intent_data?.application_fee_amount ? Number(s.payment_intent_data.application_fee_amount) : 0;
       const pi = {
         id: id('pi'),
         object: 'payment_intent',
@@ -162,13 +173,17 @@ export class StripeSandbox {
         latest_charge: id('ch'),
       };
       this.intents.set(pi.id, pi);
+      const dest = s.payment_intent_data?.transfer_data?.destination;
+      const transfer = dest ? this.newTransfer(s.amount_total - fee, s.currency, dest, pi.latest_charge) : null;
+      this.charges.set(pi.latest_charge, { id: pi.latest_charge, object: 'charge', amount: s.amount_total, currency: s.currency, payment_intent: pi.id, transfer: transfer?.id ?? null, disputed: false });
+      this.book('charge', s.amount_total, s.currency, pi.latest_charge, 'charge');
       Object.assign(s, { status: 'complete', payment_status: 'paid', payment_intent: pi.id });
       out.push(this.emit('payment_intent.succeeded', pi), this.emit('checkout.session.completed', s));
     } else {
       const customer = s.customer ?? this.newCustomer({ email: s.customer_email }).id;
       const price = this.prices.get(s.line_items[0].price);
       const sub = this.newSubscription(customer, price!, s.subscription_data?.metadata ?? {});
-      const inv = this.newInvoice(sub, price!);
+      const inv = this.newInvoice(sub, price!.unit_amount, price!.currency);
       Object.assign(s, { status: 'complete', payment_status: 'paid', subscription: sub.id, customer });
       out.push(this.emit('customer.subscription.created', sub), this.emit('checkout.session.completed', s), this.emit('invoice.paid', inv));
     }
@@ -193,6 +208,7 @@ export class StripeSandbox {
       const pi = this.intents.get(r.payment_intent)!;
       pi.amount_refunded -= r.amount;
       r.failure_reason = 'expired_or_canceled_card';
+      this.book('refund_failure', r.amount, r.currency, r.id, 'refund_failure');
     }
     await this.send(status === 'failed' ? [this.emit('refund.failed', r), this.emit('refund.updated', r)] : [this.emit('refund.updated', r)]);
     return r;
@@ -206,14 +222,17 @@ export class StripeSandbox {
     return r;
   }
 
-  /** The subscription renews and the invoice is paid. */
+  /** The subscription renews and the invoice is paid, less any credit from a downgrade. */
   async renew(subscriptionId: string) {
     const sub = this.subscriptions.get(subscriptionId)!;
     const price = this.prices.get(sub.items.data[0].price.id)!;
     const end = sub.current_period_end + periodSeconds(price.recurring.interval);
     Object.assign(sub, { status: 'active', current_period_end: end });
     sub.items.data[0].current_period_end = end;
-    const inv = this.newInvoice(sub, price);
+    const customer = this.customers.get(sub.customer);
+    const credit = Math.min(price.unit_amount, -(customer?.balance ?? 0));
+    if (customer && credit > 0) customer.balance += credit;
+    const inv = this.newInvoice(sub, price.unit_amount - Math.max(0, credit), price.currency);
     await this.send([this.emit('invoice.paid', inv), this.emit('customer.subscription.updated', sub)]);
     return inv;
   }
@@ -232,6 +251,62 @@ export class StripeSandbox {
     sub.status = 'canceled';
     await this.send([this.emit('customer.subscription.deleted', sub)]);
     return sub;
+  }
+
+  /**
+   * The customer's bank disputes a payment. Like Stripe, the money is taken from the
+   * platform at once (funds_withdrawn) unless `withdraw` is false (an inquiry).
+   */
+  async dispute(paymentIntentId: string, opts: { amount?: number; reason?: string; withdraw?: boolean } = {}) {
+    const pi = this.intents.get(paymentIntentId);
+    if (!pi) throw new Error(`no payment intent ${paymentIntentId}`);
+    const charge = this.charges.get(pi.latest_charge)!;
+    const withdraw = opts.withdraw ?? true;
+    const dp = {
+      id: id('dp'),
+      object: 'dispute',
+      amount: opts.amount ?? pi.amount - pi.amount_refunded,
+      currency: pi.currency,
+      charge: charge.id,
+      payment_intent: pi.id,
+      reason: opts.reason ?? 'fraudulent',
+      status: withdraw ? 'needs_response' : 'warning_needs_response',
+      evidence: {} as Obj,
+      evidence_details: { due_by: now() + 7 * 86400, submission_count: 0 },
+      is_charge_refundable: false,
+      livemode: false,
+    };
+    this.disputes.set(dp.id, dp);
+    charge.disputed = true;
+    const events = [this.emit('charge.dispute.created', dp)];
+    if (withdraw) {
+      this.book('adjustment', -dp.amount, dp.currency, dp.id, 'dispute');
+      events.push(this.emit('charge.dispute.funds_withdrawn', dp));
+    }
+    await this.send(events);
+    return dp;
+  }
+
+  /** The bank decides. A win gives the money back to the platform. */
+  async closeDispute(disputeId: string, outcome: 'won' | 'lost') {
+    const dp = this.disputes.get(disputeId)!;
+    const inquiry = dp.status.startsWith('warning_');
+    dp.status = inquiry ? 'warning_closed' : outcome;
+    const events = [this.emit('charge.dispute.closed', dp)];
+    if (outcome === 'won' && !inquiry) {
+      this.book('adjustment', dp.amount, dp.currency, dp.id, 'dispute_reversal');
+      events.push(this.emit('charge.dispute.funds_reinstated', dp));
+    }
+    this.charges.get(dp.charge)!.disputed = false;
+    await this.send(events);
+    return dp;
+  }
+
+  /** The provider pays a connected account's balance out to its bank. */
+  payout(accountId: string, amount: number, currency: string, status: 'pending' | 'in_transit' | 'paid' | 'failed' = 'paid') {
+    const p = { id: id('po'), object: 'payout', amount, currency, status, arrival_date: now() + 2 * 86400, created: now() };
+    this.payouts.set(accountId, [p, ...(this.payouts.get(accountId) ?? [])]);
+    return p;
   }
 
   // ---------------------------------------------------------------- HTTP
@@ -263,14 +338,14 @@ export class StripeSandbox {
         }
         return { status: seen.status, body: seen.body };
       }
-      const res = await this.api(method, path, params);
+      const res = await this.api(method, path, params, url.searchParams, rq.headers['stripe-account'] as string | undefined);
       if (res.status < 500) this.idempotency.set(key, { fingerprint, status: res.status, body: res.body });
       return res;
     }
-    return this.api(method, path, params);
+    return this.api(method, path, params, url.searchParams, rq.headers['stripe-account'] as string | undefined);
   }
 
-  private async api(method: string, path: string, p: Obj): Promise<{ status: number; body: Obj }> {
+  private async api(method: string, path: string, p: Obj, query: URLSearchParams, account?: string): Promise<{ status: number; body: Obj }> {
     const ok = (body: Obj) => ({ status: 200, body: structuredClone(body) });
     const missing = (what: string) => ({ status: 404, body: { error: { type: 'invalid_request_error', code: 'resource_missing', message: `No such ${what}` } } });
     const bad = (message: string, code?: string) => ({ status: 400, body: { error: { type: 'invalid_request_error', code, message } } });
@@ -351,8 +426,24 @@ export class StripeSandbox {
       if (method === 'GET') return ok(sub);
       if (sub.status === 'canceled') return bad('This subscription has been canceled');
       if (method === 'POST') {
-        sub.cancel_at_period_end = p.cancel_at_period_end === 'true';
-        await this.send([this.emit('customer.subscription.updated', sub)]);
+        if ('cancel_at_period_end' in p) sub.cancel_at_period_end = p.cancel_at_period_end === 'true';
+        if (p.metadata) sub.metadata = { ...sub.metadata, ...p.metadata };
+        const events: Obj[] = [];
+        if (p.items?.[0]?.price) {
+          const change = this.planChange(sub, p.items[0]);
+          if ('error' in change) return { status: change.status, body: change };
+          if (change.amount > 0 && p.proration_behavior === 'always_invoice') {
+            const inv = this.newInvoice(sub, change.amount, change.price.currency);
+            events.push(this.emit('invoice.paid', inv));
+          } else if (change.amount < 0) {
+            const c = this.customers.get(sub.customer);
+            if (c) c.balance = (c.balance ?? 0) + change.amount;
+          }
+          sub.items.data[0].price = { id: change.price.id };
+          sub.items.data[0].current_period_end = sub.current_period_end = change.periodEnd;
+        }
+        events.push(this.emit('customer.subscription.updated', sub));
+        await this.send(events);
         return ok(sub);
       }
       if (method === 'DELETE') {
@@ -360,6 +451,67 @@ export class StripeSandbox {
         await this.send([this.emit('customer.subscription.deleted', sub)]);
         return ok(sub);
       }
+    }
+    if (method === 'POST' && path === '/v1/invoices/create_preview') {
+      const sub = this.subscriptions.get(p.subscription);
+      if (!sub) return missing('subscription');
+      const item = p.subscription_details?.items?.[0];
+      if (!item?.price) return bad('subscription_details[items] is required');
+      const change = this.planChange(sub, item);
+      if ('error' in change) return { status: change.status, body: change };
+      return ok({ object: 'invoice', customer: sub.customer, subscription: sub.id, currency: change.price.currency, total: change.amount, amount_due: Math.max(0, change.amount) });
+    }
+    if (method === 'GET' && (m = /^\/v1\/charges\/(ch_\w+)$/.exec(path))) {
+      const c = this.charges.get(m[1]!);
+      return c ? ok(c) : missing('charge');
+    }
+    if (method === 'POST' && (m = /^\/v1\/transfers\/(tr_\w+)\/reversals$/.exec(path))) {
+      const t = this.transfers.get(m[1]!);
+      if (!t) return missing('transfer');
+      const amount = p.amount === undefined ? t.amount - t.amount_reversed : Number(p.amount);
+      if (amount <= 0 || amount > t.amount - t.amount_reversed) return bad(`Reversal amount (${amount}) is greater than what is left on the transfer (${t.amount - t.amount_reversed})`);
+      t.amount_reversed += amount;
+      const rev = { id: id('trr'), object: 'transfer_reversal', amount, currency: t.currency, transfer: t.id, metadata: p.metadata ?? {} };
+      t.reversals.push(rev);
+      this.book('transfer_reversal', amount, t.currency, rev.id, 'transfer_reversal');
+      return ok(rev);
+    }
+    if (method === 'POST' && path === '/v1/transfers') {
+      if (!this.accounts.has(p.destination)) return missing('account');
+      const t = this.newTransfer(Number(p.amount), p.currency, p.destination, p.source_transaction ?? null);
+      t.metadata = p.metadata ?? {};
+      return ok(t);
+    }
+    if ((m = /^\/v1\/disputes\/(dp_\w+)$/.exec(path))) {
+      const dp = this.disputes.get(m[1]!);
+      if (!dp) return missing('dispute');
+      if (method === 'GET') return ok(dp);
+      if (method === 'POST') {
+        if (!['needs_response', 'warning_needs_response'].includes(dp.status)) return bad('This dispute is no longer accepting evidence', 'dispute_already_closed');
+        Object.assign(dp.evidence, p.evidence ?? {});
+        if (p.submit === 'true') {
+          dp.status = dp.status === 'warning_needs_response' ? 'warning_under_review' : 'under_review';
+          dp.evidence_details.submission_count += 1;
+        }
+        await this.send([this.emit('charge.dispute.updated', dp)]);
+        return ok(dp);
+      }
+    }
+    if (method === 'GET' && path === '/v1/payouts') {
+      if (!account || !this.accounts.has(account)) return bad('Send the Stripe-Account header for a connected account');
+      return ok({ object: 'list', data: (this.payouts.get(account) ?? []).slice(0, Number(query.get('limit') ?? 10)), has_more: false });
+    }
+    if (method === 'GET' && path === '/v1/balance_transactions') {
+      const gte = Number(query.get('created[gte]') ?? 0);
+      const lt = Number(query.get('created[lt]') ?? Infinity);
+      const limit = Math.min(100, Number(query.get('limit') ?? 10));
+      const expand = query.getAll('expand[]').includes('data.source');
+      // Newest first, like Stripe; starting_after continues after the given one.
+      let list = [...this.balance].reverse().filter((b) => b.created >= gte && b.created < lt);
+      const after = query.get('starting_after');
+      if (after) list = list.slice(list.findIndex((b) => b.id === after) + 1);
+      const page = list.slice(0, limit).map((b) => (expand ? { ...b, source: this.sourceOf(b.source) ?? b.source } : b));
+      return ok({ object: 'list', data: page, has_more: list.length > limit });
     }
     if (method === 'POST' && path === '/v1/billing_portal/sessions') {
       if (!this.customers.has(p.customer)) return missing('customer');
@@ -399,6 +551,8 @@ export class StripeSandbox {
   private createRefund(p: Obj): Obj {
     const pi = this.intents.get(p.payment_intent);
     if (!pi) return { error: { type: 'invalid_request_error', code: 'resource_missing', message: 'No such payment_intent' } };
+    const charge = this.charges.get(pi.latest_charge);
+    if (charge?.disputed) return { error: { type: 'invalid_request_error', code: 'charge_disputed', message: `Charge ${charge.id} has been charged back; cannot issue a refund.` } };
     const left = pi.amount - pi.amount_refunded;
     const amount = p.amount === undefined ? left : Number(p.amount);
     if (amount <= 0 || amount > left) {
@@ -407,11 +561,18 @@ export class StripeSandbox {
     pi.amount_refunded += amount;
     const r = { id: id('re'), object: 'refund', amount, currency: pi.currency, payment_intent: pi.id, charge: pi.latest_charge, status: this.refundStatus, metadata: p.metadata ?? {}, reason: p.reason ?? null };
     this.refunds.set(r.id, r);
+    this.book('refund', -amount, pi.currency, r.id, 'refund');
+    // reverse_transfer takes the business's share back, in proportion, as Stripe does.
+    const t = charge?.transfer ? this.transfers.get(charge.transfer) : null;
+    if (p.reverse_transfer === 'true' && t) {
+      const share = Math.min(t.amount - t.amount_reversed, Math.round((t.amount * amount) / pi.amount));
+      if (share > 0) t.amount_reversed += share;
+    }
     return r;
   }
 
   private newCustomer(p: Obj) {
-    const c = { id: id('cus'), object: 'customer', email: p.email ?? null, metadata: p.metadata ?? {} };
+    const c = { id: id('cus'), object: 'customer', email: p.email ?? null, metadata: p.metadata ?? {}, balance: 0 };
     this.customers.set(c.id, c);
     return c;
   }
@@ -432,18 +593,58 @@ export class StripeSandbox {
     return sub;
   }
 
-  private newInvoice(sub: Obj, price: Obj) {
+  private newInvoice(sub: Obj, amount: number, currency: string) {
     const inv = {
       id: id('in'),
       object: 'invoice',
       status: 'paid',
-      amount_paid: price.unit_amount,
-      currency: price.currency,
+      amount_paid: amount,
+      currency,
       customer: sub.customer,
       parent: { type: 'subscription_details', subscription_details: { subscription: sub.id } },
     };
     this.invoices.set(inv.id, inv);
+    if (amount > 0) {
+      // The invoice is paid by a charge of its own, not linked to any order.
+      const ch = { id: id('ch'), object: 'charge', amount, currency, payment_intent: id('pi'), transfer: null, disputed: false };
+      this.charges.set(ch.id, ch);
+      this.book('charge', amount, currency, ch.id, 'charge');
+    }
     return inv;
+  }
+
+  /**
+   * What switching a subscription's price costs now. Same interval: the difference for the
+   * time left. Another interval: a new period starts now, less credit for the unused time.
+   */
+  private planChange(sub: Obj, item: Obj): { amount: number; price: Obj; periodEnd: number } | { error: Obj; status: number } {
+    const price = this.prices.get(item.price);
+    if (!price) return { status: 404, error: { type: 'invalid_request_error', code: 'resource_missing', message: 'No such price' } };
+    if (item.id && item.id !== sub.items.data[0].id) return { status: 400, error: { type: 'invalid_request_error', message: 'No such subscription item' } };
+    const old = this.prices.get(sub.items.data[0].price.id)!;
+    if (old.currency !== price.currency) return { status: 400, error: { type: 'invalid_request_error', message: 'Currency must match the subscription' } };
+    const period = periodSeconds(old.recurring.interval);
+    const left = Math.max(0, Math.min(1, (sub.current_period_end - now()) / period));
+    if (old.recurring.interval === price.recurring.interval) {
+      return { amount: Math.round(price.unit_amount * left) - Math.round(old.unit_amount * left), price, periodEnd: sub.current_period_end };
+    }
+    return { amount: price.unit_amount - Math.round(old.unit_amount * left), price, periodEnd: now() + periodSeconds(price.recurring.interval) };
+  }
+
+  private newTransfer(amount: number, currency: string, destination: string, sourceTransaction: string | null) {
+    const t: Obj = { id: id('tr'), object: 'transfer', amount, currency, destination, source_transaction: sourceTransaction, amount_reversed: 0, reversals: [], metadata: {} };
+    this.transfers.set(t.id, t);
+    this.book('transfer', -amount, currency, t.id, 'transfer');
+    return t;
+  }
+
+  /** Records a movement of the platform's balance, as a balance transaction. */
+  private book(type: string, amount: number, currency: string, source: string, category: string) {
+    this.balance.push({ id: id('txn'), object: 'balance_transaction', type, amount, currency, source, reporting_category: category, created: now(), fee: 0, net: amount });
+  }
+
+  private sourceOf(sourceId: string): Obj | undefined {
+    return this.charges.get(sourceId) ?? this.refunds.get(sourceId) ?? this.disputes.get(sourceId) ?? this.transfers.get(sourceId);
   }
 
   // ---------------------------------------------------------------- hosted pages
