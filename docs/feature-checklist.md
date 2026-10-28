@@ -85,7 +85,7 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
 | Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
 | End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
-| Durable outbox (survives app restart) | ✅ phone app, ⬜ web | Flutter keeps unsent messages in the keystore and re-sends them with their original ids on the next launch; wiped on sign-out (`chat_test › a message left unsent when the app closed…`, `› unsent messages are wiped…`). The web outbox is still in memory |
+| Durable outbox (survives app restart) | ✅ | Flutter keeps unsent messages in the keystore, the web in the browser's local storage; both re-send them with their original ids when the chat opens again and wipe them on sign-out (`chat_test › a message left unsent when the app closed…`, `› unsent messages are wiped…`; web e2e "a message typed offline survives closing the tab…"). An upload still in progress isn't kept |
 | Load test of fan-out and presence | ✅ | `apps/api/load/run.mjs`, results in `docs/hardening.md` (one instance; multi-instance needs staging) |
 
 ## Stage 4: Push, offline and sync

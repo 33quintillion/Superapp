@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { authed, requireAccessToken } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
+import { SignOutForm } from './sign-out-button';
 import { NotificationSettings } from './notifications';
 import { SocialSettings } from './social-settings';
 
@@ -92,11 +93,7 @@ export default async function AccountPage() {
         ))}
       </div>
 
-      <form action={signOut} style={{ marginTop: 'var(--space-xl)' }}>
-        <button className="btn quiet" type="submit">
-          Sign out of this device
-        </button>
-      </form>
+      <SignOutForm action={signOut} />
     </main>
   );
 }

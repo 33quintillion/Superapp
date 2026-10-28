@@ -165,6 +165,24 @@ async function chatFlow(browser, API, tag, step) {
   assert((await bubble(ana.page, 'sent while offline').count()) === 1, 'queued message arrives exactly once');
   step('offline device catches up in order; queued send delivered once after reconnect');
 
+  // A message typed offline survives the tab being closed, and goes out once when the chat is opened again.
+  await ana.ctx.setOffline(true);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Offline")');
+  await ana.page.fill('input[name=message]', 'kept through a closed tab');
+  await ana.page.press('input[name=message]', 'Enter');
+  await bubble(ana.page, 'kept through a closed tab').locator('[data-testid=ticks]:has-text("sending")').waitFor();
+  await ana.page.close();
+  await ana.ctx.setOffline(false);
+  ana.page = await ana.ctx.newPage();
+  await ana.page.goto(`${WEB}/chats`);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await bubble(ben.page, 'kept through a closed tab').waitFor();
+  await ana.page.click(`[data-testid=conv-${ben.username}]`);
+  await bubble(ana.page, 'kept through a closed tab').locator('[data-testid=ticks]:not(:has-text("sending"))').waitFor();
+  assert((await bubble(ben.page, 'kept through a closed tab').count()) === 1, 'sent once after the tab was reopened');
+  assert((await ana.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('nexa.outbox.')))).length === 0, 'nothing left waiting');
+  step('a message typed offline survives closing the tab and is sent once when the chat opens again');
+
   const reactTarget = bubble(ben.page, 'hello from ana');
   await reactTarget.locator('.actions summary').click();
   await reactTarget.locator('button[aria-label="React 👍"]').click();
