@@ -17,6 +17,7 @@ self.addEventListener('push', (event) => {
 
 async function handlePush(n) {
   const data = n.data || {};
+  if (data.type === 'clear') return clearRead(data, n.badge);
   if (data.type === 'message') {
     // Delivered to this device: the sender sees two ticks even if nobody opens it yet.
     // Same-origin request, so the session cookie goes with it; no token lives here.
@@ -37,6 +38,17 @@ async function handlePush(n) {
     data,
   });
   if ('setAppBadge' in self.navigator && typeof n.badge === 'number') self.navigator.setAppBadge(n.badge).catch(() => undefined);
+}
+
+// Read on another device: take this chat's notification away here too, if it only covers
+// messages up to what was read. Browsers expect a push to show something; Chrome tolerates
+// the occasional one that doesn't, and clears are only sent where a notification was shown.
+async function clearRead(data, badge) {
+  const shown = await self.registration.getNotifications({ tag: data.conversationId });
+  for (const n of shown) if (Number(n.data?.seq ?? 0) <= Number(data.seq)) n.close();
+  if ('setAppBadge' in self.navigator && typeof badge === 'number') {
+    await (badge > 0 ? self.navigator.setAppBadge(badge) : self.navigator.clearAppBadge()).catch(() => undefined);
+  }
 }
 
 self.addEventListener('notificationclick', (event) => {

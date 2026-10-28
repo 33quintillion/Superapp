@@ -9,6 +9,8 @@ import '../calls/call_engine.dart';
 import '../chat/chat_controller.dart';
 import '../chat/outbox_store.dart';
 import '../chat/realtime.dart';
+import '../media/media.dart';
+import '../media/remote_image.dart';
 import '../theme/tokens.g.dart';
 import 'business_screens.dart';
 import 'call_screens.dart';
@@ -185,6 +187,34 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  Future<void> _editPhoto(BuildContext context) async {
+    final auth = widget.auth;
+    final messenger = ScaffoldMessenger.of(context);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(key: const Key('photo-choose'), leading: const Icon(Icons.photo_library_outlined), title: const Text('Choose a photo'), onTap: () => Navigator.pop(context, 'choose')),
+          if (auth.profile?.avatarMediaId != null)
+            ListTile(key: const Key('photo-remove'), leading: const Icon(Icons.delete_outline), title: const Text('Remove photo'), onTap: () => Navigator.pop(context, 'remove')),
+        ]),
+      ),
+    );
+    if (choice == null) return;
+    try {
+      if (choice == 'remove') {
+        await auth.setAvatar(null);
+      } else {
+        final picked = await MediaDevices.instance.pickPhotos();
+        if (picked.isEmpty) return;
+        final media = await uploadMedia(auth, picked.single, kind: 'image');
+        await auth.setAvatar(media['id'] as String);
+      }
+    } on Exception catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(uploadError(e))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = widget.auth;
@@ -196,10 +226,18 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut),
         ]),
         body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
-          ListTile(
-            leading: CircleAvatar(child: Text(p.displayName.isEmpty ? '?' : p.displayName.characters.first.toUpperCase())),
-            title: Text(p.displayName, key: const Key('display-name')),
-            subtitle: Text('@${p.username}'),
+          ListenableBuilder(
+            listenable: auth,
+            builder: (context, _) {
+              final p = auth.profile;
+              if (p == null) return const SizedBox.shrink();
+              return ListTile(
+                leading: Avatar(auth: auth, mediaId: p.avatarMediaId, name: p.displayName),
+                title: Text(p.displayName, key: const Key('display-name')),
+                subtitle: Text('@${p.username}'),
+                trailing: IconButton(key: const Key('edit-photo'), tooltip: 'Profile photo', icon: const Icon(Icons.photo_camera_outlined), onPressed: () => _editPhoto(context)),
+              );
+            },
           ),
           if (!p.emailVerified)
             const ListTile(leading: Icon(Icons.mark_email_unread_outlined), title: Text('Check your inbox to confirm your email address.')),

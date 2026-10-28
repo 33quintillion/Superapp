@@ -4,19 +4,21 @@ import '../api/api_client.dart';
 import 'session_store.dart';
 
 class Profile {
-  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified});
+  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified, this.avatarMediaId});
   factory Profile.fromJson(Map<String, dynamic> j) => Profile(
         id: j['id'] as String? ?? '',
         username: j['username'] as String? ?? '',
         displayName: j['displayName'] as String? ?? '',
         email: j['email'] as String? ?? '',
         emailVerified: j['emailVerified'] as bool? ?? false,
+        avatarMediaId: j['avatarMediaId'] as String?,
       );
   final String id;
   final String username;
   final String displayName;
   final String email;
   final bool emailVerified;
+  final String? avatarMediaId;
 }
 
 enum AuthStatus { unknown, signedOut, mfaRequired, signedIn }
@@ -101,6 +103,13 @@ class AuthController extends ChangeNotifier {
           _refreshing = null;
         }
       }();
+
+  /// Makes an uploaded image the profile photo, or removes the photo with null.
+  Future<void> setAvatar(String? mediaId) async {
+    final me = mediaId == null ? await authed('DELETE', '/v1/me/avatar') : await authed('PUT', '/v1/me/avatar', body: {'mediaId': mediaId});
+    profile = Profile.fromJson(me!);
+    notifyListeners();
+  }
 
   Future<void> signOut() async {
     final token = _accessToken;

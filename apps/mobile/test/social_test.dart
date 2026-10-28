@@ -458,4 +458,47 @@ void main() {
 
     await closeApp(tester);
   });
+
+  testWidgets('sets, shows and removes the profile photo from the home screen', (tester) async {
+    final api = FakeApi();
+    String? avatar;
+    Map<String, dynamic> me() => {'id': 'me', 'username': 'ada', 'displayName': 'Ada', 'email': 'ada@example.test', 'emailVerified': true, 'avatarMediaId': avatar};
+    api.on('PUT /v1/me/avatar', (req) {
+      avatar = (jsonDecode(req.body) as Map)['mediaId'] as String;
+      return json(200, me());
+    });
+    api.on('DELETE /v1/me/avatar', (_) {
+      avatar = null;
+      return json(200, me());
+    });
+    final devices = FakeDevices()..photos.add([LocalMedia(bytes: png, fileName: 'me.png', contentType: 'image/png')]);
+    MediaDevices.instance = devices;
+    addTearDown(() => MediaDevices.instance = PlatformMediaDevices());
+
+    await openApp(tester, api);
+    expect(find.byKey(const Key('photo-remove')), findsNothing);
+    await tester.tap(find.byKey(const Key('edit-photo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-remove')), findsNothing);
+    await tester.tap(find.byKey(const Key('photo-choose')));
+    await tester.pumpAndSettle();
+
+    // Uploaded as an image, checked by the API, then made the photo, and shown.
+    expect(api.media.created['md1']!['kind'], 'image');
+    expect(api.media.stored['md1'], png);
+    expect(api.bodies['PUT /v1/me/avatar'], {'mediaId': 'md1'});
+    expect(api.calls, contains('GET /v1/media/md1'));
+    expect(find.byKey(const Key('avatar-md1')), findsOneWidget);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('edit-photo')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-remove')));
+    await tester.pumpAndSettle();
+    expect(api.calls, contains('DELETE /v1/me/avatar'));
+    expect(find.byKey(const Key('avatar-md1')), findsNothing);
+    expect(find.text('A'), findsOneWidget);
+
+    await closeApp(tester);
+  });
 }

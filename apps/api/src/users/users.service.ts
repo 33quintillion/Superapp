@@ -25,7 +25,7 @@ interface UserRow {
   display_name: string;
   bio: string;
   status_text: string;
-  avatar_object_key: string | null;
+  avatar_media_id: string | null;
   locale: string;
   mfa_enabled_at: Date | null;
   created_at: Date;
@@ -85,6 +85,7 @@ export class UsersService {
       displayName: u.display_name,
       bio: u.bio,
       statusText: u.status_text,
+      avatarMediaId: u.avatar_media_id,
       locale: u.locale,
       mfaEnabled: !!u.mfa_enabled_at,
       createdAt: u.created_at,
@@ -97,6 +98,26 @@ export class UsersService {
       const sets = entries.map(([k], i) => `${PROFILE_COLUMNS[k]} = $${i + 2}`).join(', ');
       await this.db.query(`UPDATE users SET ${sets}, updated_at = now() WHERE id = $1`, [userId, ...entries.map(([, v]) => v)]);
     }
+    return this.me(userId);
+  }
+
+  /**
+   * Sets the profile photo to an image the person uploaded (POST /v1/media/uploads with
+   * kind "image", then complete), or removes it with null. The old photo's file is deleted
+   * once nothing else uses it.
+   */
+  async setAvatar(userId: string, mediaId: string | null) {
+    if (mediaId) {
+      const m = await this.media.requireAttachable(userId, mediaId);
+      if (m.kind !== 'image') throw Errors.validation([{ path: 'mediaId', message: 'A profile photo must be an image' }]);
+    }
+    const old = await this.db.one<{ old: string | null }>(
+      `UPDATE users u SET avatar_media_id = $2, updated_at = now() FROM (SELECT avatar_media_id AS old FROM users WHERE id = $1) o
+        WHERE u.id = $1 RETURNING o.old`,
+      [userId, mediaId],
+    );
+    if (old?.old && old.old !== mediaId) await this.media.releaseIfUnused(old.old).catch(() => undefined);
+    await this.audit.record({ actorId: userId, action: mediaId ? 'profile.photo_set' : 'profile.photo_removed' });
     return this.me(userId);
   }
 
@@ -122,8 +143,8 @@ export class UsersService {
    * block in either direction, so the response does not reveal that the account exists.
    */
   async publicProfile(viewerId: string, username: string) {
-    const u = await this.db.one<{ id: string; username: string; display_name: string; bio: string; status_text: string }>(
-      `SELECT u.id, u.username, u.display_name, u.bio, u.status_text FROM users u
+    const u = await this.db.one<{ id: string; username: string; display_name: string; bio: string; status_text: string; avatar_media_id: string | null }>(
+      `SELECT u.id, u.username, u.display_name, u.bio, u.status_text, u.avatar_media_id FROM users u
          JOIN privacy_settings p ON p.user_id = u.id
         WHERE u.username = $1 AND u.state = 'active'
           AND (p.discoverable_by_username OR u.id = $2)
@@ -142,6 +163,7 @@ export class UsersService {
       displayName: u.display_name,
       bio: u.bio,
       statusText: u.status_text,
+      avatarMediaId: u.avatar_media_id,
       privateAccount: privacy?.private_account ?? false,
       followerCount: counts.followers,
       followingCount: counts.following,
@@ -250,7 +272,7 @@ export class UsersService {
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),
            email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL,
-           password_hash = NULL, display_name = '', bio = '', status_text = '', avatar_object_key = NULL,
+           password_hash = NULL, display_name = '', bio = '', status_text = '', avatar_media_id = NULL,
            mfa_totp_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL, mfa_last_counter = NULL
          WHERE id = $1`,
         [userId],

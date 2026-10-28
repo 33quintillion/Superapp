@@ -51,3 +51,59 @@ class _RemoteImageState extends State<RemoteImage> {
     );
   }
 }
+
+/// A round profile photo, or the first letter of the name when there isn't one (or it
+/// can't be loaded).
+class Avatar extends StatefulWidget {
+  const Avatar({super.key, required this.auth, required this.mediaId, required this.name, this.radius = 20});
+  final AuthController auth;
+  final String? mediaId;
+  final String name;
+  final double radius;
+
+  @override
+  State<Avatar> createState() => _AvatarState();
+}
+
+class _AvatarState extends State<Avatar> {
+  String? _url;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(Avatar old) {
+    super.didUpdateWidget(old);
+    if (old.mediaId != widget.mediaId) _load();
+  }
+
+  void _load() {
+    _url = null;
+    final id = widget.mediaId;
+    if (id == null) return;
+    widget.auth.authed('GET', '/v1/media/$id').then((r) {
+      if (mounted && widget.mediaId == id) setState(() => _url = r?['url'] as String?);
+    }).catchError((Object _) => null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final letter = CircleAvatar(radius: widget.radius, child: Text(widget.name.isEmpty ? '?' : widget.name.characters.first.toUpperCase()));
+    if (_url == null) return letter;
+    final size = widget.radius * 2;
+    return ClipOval(
+      child: Image.network(
+        _url!,
+        key: Key('avatar-${widget.mediaId}'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        semanticLabel: 'Profile photo of ${widget.name}',
+        errorBuilder: (_, _, _) => letter,
+      ),
+    );
+  }
+}

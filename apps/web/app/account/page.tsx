@@ -4,6 +4,7 @@ import { authed, requireAccessToken } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
 import { SignOutForm } from './sign-out-button';
 import { NotificationSettings } from './notifications';
+import { ProfilePhoto } from './profile-photo';
 import { SocialSettings } from './social-settings';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +12,7 @@ export const dynamic = 'force-dynamic';
 interface Me {
   username: string;
   displayName: string;
+  avatarMediaId: string | null;
   email: string;
   emailVerified: boolean;
   mfaEnabled: boolean;
@@ -28,6 +30,7 @@ export default async function AccountPage() {
   return (
     <main className="wide">
       <h1 data-testid="display-name">{me.displayName}</h1>
+      <ProfilePhoto initial={me.avatarMediaId} name={me.displayName} />
       <div className="card">
         <div className="row">
           <span>Username</span>

@@ -298,6 +298,16 @@ async function notificationsFlow(ana, ben, step) {
     await new Promise((r) => setTimeout(r, 250));
   }
   step('service worker shows the notification and reports the message delivered');
+
+  // Ben reads the chat on another device: the API sends a clear, and the notification goes.
+  const clear = { title: '', body: '', tag: conv.id, silent: true, badge: 0, data: { type: 'clear', conversationId: conv.id, seq: String(conv.lastMessage.seq - 1) } };
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
+  await new Promise((r) => setTimeout(r, 500));
+  assert((await ben.page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length)) === 1, 'an older read keeps a newer notification');
+  clear.data.seq = String(conv.lastMessage.seq);
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
+  await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length === 0);
+  step('reading on another device clears the notification here');
 }
 
 /** Groups, follows, the feed, stories, private accounts and communities across two browsers. */
@@ -327,6 +337,13 @@ async function socialFlow(browser, API, tag, step) {
     Object.assign(people[name], { ctx, page });
   }
   const { cara, dev, eve } = people;
+
+  // Profile photo, chosen on the account page.
+  await cara.page.setInputFiles('[data-testid=avatar-input]', { name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  await cara.page.waitForFunction(() => document.querySelector('[data-testid=profile-photo] [data-testid=avatar-image]')?.naturalWidth === 1);
+  await cara.page.reload();
+  await cara.page.waitForSelector('[data-testid=avatar-remove]');
+  step('profile photo uploaded from the account page and kept after reload');
 
   // Group chat.
   await cara.page.goto(`${WEB}/chats`);
@@ -362,7 +379,8 @@ async function socialFlow(browser, API, tag, step) {
   await dev.page.click('[data-testid=follow-button]');
   await dev.page.waitForSelector('[data-testid=follow-button]:has-text("Following")');
   assert((await dev.page.textContent('[data-testid=follower-count]')) === '1', 'follower count goes up');
-  step('follow from a profile page');
+  await dev.page.waitForFunction(() => document.querySelector('.profile [data-testid=avatar-image]')?.naturalWidth === 1);
+  step('follow from a profile page, which shows their photo');
 
   await cara.page.goto(`${WEB}/feed`);
   await cara.page.fill('textarea[name=postBody]', 'Hello followers');

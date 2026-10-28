@@ -23,6 +23,11 @@ export interface PushMessage {
   data: Record<string, string>;
   /** Seconds the push service should keep trying if the device is offline. */
   ttlSeconds: number;
+  /**
+   * Shows nothing: tells the device to remove its notifications for [threadId] up to
+   * data.seq (read on another device) and to update the badge.
+   */
+  clear?: boolean;
 }
 
 export type PushResult =

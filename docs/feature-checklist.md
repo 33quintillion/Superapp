@@ -32,7 +32,7 @@ Last full run (2026-10-28, Stage 1–9 leftovers): API 331 tests passed; web e2e
 | Optional TOTP two-step, replay protection | ✅ | `auth.e2e › two-step verification`; RFC vectors in `unit.spec.ts` |
 | Rate limits (register, login per IP and account, reset, MFA, reports) | ✅ | `auth.e2e › rate limiting`, `registration rate limit` |
 | Profile: display name, bio, status, locale | ✅ | `users.e2e › profile` |
-| Profile photo upload | ⬜ | Object storage now exists (Stage 3); avatar endpoint not built yet |
+| Profile photo upload | ✅ | `media.e2e › profile photos`, web e2e `profile photo uploaded from the account page…`, Flutter `sets, shows and removes the profile photo…`. Counts as public media: same scanning blocker before public launch |
 | Privacy settings (discoverability, who can message, receipts, online) | ✅ | `users.e2e`; enforced in messaging by `messaging.e2e › permissions`, `› receipts` and `realtime.e2e › presence` |
 | Blocking (hides profiles in both directions) | ✅ | `users.e2e › blocking` |
 | Reporting | ✅ | `users.e2e` (user side); moderation queue in `admin.e2e › the report queue` (Stage 7) |
@@ -110,7 +110,7 @@ Push services are exercised against local servers that speak the real protocols 
 | Export lists devices and settings (no tokens); deactivation and deletion remove them | ✅ | `push.e2e › account lifecycle` |
 | Web: notification settings, turn browser notifications on and off, service worker shows the notification, reports "delivered", opens the chat on click | ✅ settings and service worker, 🟡 subscribing and click | Web e2e `notificationsFlow` saves settings and hands the service worker a push (via Chrome DevTools Protocol), checking the notification and the delivered receipt. Subscribing needs a real browser push service, so the "Turn on" button and opening the chat from a click are not browser-tested; the API side of subscribing is |
 | iPhone and Android: permission prompt, token registration, tap handling | ⛔ | Needs the APNs key and Firebase project above, then Flutter work |
-| Clear notifications on other devices after reading | ⬜ | Planned |
+| Clear notifications on other devices after reading | ✅ server and web, ⬜ phone apps | `push.e2e › clearing notifications…`, web e2e `reading on another device clears the notification here`; phone handling waits for APNs/FCM setup |
 | Durable outbox (survives app restart) on mobile | ✅ | See Stage 2 above |
 | Background sync on mobile (fetching while the app is closed) | ⛔ | Needs push (APNs/FCM) to wake the app |
 | Queue metrics and alerting | ⬜ | Stage 10 monitoring |

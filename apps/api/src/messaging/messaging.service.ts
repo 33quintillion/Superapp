@@ -60,6 +60,7 @@ interface MemberRow {
   username: string | null;
   display_name: string;
   state: string;
+  avatar_media_id: string | null;
   role: string;
   joined_at: Date;
   last_delivered_seq: string;
@@ -534,7 +535,7 @@ export class MessagingService {
    */
   async markReceipt(userId: string, conversationId: string, kind: 'delivered' | 'read', seq: number) {
     await this.requireMember(userId, conversationId);
-    const r = await this.db.one<{ last_delivered_seq: string; last_read_seq: string; changed: boolean }>(
+    const r = await this.db.one<{ last_delivered_seq: string; last_read_seq: string; old_read_seq: string; changed: boolean }>(
       `WITH c AS (SELECT last_seq FROM conversations WHERE id = $1),
             old AS (SELECT last_delivered_seq, last_read_seq FROM conversation_members WHERE conversation_id = $1 AND user_id = $2)
        UPDATE conversation_members cm SET
@@ -542,7 +543,7 @@ export class MessagingService {
          last_read_seq = CASE WHEN $4 THEN GREATEST(cm.last_read_seq, LEAST($3, (SELECT last_seq FROM c))) ELSE cm.last_read_seq END,
          updated_at = now()
        FROM old WHERE cm.conversation_id = $1 AND cm.user_id = $2
-       RETURNING cm.last_delivered_seq, cm.last_read_seq,
+       RETURNING cm.last_delivered_seq, cm.last_read_seq, old.last_read_seq AS old_read_seq,
          (cm.last_delivered_seq, cm.last_read_seq) IS DISTINCT FROM (old.last_delivered_seq, old.last_read_seq) AS changed`,
       [conversationId, userId, seq, kind === 'read'],
     );
@@ -554,6 +555,8 @@ export class MessagingService {
         const visible = viewer.user_id === userId || (me.show_read_receipts !== false && viewer.show_read_receipts !== false);
         await this.bus.publish([viewer.user_id], { type: 'receipt', data: { ...out, lastReadSeq: visible ? out.lastReadSeq : null } });
       }
+      // Read here: take the notifications for these messages off the person's other devices.
+      await this.push.enqueueClear(userId, conversationId, Number(r!.old_read_seq), out.lastReadSeq);
     }
     return out;
   }
@@ -665,7 +668,7 @@ export class MessagingService {
 
   async members(conversationId: string, db?: Queryable) {
     const { rows } = await this.db.query<MemberRow>(
-      `SELECT cm.user_id, u.username, u.display_name, u.state, cm.role, cm.joined_at, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
+      `SELECT cm.user_id, u.username, u.display_name, u.state, u.avatar_media_id, cm.role, cm.joined_at, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id LEFT JOIN privacy_settings p ON p.user_id = cm.user_id
         WHERE cm.conversation_id = $1 ORDER BY cm.joined_at, cm.user_id`,
       [conversationId],
@@ -680,6 +683,7 @@ export class MessagingService {
       userId: m.user_id,
       username: m.username,
       displayName: m.state === 'deleted' ? 'Deleted account' : m.display_name,
+      avatarMediaId: m.avatar_media_id,
       role: m.role,
       lastDeliveredSeq: Number(m.last_delivered_seq),
       lastReadSeq: readVisible ? Number(m.last_read_seq) : null,

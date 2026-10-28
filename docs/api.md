@@ -40,6 +40,7 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | --- | --- | --- | --- |
 | GET | `/v1/me` | ✓ | Profile, including `emailVerified` and `mfaEnabled` |
 | PATCH | `/v1/me` | ✓ | Any of `displayName`, `bio`, `statusText`, `locale` |
+| PUT / DELETE | `/v1/me/avatar` | ✓ | Profile photo. PUT `{ mediaId }` of your own finished `image` upload; DELETE removes it. The old file is deleted once nothing else uses it. Returns the profile. `avatarMediaId` appears in `/v1/me`, `/v1/users/:username` and chat member lists, and any signed-in person not blocked either way can fetch it with `GET /v1/media/:id` |
 | GET / PATCH | `/v1/me/privacy` | ✓ | `discoverableByEmail`, `discoverableByPhone`, `discoverableByUsername`, `whoCanMessage` (`everyone`/`contacts`/`nobody`), `showOnlineStatus`, `showReadReceipts`, `privateAccount` (followers need approval; turning it off accepts pending requests), `whoCanAddToGroups` (`everyone`/`following`/`nobody`) |
 | GET | `/v1/me/export` | ✓ | JSON export of the account's data. 5 an hour |
 | POST | `/v1/me/deactivate` | ✓ | `{ password }` → 204; signing in again reactivates |

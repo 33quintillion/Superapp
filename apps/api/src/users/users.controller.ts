@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { parse, usernameSchema } from '../common/zod';
 import { Auth, AuthGuard } from '../auth/auth.guard';
@@ -29,6 +29,8 @@ const PrivacyPatch = z
   .partial()
   .strict();
 
+const AvatarPut = z.object({ mediaId: z.string().uuid() }).strict();
+
 const PasswordConfirm = z.object({ password: z.string().min(1).max(256) });
 
 @Controller('v1')
@@ -44,6 +46,16 @@ export class UsersController {
   @Patch('me')
   update(@Auth() a: AccessClaims, @Body() body: unknown) {
     return this.users.updateProfile(a.userId, parse(ProfilePatch, body));
+  }
+
+  @Put('me/avatar')
+  setAvatar(@Auth() a: AccessClaims, @Body() body: unknown) {
+    return this.users.setAvatar(a.userId, parse(AvatarPut, body).mediaId);
+  }
+
+  @Delete('me/avatar')
+  removeAvatar(@Auth() a: AccessClaims) {
+    return this.users.setAvatar(a.userId, null);
   }
 
   @Get('me/privacy')
