@@ -23,6 +23,8 @@ const MAX_FRAME_BYTES = 64 * 1024;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** Frames a client may send per 10 s before it is disconnected. */
 const FRAME_BUDGET = 200;
+/** Open sockets one person may hold on one instance (tabs, devices). Tickets alone allow 30 a minute. */
+export const MAX_CONNECTIONS_PER_USER = 20;
 
 export const CloseCodes = { sessionEnded: 4401, tooManyFrames: 4429, slowConsumer: 4408, shutdown: 1001 } as const;
 
@@ -111,6 +113,7 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
   private readonly logger = new Logger('Realtime');
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   private readonly conns = new Set<Conn>();
+  private readonly perUser = new Map<string, number>();
   /** Close handlers still running (presence updates), awaited on shutdown. */
   private readonly closing = new Set<Promise<void>>();
   private server?: Server;
@@ -147,6 +150,7 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
       const raw = ticket ? await this.redis.client.getdel(ticketKey(ticket)) : null;
       const claims = raw ? (JSON.parse(raw) as AccessClaims) : null;
       if (!claims || !(await this.sessionValid(claims))) return reject(401, 'Unauthorized');
+      if ((this.perUser.get(claims.userId) ?? 0) >= MAX_CONNECTIONS_PER_USER) return reject(429, 'Too Many Requests');
       this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, claims));
     } catch (err) {
       this.logger.warn(`upgrade failed: ${(err as Error).message}`);
@@ -172,6 +176,7 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
   private accept(ws: WebSocket, claims: AccessClaims) {
     const conn: Conn = { id: randomUUID(), userId: claims.userId, sessionId: claims.sessionId, ws, alive: true, frames: 0, lastTyping: new Map(), timers: [] };
     this.conns.add(conn);
+    this.perUser.set(conn.userId, (this.perUser.get(conn.userId) ?? 0) + 1);
     ws.on('pong', () => (conn.alive = true));
     ws.on('message', (data, isBinary) => void this.onFrame(conn, data.toString(), isBinary));
     ws.on('close', () => this.track(this.closed(conn)));
@@ -291,6 +296,9 @@ export class RealtimeGateway implements OnApplicationBootstrap, OnModuleDestroy 
 
   private async closed(conn: Conn) {
     if (!this.conns.delete(conn)) return;
+    const left = (this.perUser.get(conn.userId) ?? 1) - 1;
+    if (left > 0) this.perUser.set(conn.userId, left);
+    else this.perUser.delete(conn.userId);
     conn.timers.forEach(clearInterval);
     await conn.setup?.catch(() => undefined);
     await conn.unlisten?.();

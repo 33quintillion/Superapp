@@ -8,7 +8,22 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  TRUST_PROXY: z.stringbool().default(false),
+  /**
+   * Which peers may set X-Forwarded-For (docs/hardening.md#client-addresses): false for none,
+   * or a comma-separated list of proxy IPs and CIDRs (also loopback, linklocal, uniquelocal).
+   * true trusts any peer, so anyone could pick their own address; it is refused when deployed.
+   */
+  TRUST_PROXY: z
+    .string()
+    .default('false')
+    .transform((v, ctx): boolean | string[] => {
+      const t = v.trim().toLowerCase();
+      if (t === 'true' || t === 'false') return t === 'true';
+      const list = t.split(',').map((s) => s.trim()).filter(Boolean);
+      if (list.length && list.every((a) => /^((\d{1,3}(\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:.]*)(\/\d{1,3})?|loopback|linklocal|uniquelocal)$/.test(a))) return list;
+      ctx.addIssue({ code: 'custom', message: 'TRUST_PROXY must be true, false, or a comma-separated list of proxy IPs or CIDRs' });
+      return z.NEVER;
+    }),
   CORS_ORIGINS: z.string().default(''),
 
   DATABASE_URL: z.url(),
@@ -177,6 +192,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('S3_AUTO_CREATE_BUCKET cannot be set in staging or production; provision the bucket instead');
   }
   const deployed = cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging';
+  if (deployed && cfg.TRUST_PROXY === true) {
+    throw new Error('TRUST_PROXY=true lets any client forge its address; in staging and production list the proxy addresses instead');
+  }
   const apns = [cfg.APNS_KEY_ID, cfg.APNS_TEAM_ID, cfg.APNS_BUNDLE_ID, cfg.APNS_PRIVATE_KEY].filter(Boolean).length;
   if (apns !== 0 && apns !== 4) {
     throw new Error('APNs needs all of APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID and APNS_PRIVATE_KEY, or none of them');

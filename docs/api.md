@@ -41,7 +41,7 @@ A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 | GET | `/v1/me` | ✓ | Profile, including `emailVerified` and `mfaEnabled` |
 | PATCH | `/v1/me` | ✓ | Any of `displayName`, `bio`, `statusText`, `locale` |
 | GET / PATCH | `/v1/me/privacy` | ✓ | `discoverableByEmail`, `discoverableByPhone`, `discoverableByUsername`, `whoCanMessage` (`everyone`/`contacts`/`nobody`), `showOnlineStatus`, `showReadReceipts`, `privateAccount` (followers need approval; turning it off accepts pending requests), `whoCanAddToGroups` (`everyone`/`following`/`nobody`) |
-| GET | `/v1/me/export` | ✓ | JSON export of the account's data |
+| GET | `/v1/me/export` | ✓ | JSON export of the account's data. 5 an hour |
 | POST | `/v1/me/deactivate` | ✓ | `{ password }` → 204; signing in again reactivates |
 | DELETE | `/v1/me` | ✓ | `{ password }` → 204; permanent |
 | GET | `/v1/users/:username` | ✓ | Public profile with `privateAccount`, `followerCount`, `followingCount` and `relationship: { following: none\|pending\|active, followsYou }`; 404 if hidden or blocked either way |

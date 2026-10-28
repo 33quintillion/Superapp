@@ -31,7 +31,16 @@ const RULES = {
   forgotAccount: { name: 'forgot:acct', limit: 3, windowSeconds: 3600 },
   resendVerify: { name: 'verify:resend', limit: 3, windowSeconds: 3600 },
   refreshIp: { name: 'refresh:ip', limit: 120, windowSeconds: 900 },
+  // Per account, across every challenge token, so asking for new tokens doesn't buy more guesses.
+  totpAccount: { name: 'totp:acct', limit: 10, windowSeconds: 900 },
 };
+
+/**
+ * Re-entering the password inside a signed-in session (change password, turn off two-step,
+ * deactivate, delete). Without a limit, someone holding a stolen session could guess the
+ * password and then lock the owner out.
+ */
+export const PASSWORD_CONFIRM_RULE = { name: 'password:confirm', limit: 10, windowSeconds: 900 };
 
 const VERIFY_TTL_H = 48;
 const RESET_TTL_MIN = 30;
@@ -262,6 +271,7 @@ export class AuthService {
   }
 
   async changePassword(userId: string, currentSessionId: string, current: string, next: string) {
+    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
     const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
     if (!(await verifyPassword(u?.password_hash ?? null, current))) throw Errors.invalidCredentials();
     const passwordHash = await hashPassword(next);
@@ -302,6 +312,7 @@ export class AuthService {
   async disableMfa(userId: string, password: string, code: string) {
     const u = await this.db.one<{ password_hash: string | null; mfa_enabled_at: Date | null }>('SELECT password_hash, mfa_enabled_at FROM users WHERE id = $1', [userId]);
     if (!u?.mfa_enabled_at) throw Errors.conflict('mfa_not_enabled', 'Two-step verification is not on');
+    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
     if (!(await verifyPassword(u.password_hash, password))) throw Errors.invalidCredentials();
     await this.checkTotp(userId, code);
     await this.db.query('UPDATE users SET mfa_totp_secret_enc = NULL, mfa_enabled_at = NULL, mfa_last_counter = NULL WHERE id = $1', [userId]);
@@ -310,6 +321,7 @@ export class AuthService {
 
   /** Verifies a TOTP code and records its counter so the same code cannot be used twice. */
   private async checkTotp(userId: string, code: string) {
+    await this.limits.consume(RULES.totpAccount, userId);
     const u = await this.db.one<{ mfa_totp_secret_enc: string | null; mfa_last_counter: string | null }>(
       'SELECT mfa_totp_secret_enc, mfa_last_counter FROM users WHERE id = $1',
       [userId],

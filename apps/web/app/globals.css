@@ -24,7 +24,11 @@ input {
   font: inherit; padding: var(--space-md); border-radius: var(--radius-md);
   border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
 }
-input:focus-visible, .btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+/* Every control shows where keyboard focus is (WCAG 2.4.7), not only inputs and buttons. */
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.main-target:focus { outline: none; }
+.skip-link { position: absolute; left: var(--space-lg); top: -100px; z-index: 100; padding: var(--space-sm) var(--space-md); background: var(--color-surface); color: var(--color-primary); border-radius: var(--radius-md); }
+.skip-link:focus { top: var(--space-sm); }
 .btn {
   font: inherit; font-weight: 500; border: 0; cursor: pointer; padding: var(--space-md) var(--space-lg);
   border-radius: var(--radius-md); background: var(--color-primary); color: var(--color-on-primary);
@@ -44,8 +48,12 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--color-primary
 .btn.small { padding: var(--space-xs) var(--space-md); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--color-primary); cursor: pointer; font: inherit; }
+/* A whole row that is a button keeps the row's padding, so it is a comfortable target (WCAG 2.5.8). */
+.row.link-btn { padding: var(--space-md) 0; }
 
 /* Chats */
+main.chat-shell { max-width: none; margin: 0; padding: 0; }
+.chat-title { font-size: var(--font-size-body); margin: 0; }
 .chat-shell { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 57px); }
 .chat-list { border-right: 1px solid var(--color-border); background: var(--color-surface); overflow-y: auto; display: flex; flex-direction: column; }
 .chat-list-head { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); }
@@ -73,9 +81,9 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--color-primary
 .msg.mine { align-self: flex-end; flex-direction: row-reverse; }
 .bubble { background: var(--color-bubble-other); color: var(--color-on-bubble-other); border-radius: var(--radius-lg); padding: var(--space-sm) var(--space-md); display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; overflow-wrap: anywhere; }
 .msg.mine .bubble { background: var(--color-bubble-own); color: var(--color-on-bubble-own); }
-.meta { opacity: 0.75; align-self: flex-end; }
+.meta { opacity: 0.9; align-self: flex-end; }
 .ticks.read { color: var(--color-accent); }
-.msg.mine .quote, .msg.mine .muted { color: inherit; opacity: 0.8; }
+.msg.mine .quote, .msg.mine .muted { color: inherit; opacity: 0.9; }
 .quote { border-left: 3px solid var(--color-primary); padding-left: var(--space-sm); color: var(--color-text-muted); }
 .reactions { display: flex; gap: 2px; }
 .media { max-width: 280px; max-height: 280px; border-radius: var(--radius-md); }

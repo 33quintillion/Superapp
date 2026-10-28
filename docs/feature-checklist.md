@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-27, Stage 8): API 291 tests passed; web e2e all 51 steps passed, including calls through a real coturn relay, the business and admin flow, and card payments against the local Stripe stand-in; Flutter 28 tests passed and `flutter analyze` clean.
+Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 28 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -86,7 +86,7 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
 | End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
 | Durable outbox (survives app restart) | ⬜ | Outboxes are in memory today |
-| Load test of fan-out and presence | ⬜ | Stage 9 |
+| Load test of fan-out and presence | ✅ | `apps/api/load/run.mjs`, results in `docs/hardening.md` (one instance; multi-instance needs staging) |
 
 ## Stage 4: Push, offline and sync
 Push services are exercised against local servers that speak the real protocols and check our signatures (`apps/api/test/push-fakes.ts`): HTTP/2 for APNs, OAuth plus HTTP v1 for FCM, and encrypted Web Push that the test decrypts like a browser. No Apple or Google account was used. See [`push.md`](push.md).
@@ -141,7 +141,7 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Notifications for follows, likes, comments and requests; live feed updates | ⬜ | Feed refreshes on pull; chat push is unaffected |
 | Moderation dashboard for reports | ✅ | Built in Stage 7: `admin.e2e › the report queue`; web e2e `businessFlow` |
 | Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |
-| Feed performance at scale (fan-out on write, caching) | ⬜ | Fan-out on read today; measure in Stage 9 |
+| Feed performance at scale | ✅ / ⬜ | Measured in Stage 9 and rewritten to read each source by index: 44 to 79 ms median with 100,000 posts (`docs/hardening.md`, `hardening.e2e.spec.ts`). Fan-out on write not built |
 
 ## Stage 6: Calls
 One-to-one voice and video over WebRTC. The API signals and keeps history; media goes between the devices or through TURN. Details and provider setup: [`calls.md`](calls.md).
@@ -220,5 +220,22 @@ Card payments for pickup orders, payouts to businesses, refunds, a double-entry 
 | Payout reconciliation against Stripe's balance reports | ⬜ | The ledger check covers our own records |
 | Flutter back office for payouts, refunds and plans | ⬜ | On the web for now |
 
-## Stages 9 and 10
+## Stage 9: Hardening
+Details and numbers in `hardening.md`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Dependencies free of known vulnerabilities | ✅ | `pnpm audit` clean; Fastify and PostCSS pinned in `pnpm-workspace.yaml` |
+| Client addresses can't be forged (API and web) | ✅ | `hardening.e2e.spec.ts`, `unit.spec.ts`, `apps/web/test/client-address.test.mjs` |
+| Limits on password re-entry, two-step codes per account, export, sockets per person | ✅ | `hardening.e2e.spec.ts`, `realtime.e2e.spec.ts` |
+| Content Security Policy with nonces, HSTS | ✅ | Web e2e "Content Security Policy"; the other e2e flows run under it |
+| Load tests: fan-out, throughput, presence, feed | ✅ | `apps/api/load/run.mjs` (run by hand; not in CI) |
+| Feed query rewrite | ✅ | `hardening.e2e.spec.ts` "feed", `social.e2e.spec.ts` |
+| Web accessibility: axe-core WCAG 2.2 AA on 17 screens, light and dark; skip link; focus rings | ✅ | Web e2e `a11yFlow` (`E2E_ONLY=a11y`) |
+| Independent penetration test | ⬜ | Needs staging (Stage 10) |
+| Multi-instance and soak load tests | ⬜ | Needs staging |
+| Flutter accessibility (TalkBack, VoiceOver) and a manual screen-reader pass on the web | ⬜ | Needs real devices and a person |
+| Arrow-key navigation for tabs | ⬜ | Tab and Enter work |
+
+## Stage 10
 Not started. See `plan.md`. The mini-app runtime is not implemented, and the apps say so.

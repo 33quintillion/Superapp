@@ -243,7 +243,7 @@ function CatalogueTab({ b }: { b: Business }) {
           });
         }}
       >
-        <h3>Add an item</h3>
+        <h2>Add an item</h2>
         <input name="name" placeholder="Name" required maxLength={120} aria-label="Item name" />
         <input name="description" placeholder="Description (optional)" maxLength={1000} aria-label="Item description" />
         <div className="composer-row">
@@ -272,7 +272,7 @@ function ServicesTab({ b }: { b: Business }) {
   return (
     <section className="stack">
       <div className="card stack" data-testid="services-tab">
-        <h3>Services people can book</h3>
+        <h2>Services people can book</h2>
         {services.map((s) => (
           <div className="row" key={s.id} data-testid="service">
             <span>
@@ -316,7 +316,7 @@ function ServicesTab({ b }: { b: Business }) {
       </div>
 
       <div className="card stack" data-testid="hours-editor">
-        <h3>Opening hours ({b.timeZone})</h3>
+        <h2>Opening hours ({b.timeZone})</h2>
         {hours.map((h, i) => (
           <div className="composer-row" key={i} data-testid="hours-row">
             <select value={h.weekday} aria-label="Day" onChange={(e) => setHours(hours.map((x, j) => (j === i ? { ...x, weekday: Number(e.target.value) } : x)))}>

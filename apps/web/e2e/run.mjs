@@ -867,6 +867,178 @@ async function paymentsFlow(browser, API, tag, step) {
   for (const p of Object.values(people)) await p.ctx.close();
 }
 
+/**
+ * Accessibility audit (Stage 9): axe-core's WCAG 2.2 A and AA rules on every screen, in light
+ * and dark mode, with real data on them; plus keyboard checks and the Content Security Policy.
+ */
+async function a11yFlow(browser, API, tag, step) {
+  const require = createRequire(import.meta.url);
+  const { totp } = require(join(apiDir, 'dist/src/crypto/totp.js'));
+  const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+  const axeSource = (await import('node:fs')).readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
+  const people = {};
+  for (const [i, name] of ['amy', 'bob'].entries()) {
+    const u = { email: `${name}_${tag}@example.test`, username: `${name}_${tag}`, password: 'a11y passphrase 2468', displayName: name === 'amy' ? 'Amy' : 'Bob' };
+    const r = await fetch(`${API}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i + 120}` },
+      body: JSON.stringify(u),
+    });
+    assert(r.status === 201, `register ${name}`);
+    const pair = await r.json();
+    people[name] = { ...u, token: pair.accessToken };
+  }
+  const { amy, bob } = people;
+  const as = (p) => ({ authorization: `Bearer ${p.token}`, 'content-type': 'application/json' });
+  const call = async (p, method, path, body) => {
+    const headers = body ? as(p) : { authorization: as(p).authorization };
+    const r = await fetch(`${API}/v1${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    assert(r.ok, `${method} ${path}: ${r.status} ${await r.clone().text()}`);
+    return r.status === 204 ? null : r.json();
+  };
+  // Amy is an admin, so the dashboard is audited too.
+  const { secret } = await call(amy, 'POST', '/auth/mfa/setup', {});
+  await call(amy, 'POST', '/auth/mfa/confirm', { code: totp(secret, Date.now() - 30_000) });
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  await pool.query(`INSERT INTO platform_staff (user_id, role) SELECT id, 'admin' FROM users WHERE email = $1`, [amy.email]);
+  await pool.end();
+  // Something on every screen: a chat, posts, a follow, a community, a business with an item, a report.
+  const bobMe = await call(bob, 'GET', '/me');
+  const amyMe = await call(amy, 'GET', '/me');
+  const conv = await call(amy, 'POST', '/conversations/direct', { userId: bobMe.id });
+  for (const [p, body] of [[amy, 'Hi Bob, are we still on for lunch?'], [bob, 'Yes, see you at noon'], [amy, 'Great']]) {
+    await call(p, 'POST', `/conversations/${conv.id}/messages`, { clientId: `a11y${randomBytes(6).toString('hex')}`, body });
+  }
+  await call(bob, 'POST', `/users/${amyMe.id}/follow`);
+  await call(amy, 'POST', '/posts', { clientId: `a11y${randomBytes(6).toString('hex')}`, body: 'First post from the accessibility audit' });
+  const slug = `audit-${tag}`;
+  await call(amy, 'POST', '/communities', { slug, name: 'Accessible Things', description: 'A community for the audit' });
+  const handle = `audit-bakery-${tag}`;
+  const biz = await call(amy, 'POST', '/businesses', { handle, name: 'Audit Bakery', category: 'food', timeZone: 'UTC', currency: 'GBP' });
+  await call(amy, 'PATCH', `/businesses/${biz.id}`, { ordersEnabled: true });
+  await call(amy, 'POST', `/businesses/${biz.id}/items`, { name: 'Sourdough', priceMinor: 450, description: 'Baked this morning' });
+  await call(bob, 'POST', '/reports', { subjectType: 'user', subjectId: amyMe.id, reason: 'spam', details: 'Audit report' });
+
+  const signIn = async (page, p, mfa) => {
+    await page.goto(`${WEB}/sign-in`);
+    await page.fill('input[name=email]', p.email);
+    await page.fill('input[name=password]', p.password);
+    await page.click('button[type=submit]');
+    if (mfa) {
+      await page.waitForURL(`${WEB}/sign-in/mfa`);
+      await page.fill('input[name=code]', totp(secret));
+      await page.click('button[type=submit]');
+    }
+    await page.waitForURL(`${WEB}/account`);
+  };
+
+  const failures = [];
+  const audited = [];
+  async function audit(page, label) {
+    await page.evaluate(axeSource);
+    const res = await page.evaluate(async () =>
+      // eslint-disable-next-line no-undef
+      axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] }, resultTypes: ['violations'] }),
+    );
+    for (const v of res.violations) {
+      failures.push(`${label}: [${v.impact}] ${v.id} (${v.help}) at ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+    }
+    audited.push(label);
+  }
+
+  const screens = [
+    ['sign-in', null, '/sign-in', 'form'],
+    ['register', null, '/register', 'form'],
+    ['forgot password', null, '/forgot-password', 'form'],
+    ['reset password', null, '/reset-password?token=not-a-real-token', 'main'],
+    ['verify email (bad link)', null, '/verify-email?token=not-a-real-token', 'main'],
+    ['account', 'amy', '/account', '[data-testid=display-name]'],
+    ['feed', 'amy', '/feed', 'text=First post from the accessibility audit'],
+    ['chats', 'amy', '/chats', '[data-testid=conn]:has-text("Connected")'],
+    ['profile', 'amy', `/u/${bob.username}`, 'main h1'],
+    ['communities', 'amy', '/communities', 'text=Accessible Things'],
+    ['community', 'amy', `/communities/${slug}`, 'text=A community for the audit'],
+    ['businesses', 'amy', '/business', 'text=Audit Bakery'],
+    ['business back office', 'amy', `/business/${handle}?tab=catalogue`, 'text=Sourdough'],
+    ['storefront', 'bob', `/b/${handle}`, 'text=Sourdough'],
+    ['orders', 'bob', '/orders', 'main'],
+    ['apps', 'amy', '/apps', 'main'],
+    ['admin', 'amy', '/admin', '[role=tablist]'],
+  ];
+  // One sign-in per person (a two-step code can't be used twice), then each screen in both schemes.
+  const contexts = {};
+  for (const who of [null, 'amy', 'bob']) {
+    const ctx = await browser.newContext({ timezoneId: 'UTC' });
+    const page = await ctx.newPage();
+    page.cspViolations = [];
+    page.on('console', (m) => /Content Security Policy/.test(m.text()) && page.cspViolations.push(m.text()));
+    if (who) await signIn(page, people[who], who === 'amy');
+    contexts[who] = { ctx, page };
+  }
+  for (const scheme of ['light', 'dark']) {
+    for (const [label, who, path, ready] of screens) {
+      const { page } = contexts[who];
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto(`${WEB}${path}`);
+      await page.waitForSelector(ready, { timeout: 15000 }).catch((e) => {
+        throw new Error(`${label}: ${e.message}`);
+      });
+      if (label === 'chats') await page.click(`text=Bob`);
+      await audit(page, `${label} (${scheme})`);
+    }
+  }
+  for (const { ctx, page } of Object.values(contexts)) {
+    if (page.cspViolations.length) failures.push(`CSP blocked something the app needs: ${page.cspViolations[0]}`);
+    await ctx.close();
+  }
+  if (failures.length) throw new Error(`accessibility violations:\n  ${failures.join('\n  ')}`);
+  step(`axe-core WCAG 2.2 AA: no violations on ${audited.length / 2} screens, in light and dark mode`);
+
+  // Keyboard: a skip link comes first, focus is always visible, and the main menu is reachable.
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await signIn(page, bob, false);
+  await page.goto(`${WEB}/feed`);
+  await page.waitForSelector('text=First post from the accessibility audit');
+  await page.keyboard.press('Tab');
+  const first = await page.evaluate(() => ({ text: document.activeElement?.textContent, href: document.activeElement?.getAttribute('href') }));
+  assert(first.href === '#main' && /skip/i.test(first.text ?? ''), `first Tab stop is the skip link, got ${JSON.stringify(first)}`);
+  await page.keyboard.press('Enter');
+  assert(await page.evaluate(() => document.activeElement?.id === 'main'), 'skip link moves focus to the main content');
+  const outlines = [];
+  // Tab through the whole screen, until focus leaves the page.
+  for (let i = 0; i < 60; i++) {
+    await page.keyboard.press('Tab');
+    const o = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const cs = getComputedStyle(el);
+      return { tag: el.tagName, text: el.textContent?.slice(0, 30), visible: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2 };
+    });
+    if (!o) break;
+    outlines.push(o);
+  }
+  assert(outlines.length >= 5, `only ${outlines.length} focusable controls on the feed: ${JSON.stringify(outlines)}`);
+  assert(outlines.every((o) => o.visible), `every focused control shows a focus ring: ${JSON.stringify(outlines.filter((o) => !o.visible))}`);
+  step(`keyboard: skip link first, focus ring on all ${outlines.length} controls of the feed`);
+
+  // CSP: a nonce on each page, and a script injected without it never runs.
+  const res = await page.goto(`${WEB}/feed`);
+  const csp = res.headers()['content-security-policy'] ?? '';
+  assert(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/.test(csp) && /frame-ancestors 'none'/.test(csp), `CSP header: ${csp}`);
+  // What an HTML injection would look like: markup with an inline handler.
+  const ran = await page.evaluate(async () => {
+    const div = document.createElement('div');
+    div.innerHTML = '<img src="/no-such-image.png" onerror="window.__injected = true">';
+    document.body.append(div);
+    await new Promise((r) => setTimeout(r, 300));
+    return !!window.__injected;
+  });
+  assert(!ran, 'an injected inline handler is refused');
+  step('Content Security Policy: nonced scripts only, injected inline handlers refused, no framing');
+  await ctx.close();
+}
+
 const smtp = await startSmtpSink(SMTP_PORT);
 const { StripeSandbox } = createRequire(import.meta.url)(join(apiDir, 'dist/src/dev/stripe-sandbox.js'));
 const stripe = new StripeSandbox({ secretKey: env.STRIPE_SECRET_KEY, webhookSecret: env.STRIPE_WEBHOOK_SECRET, port: STRIPE_PORT, webhookUrl: `http://127.0.0.1:${API_PORT}/v1/payments/webhooks/stripe` });
@@ -884,7 +1056,7 @@ try {
   run('node', ['dist/src/main.js'], { cwd: apiDir, env });
   run('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], {
     cwd: join(here, '..'),
-    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, NODE_ENV: 'production' },
+    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, CSP_MEDIA_ORIGINS: env.S3_ENDPOINT, NODE_ENV: 'production' },
   });
   await waitFor(`http://127.0.0.1:${API_PORT}/health/ready`);
   await waitFor(`${WEB}/sign-in`);
@@ -898,7 +1070,7 @@ try {
   const pw1 = 'first passphrase 123', pw2 = 'second passphrase 456';
   const step = (s) => console.log(`  ✓ ${s}`);
 
-  // E2E_ONLY=calls, business or payments runs just that flow, for quicker iteration on it.
+  // E2E_ONLY=calls, business, payments or a11y runs just that flow, for quicker iteration on it.
   all: {
     if (process.env.E2E_ONLY === 'payments') {
       await paymentsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step);
@@ -906,6 +1078,10 @@ try {
     }
     if (process.env.E2E_ONLY === 'calls') {
       await callsFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step, turn);
+      break all;
+    }
+    if (process.env.E2E_ONLY === 'a11y') {
+      await a11yFlow(browser, `http://127.0.0.1:${API_PORT}`, tag, step);
       break all;
     }
     if (process.env.E2E_ONLY === 'business') {
@@ -1013,6 +1189,7 @@ try {
   await socialFlow(browser, API, tag, step);
   await businessFlow(browser, API, tag, step);
   await paymentsFlow(browser, API, tag, step);
+  await a11yFlow(browser, API, tag, step);
   // Last: it stops the TURN relay to test a failed connection.
   await callsFlow(browser, API, tag, step, turn);
   }

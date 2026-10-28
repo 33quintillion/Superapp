@@ -1,6 +1,6 @@
 # Security and privacy
 
-This describes the system **as built today** (Stages 1 to 3, Stage 4 push notifications, Stage 5 social features, Stage 6 calls, and Stage 7 businesses, the admin dashboard and the integration catalogue). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
+This describes the system **as built today** (Stages 1 to 3, Stage 4 push notifications, Stage 5 social features, Stage 6 calls, Stage 7 businesses, the admin dashboard and the integration catalogue, Stage 8 payments, and the Stage 9 hardening fixes). Update it with every stage. Nothing here amounts to a claim of legal compliance in any jurisdiction; that needs a regional legal assessment.
 
 ## Data we hold
 
@@ -54,7 +54,11 @@ This describes the system **as built today** (Stages 1 to 3, Stage 4 push notifi
 - Mobile refresh tokens in the platform keystore. No secrets are compiled into the app.
 - Secrets come only from the environment. Weak or missing secrets stop the app from starting, and `.env*` files are git-ignored.
 - Logs redact authorization headers, cookies, passwords and tokens.
-- Account export, deactivation and deletion are self-service and need the password. The export includes messages the person sent and a list of their uploads.
+- Account export, deactivation and deletion are self-service; deactivation and deletion need the password. The export includes messages the person sent and a list of their uploads, and is limited to 5 an hour.
+- Re-entering the password in a signed-in session (change password, turn off two-step, deactivate, delete) is limited to 10 tries per 15 minutes per account, and two-step codes to 10 per 15 minutes per account across all sign-in attempts.
+- Client addresses for rate limits come only from proxies listed in `TRUST_PROXY` (the API) and from the web server's own proxies (`WEB_PROXY_HOPS`), so a client can't choose its own address.
+- The web app sends a Content Security Policy with a fresh nonce on every page (only its own scripts run, no inline handlers, no framing) and HSTS in production.
+- At most 20 open WebSockets per person per API instance.
 - Messaging permissions: only members can read or write a conversation, and outsiders get 404. Blocks stop messages, reactions, pins and typing in both directions. "Who can message me" (`contacts` or `nobody`) refuses chats from strangers until the person replies.
 - Read receipts and online status are shared only when both people allow it.
 - Social visibility: posts, comments, likes, stories, community posts and their photos all pass through the same SQL rules (`can_view_post`, `can_view_story`, `can_view_community`, `blocked_either_way`), so a list, a single read and a file download cannot disagree. Audiences (everyone, followers, only me), private accounts and private communities are enforced on the server, and anything hidden is a 404. Sharing a post never widens who can see the original. Blocks remove follows in both directions and hide all content and reactions between the two people.
@@ -78,7 +82,7 @@ This describes the system **as built today** (Stages 1 to 3, Stage 4 push notifi
 - **Before media sharing is opened to the public:** known-CSAM hash matching (for example PhotoDNA, or an equivalent from a child-safety partner), malware scanning of uploads, and NCMEC/IWF reporting procedures. The moderation queue for reports now exists (Stage 7), but it shows reported photos by count only; staff can't view reported media in the dashboard yet. Media sharing works today but **must not launch publicly without these** (**legal and trust & safety**).
 - Age gating and a child-safety programme (**legal and trust & safety**).
 - Bucket-level encryption at rest and lifecycle rules (expire incomplete uploads) on the production bucket.
-- Penetration test (Stage 9).
+- Independent penetration test, against staging (Stage 9 was an internal review: [`hardening.md`](hardening.md)).
 - Business verification checks (who is behind a business) before the "Verified" badge means anything to customers; today an admin sets it by hand (**trust & safety**).
 - Payments: a real Stripe account with Connect approval, terms for sellers and buyers, refund policy, consumer-law review in each launch country, and Stripe's own data processing terms (**legal**). Dispute handling isn't built.
 - Terms for businesses and a partner agreement and security review for each integration before the first goes live (**legal**).

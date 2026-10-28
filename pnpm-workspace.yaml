@@ -5,3 +5,7 @@ packages:
 onlyBuiltDependencies:
   - argon2
   - '@nestjs/core'
+# Security fixes in transitive dependencies (docs/hardening.md). Drop each once the parent ships it.
+overrides:
+  fastify: 5.12.7
+  postcss: 8.5.32

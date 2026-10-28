@@ -335,10 +335,10 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const peerPresence = peer ? presence[peer.userId] : undefined;
 
   return (
-    <div className="chat-shell">
+    <main className="chat-shell">
       <aside className="chat-list">
         <div className="chat-list-head">
-          <strong>Chats</strong>
+          <h1 className="chat-title">Chats</h1>
           <span className={`conn ${conn}`} data-testid="conn">
             {conn === 'online' ? 'Connected' : conn === 'connecting' ? 'Connecting…' : 'Offline, retrying'}
           </span>
@@ -515,7 +515,7 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
           </p>
         )}
       </section>
-    </div>
+    </main>
   );
 }
 

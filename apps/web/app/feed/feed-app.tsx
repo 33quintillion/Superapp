@@ -8,6 +8,7 @@ export function FeedApp({ me }: { me: string }) {
   const [mine, setMine] = useState<Post[]>([]);
   return (
     <main className="wide social">
+      <h1 className="sr-only">Feed</h1>
       <StoryTray me={me} />
       <PostComposer onPosted={(p) => setMine((m) => [p, ...m])} />
       <PostList source="feed" me={me} prepend={mine} empty="Nothing here yet. Follow people or join a community to fill your feed." />

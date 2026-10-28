@@ -1,5 +1,6 @@
 import 'server-only';
 import { headers } from 'next/headers';
+import { clientAddress } from './client-address';
 
 /**
  * Server-side calls to the Nexa API. The browser never talks to the API directly and
@@ -57,8 +58,7 @@ export interface TokenPair {
 
 async function forwardedFor(): Promise<string | null> {
   try {
-    const h = await headers();
-    return h.get('x-forwarded-for')?.split(',')[0].trim() || h.get('x-real-ip') || null;
+    return clientAddress((await headers()).get('x-forwarded-for'));
   } catch {
     return null; // outside a request scope
   }
