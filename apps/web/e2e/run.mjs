@@ -382,6 +382,20 @@ async function socialFlow(browser, API, tag, step) {
   await dev.page.waitForFunction(() => document.querySelector('.profile [data-testid=avatar-image]')?.naturalWidth === 1);
   step('follow from a profile page, which shows their photo');
 
+  // Finding people by email: only once they've chosen to be found that way.
+  const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+  const confirm = new Pool({ connectionString: env.DATABASE_URL });
+  await confirm.query('UPDATE users SET email_verified_at = now() WHERE email = $1', [eve.email]);
+  await confirm.end();
+  await dev.page.goto(`${WEB}/account`);
+  await dev.page.fill('textarea[name=contacts]', `${eve.email}\nsomeone@example.test`);
+  await dev.page.click('[data-testid=find-people] button[type=submit]');
+  await dev.page.waitForSelector('[data-testid=find-people] p:has-text("No one found.")');
+  await fetch(`${API}/v1/me/privacy`, { method: 'PATCH', headers: { authorization: `Bearer ${eve.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ discoverableByEmail: true }) });
+  await dev.page.click('[data-testid=find-people] button[type=submit]');
+  await dev.page.waitForSelector(`[data-testid=found-person] a[href="/u/${eve.username}"]`);
+  step('find people by email address, only those who opted in');
+
   await cara.page.goto(`${WEB}/feed`);
   await cara.page.fill('textarea[name=postBody]', 'Hello followers');
   await cara.page.selectOption('select[name=audience]', 'followers');

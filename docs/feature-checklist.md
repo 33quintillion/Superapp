@@ -41,7 +41,7 @@ Last full run (2026-10-28, Stage 1–9 leftovers): API 331 tests passed; web e2e
 | Deletion (immediate PII scrub, tombstone) | ✅ | `users.e2e › deletion…` |
 | Scheduled purge of tombstones and backups | ⬜ | Needs backup infrastructure |
 | Phone number sign-up and verification | ⛔ | Needs an SMS provider account and fraud controls |
-| Contacts discovery (opt-in) | ⬜ | Designed for Stage 3; uploading the address book will never be required |
+| Contacts discovery (opt-in) | ✅ (phone address-book reading untested on a real device) | `users.e2e › finding people you know…`, web e2e `find people by email address, only those who opted in`, Flutter `find people you know…`. Being findable is off by default; the address book is read only when the person taps the button, and nothing sent is stored. Phone numbers only match once phone sign-up exists |
 | Breached-password check: new passwords (sign-up, reset, change) refused if in Have I Been Pwned's Pwned Passwords, by k-anonymity (only a 5-character hash prefix leaves the server), plus a built-in list of the most common ones; allowed if the service is down | ✅ | `breached-passwords.e2e` (against a local stand-in for the service) |
 | Admin MFA enforcement | ✅ | `admin.e2e › requires two-step verification to be on`, `› requires the session itself to have been opened with a two-step code, recently` (Stage 7) |
 | Localisation framework | 🟡 | `locale` stored per user; UI strings not yet extracted |

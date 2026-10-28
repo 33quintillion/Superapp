@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
 import '../chat/realtime.dart' show newClientId;
+import '../contacts/contacts_book.dart';
 import '../media/media.dart';
 import '../media/remote_image.dart';
 import '../social/social_models.dart';
@@ -717,4 +718,119 @@ class _CommunityScreenState extends State<CommunityScreen> {
       ]),
     );
   }
+}
+
+/// "Find people you know": checks the address book against people who chose to be found
+/// by their email address or phone number. Only when asked, and nothing is saved.
+class FindPeopleScreen extends StatefulWidget {
+  const FindPeopleScreen({super.key, required this.auth});
+  final AuthController auth;
+
+  /// The most entries the API takes at once.
+  static const maxEntries = 1000;
+
+  @override
+  State<FindPeopleScreen> createState() => _FindPeopleScreenState();
+}
+
+class _FindPeopleScreenState extends State<FindPeopleScreen> {
+  bool? _findable;
+  bool _busy = false;
+  String? _note;
+  List<Map<String, dynamic>>? _matches;
+  final _followed = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    widget.auth.authed('GET', '/v1/me/privacy').then((p) {
+      if (mounted) setState(() => _findable = p?['discoverableByEmail'] as bool? ?? false);
+    }).catchError((Object e) {
+      if (mounted) _snack(context, e);
+    });
+  }
+
+  Future<void> _setFindable(bool on) async {
+    try {
+      final p = await widget.auth.authed('PATCH', '/v1/me/privacy', body: {'discoverableByEmail': on});
+      if (mounted) setState(() => _findable = p?['discoverableByEmail'] as bool?);
+    } on ApiException catch (e) {
+      if (mounted) _snack(context, e);
+    }
+  }
+
+  Future<void> _check() async {
+    setState(() {
+      _busy = true;
+      _note = null;
+    });
+    try {
+      final book = await ContactsBook.instance.read();
+      if (book == null) {
+        setState(() => _note = 'Nexa can’t see your contacts. You can allow it in your phone’s settings.');
+        return;
+      }
+      final emails = <String>{for (final c in book) ...c.emails.map((e) => e.trim().toLowerCase())}.where((e) => e.contains('@')).toList();
+      final phones = <String>{for (final c in book) ...c.phones.map((p) => p.trim())}.where((p) => p.isNotEmpty).toList();
+      final room = FindPeopleScreen.maxEntries;
+      final sendEmails = emails.take(room).toList();
+      final sendPhones = phones.take(room - sendEmails.length).toList();
+      final r = await widget.auth.authed('POST', '/v1/contacts/match', body: {'emails': sendEmails, 'phones': sendPhones});
+      if (!mounted) return;
+      setState(() {
+        _matches = [for (final m in r!['matches'] as List) m as Map<String, dynamic>];
+        if (emails.length + phones.length > room) _note = 'Checked the first $room email addresses and numbers.';
+      });
+    } on ApiException catch (e) {
+      if (mounted) _snack(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _follow(String id) async {
+    try {
+      await widget.auth.authed('POST', '/v1/users/$id/follow');
+      if (mounted) setState(() => _followed.add(id));
+    } on ApiException catch (e) {
+      if (mounted) _snack(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Find people you know')),
+        body: ListView(padding: const EdgeInsets.all(NexaSpace.md), children: [
+          if (_findable != null)
+            SwitchListTile(
+              key: const Key('findable-by-email'),
+              value: _findable!,
+              onChanged: _setFindable,
+              title: const Text('Let people who have my email address find me'),
+              subtitle: const Text('Off unless you turn it on. Works once your email address is confirmed.'),
+            ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: NexaSpace.md),
+            child: Text('Nexa can check the email addresses and phone numbers in your contacts against people who chose to be found. Your contacts aren’t saved.'),
+          ),
+          FilledButton(key: const Key('check-contacts'), onPressed: _busy ? null : _check, child: Text(_busy ? 'Checking…' : 'Check my contacts')),
+          if (_note != null) Padding(padding: const EdgeInsets.only(top: NexaSpace.md), child: Text(_note!, key: const Key('contacts-note'))),
+          if (_matches != null && _matches!.isEmpty) const Padding(padding: EdgeInsets.only(top: NexaSpace.md), child: Text('No one found yet.')),
+          for (final m in _matches ?? const <Map<String, dynamic>>[])
+            Builder(builder: (context) {
+              final u = m['user'] as Map<String, dynamic>;
+              final id = u['id'] as String;
+              final name = u['displayName'] as String? ?? '';
+              return ListTile(
+                key: Key('found-$id'),
+                leading: Avatar(auth: widget.auth, mediaId: u['avatarMediaId'] as String?, name: name),
+                title: Text(name),
+                subtitle: Text('@${u['username']} · ${m['matched']}'),
+                trailing: _followed.contains(id)
+                    ? const Text('Following')
+                    : TextButton(key: Key('follow-$id'), onPressed: () => _follow(id), child: const Text('Follow')),
+              );
+            }),
+        ]),
+      );
 }

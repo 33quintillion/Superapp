@@ -1,9 +1,9 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { parse, usernameSchema } from '../common/zod';
+import { emailSchema, parse, usernameSchema } from '../common/zod';
 import { Auth, AuthGuard } from '../auth/auth.guard';
 import type { AccessClaims } from '../auth/token.service';
-import { UsersService } from './users.service';
+import { CONTACTS_MAX, UsersService } from './users.service';
 
 const ProfilePatch = z
   .object({
@@ -30,6 +30,23 @@ const PrivacyPatch = z
   .strict();
 
 const AvatarPut = z.object({ mediaId: z.string().uuid() }).strict();
+
+/**
+ * Entries that aren't a valid email address or an E.164 phone number (after removing spaces,
+ * dashes, dots and brackets) are skipped rather than refused: address books are messy.
+ */
+const phoneEntry = z.string().max(40).transform((p) => p.replace(/[\s\-().]/g, ''));
+const ContactsMatch = z
+  .object({ emails: z.array(z.string().max(254)).max(CONTACTS_MAX).default([]), phones: z.array(phoneEntry).max(CONTACTS_MAX).default([]) })
+  .strict()
+  .refine((b) => b.emails.length + b.phones.length <= CONTACTS_MAX, `At most ${CONTACTS_MAX} entries at a time`)
+  .transform((b) => ({
+    emails: b.emails.flatMap((e) => {
+      const r = emailSchema.safeParse(e);
+      return r.success ? [r.data] : [];
+    }),
+    phones: b.phones.filter((p) => /^\+[1-9][0-9]{6,14}$/.test(p)),
+  }));
 
 const PasswordConfirm = z.object({ password: z.string().min(1).max(256) });
 
@@ -83,6 +100,12 @@ export class UsersController {
   @HttpCode(204)
   async remove(@Auth() a: AccessClaims, @Body() body: unknown) {
     await this.users.deleteAccount(a.userId, parse(PasswordConfirm, body).password);
+  }
+
+  @Post('contacts/match')
+  @HttpCode(200)
+  matchContacts(@Auth() a: AccessClaims, @Body() body: unknown) {
+    return this.users.matchContacts(a.userId, parse(ContactsMatch, body));
   }
 
   @Get('users/:username')

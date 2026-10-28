@@ -4,6 +4,8 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Nexa uses the camera for video calls.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Only if you ask: Nexa checks your contacts' email addresses and phone numbers to find people you know who chose to be found. Nothing is saved.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nexa uses the microphone for calls and voice notes.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

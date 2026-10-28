@@ -34,6 +34,8 @@ const ALLOWED: [string, RegExp][] = [
   ['PUT', /^push\/devices\/current$/],
   ['DELETE', /^push\/devices\/current$/],
   ['POST', /^push\/devices\/current\/test$/],
+  // Finding people you know.
+  ['POST', /^contacts\/match$/],
   // Profile photo.
   ['PUT', /^me\/avatar$/],
   ['DELETE', /^me\/avatar$/],

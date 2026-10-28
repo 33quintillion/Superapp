@@ -53,6 +53,10 @@ const PRIVACY_COLUMNS: Record<keyof PrivacySettings, string> = {
   whoCanAddToGroups: 'who_can_add_to_groups',
 };
 
+/** Contact matching: generous for real address books, too small to test lists of addresses. */
+export const CONTACTS_RULE = { name: 'contacts:match', limit: 10, windowSeconds: 86400 };
+export const CONTACTS_MAX = 1000;
+
 const PROFILE_COLUMNS = { displayName: 'display_name', bio: 'bio', statusText: 'status_text', locale: 'locale' } as const;
 
 @Injectable()
@@ -169,6 +173,37 @@ export class UsersService {
       followingCount: counts.following,
       // null on your own profile.
       relationship,
+    };
+  }
+
+  /**
+   * "Find people you know": which of these email addresses and phone numbers belong to
+   * people who chose to be found that way (off by default), with a confirmed address or
+   * number, and who aren't blocked either way. Nothing sent here is stored or logged; the
+   * daily limit keeps it from being used to test lists of addresses.
+   */
+  async matchContacts(userId: string, input: { emails: string[]; phones: string[] }) {
+    await this.limits.consume(CONTACTS_RULE, userId);
+    const emails = [...new Set(input.emails)];
+    const phones = [...new Set(input.phones)];
+    const { rows } = await this.db.query<{ id: string; username: string; display_name: string; avatar_media_id: string | null; email: string | null; phone_e164: string | null }>(
+      `SELECT u.id, u.username, u.display_name, u.avatar_media_id,
+              CASE WHEN p.discoverable_by_email AND u.email = ANY($2::text[]) THEN u.email END AS email,
+              CASE WHEN p.discoverable_by_phone AND u.phone_e164 = ANY($3::text[]) THEN u.phone_e164 END AS phone_e164
+         FROM users u JOIN privacy_settings p ON p.user_id = u.id
+        WHERE u.state = 'active' AND u.id <> $1
+          AND ((p.discoverable_by_email AND u.email_verified_at IS NOT NULL AND u.email = ANY($2::text[]))
+            OR (p.discoverable_by_phone AND u.phone_verified_at IS NOT NULL AND u.phone_e164 = ANY($3::text[])))
+          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = u.id AND b.blocked_id = $1) OR (b.blocker_id = $1 AND b.blocked_id = u.id))
+        ORDER BY u.display_name, u.id`,
+      [userId, emails, phones],
+    );
+    return {
+      matches: rows.map((r) => ({
+        // Which of the entries sent matched, so the app can show it next to the contact.
+        matched: r.email ?? r.phone_e164,
+        user: { id: r.id, username: r.username, displayName: r.display_name, avatarMediaId: r.avatar_media_id },
+      })),
     };
   }
 

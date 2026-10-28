@@ -264,6 +264,13 @@ class _HomeScreenState extends State<HomeScreen> {
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FeedScreen(auth: auth))),
           ),
           ListTile(
+            key: const Key('open-find-people'),
+            leading: const Icon(Icons.person_search_outlined),
+            title: const Text('Find people you know'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FindPeopleScreen(auth: auth))),
+          ),
+          ListTile(
             key: const Key('open-communities'),
             leading: const Icon(Icons.groups_outlined),
             title: const Text('Communities'),

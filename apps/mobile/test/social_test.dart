@@ -9,6 +9,7 @@ import 'package:nexa/api/api_client.dart';
 import 'package:nexa/auth/auth_controller.dart';
 import 'package:nexa/auth/session_store.dart';
 import 'package:nexa/chat/realtime.dart';
+import 'package:nexa/contacts/contacts_book.dart';
 import 'package:nexa/main.dart';
 import 'package:nexa/media/media.dart';
 
@@ -501,4 +502,72 @@ void main() {
 
     await closeApp(tester);
   });
+
+  testWidgets('find people you know: opt in to being found, check contacts only when asked, follow', (tester) async {
+    final api = FakeApi();
+    var findable = false;
+    api.on('GET /v1/me/privacy', (_) => json(200, {'discoverableByEmail': findable}));
+    api.on('PATCH /v1/me/privacy', (req) {
+      findable = (jsonDecode(req.body) as Map)['discoverableByEmail'] as bool;
+      return json(200, {'discoverableByEmail': findable});
+    });
+    api.on('POST /v1/contacts/match', (_) => json(200, {
+          'matches': [
+            {'matched': 'bo@example.test', 'user': {'id': 'u-bo', 'username': 'bo', 'displayName': 'Bo', 'avatarMediaId': null}},
+          ],
+        }));
+    api.on('POST /v1/users/u-bo/follow', (_) => json(200, {'following': 'active', 'followsYou': false}));
+    final book = _FakeBook();
+    ContactsBook.instance = book;
+    addTearDown(() => ContactsBook.instance = PlatformContactsBook());
+
+    await openApp(tester, api);
+    await tester.tap(find.byKey(const Key('open-find-people')));
+    await tester.pumpAndSettle();
+    // Opening the screen doesn't touch the address book.
+    expect(book.reads, 0);
+    expect(api.calls.where((c) => c.contains('contacts')), isEmpty);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('findable-by-email')));
+    await tester.pumpAndSettle();
+    expect(api.bodies['PATCH /v1/me/privacy'], {'discoverableByEmail': true});
+
+    // Permission refused: explained, nothing sent.
+    book.allowed = false;
+    await tester.tap(find.byKey(const Key('check-contacts')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('contacts-note')), findsOneWidget);
+    expect(api.calls.where((c) => c.contains('contacts/match')), isEmpty);
+
+    book.allowed = true;
+    await tester.tap(find.byKey(const Key('check-contacts')));
+    await tester.pumpAndSettle();
+    // Addresses lower-cased and de-duplicated across contacts.
+    expect(api.bodies['POST /v1/contacts/match'], {
+      'emails': ['bo@example.test', 'cy@example.test'],
+      'phones': ['+447700900123', '07700 900456'],
+    });
+    expect(find.text('@bo · bo@example.test'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('follow-u-bo')));
+    await tester.pumpAndSettle();
+    expect(api.calls, contains('POST /v1/users/u-bo/follow'));
+    expect(find.text('Following'), findsOneWidget);
+
+    await closeApp(tester);
+  });
+}
+
+class _FakeBook implements ContactsBook {
+  bool allowed = true;
+  int reads = 0;
+  @override
+  Future<List<AddressBookEntry>?> read() async {
+    reads += 1;
+    if (!allowed) return null;
+    return const [
+      AddressBookEntry(name: 'Bo', emails: ['Bo@Example.test '], phones: ['+447700900123']),
+      AddressBookEntry(name: 'Cy', emails: ['cy@example.test', 'bo@example.test'], phones: ['07700 900456']),
+    ];
+  }
 }

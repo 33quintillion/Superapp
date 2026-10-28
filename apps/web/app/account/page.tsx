@@ -3,6 +3,7 @@ import { api, ApiError } from '@/lib/api';
 import { authed, requireAccessToken } from '@/lib/session';
 import { resendVerification, revokeSession, signOut } from '../actions';
 import { SignOutForm } from './sign-out-button';
+import { FindPeople } from './find-people';
 import { NotificationSettings } from './notifications';
 import { ProfilePhoto } from './profile-photo';
 import { SocialSettings } from './social-settings';
@@ -61,6 +62,9 @@ export default async function AccountPage() {
 
       <h2>Privacy</h2>
       <SocialSettings />
+
+      <h2>Find people you know</h2>
+      <FindPeople />
 
       <h2>Notifications</h2>
       <NotificationSettings />
