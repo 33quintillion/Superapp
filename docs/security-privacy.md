@@ -77,7 +77,7 @@ This describes the system **as built today** (Stages 1 to 3, Stage 4 push notifi
 ## Before production (not done yet)
 - Secret manager (AWS Secrets Manager, GCP Secret Manager or Vault) and a key-rotation procedure for `JWT_ACCESS_SECRET` and `DATA_ENCRYPTION_KEY`.
 - Database encryption at rest, encrypted backups, restore drills.
-- WAF and bot protection on sign-up; breached-password check.
+- WAF and bot protection on sign-up. (The breached-password check is built: new passwords are checked against Have I Been Pwned by k-anonymity.)
 - Privacy policy, terms, cookie notice, records of processing, DPIA, and data processing agreements with providers (**legal**).
 - **Before media sharing is opened to the public:** known-CSAM hash matching (for example PhotoDNA, or an equivalent from a child-safety partner), malware scanning of uploads, and NCMEC/IWF reporting procedures. The moderation queue for reports now exists (Stage 7), but it shows reported photos by count only; staff can't view reported media in the dashboard yet. Media sharing works today but **must not launch publicly without these** (**legal and trust & safety**).
 - Age gating and a child-safety programme (**legal and trust & safety**).

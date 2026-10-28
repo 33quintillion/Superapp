@@ -14,7 +14,7 @@ Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps 
 | Postgres migrations (transactional, locked, checksummed) | ✅ | `migrations.spec.ts` |
 | Redis connection and readiness check | ✅ | `auth.e2e.spec.ts › health` |
 | Central error format with request ids | ✅ | `auth.e2e.spec.ts › health` |
-| Log redaction of secrets | 🟡 | Configured in `app.ts`, no automated assertion yet |
+| Log redaction of secrets | ✅ | `logging.e2e` runs the real logger at trace level through sign-up, login, refresh and an authorised request, and checks no password, token or cookie appears; also when code logs a whole request or body |
 | Design tokens → CSS and Dart, CI staleness check | ✅ | `packages/design-tokens` |
 | docker-compose for local dependencies | 🟡 | Written; not run here (no Docker daemon in this environment) |
 | CI pipeline | 🟡 | `.github/workflows/ci.yml` written; first run happens on the PR |
@@ -42,7 +42,7 @@ Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps 
 | Scheduled purge of tombstones and backups | ⬜ | Needs backup infrastructure |
 | Phone number sign-up and verification | ⛔ | Needs an SMS provider account and fraud controls |
 | Contacts discovery (opt-in) | ⬜ | Designed for Stage 3; uploading the address book will never be required |
-| Breached-password check | ⬜ | Planned |
+| Breached-password check: new passwords (sign-up, reset, change) refused if in Have I Been Pwned's Pwned Passwords, by k-anonymity (only a 5-character hash prefix leaves the server), plus a built-in list of the most common ones; allowed if the service is down | ✅ | `breached-passwords.e2e` (against a local stand-in for the service) |
 | Admin MFA enforcement | ✅ | `admin.e2e › requires two-step verification to be on`, `› requires the session itself to have been opened with a two-step code, recently` (Stage 7) |
 | Localisation framework | 🟡 | `locale` stored per user; UI strings not yet extracted |
 | Web: sign-in, register, two-step, verify, forgot and reset, devices, sign-out | ✅ | `apps/web/e2e/run.mjs` |
@@ -134,7 +134,7 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Communities and channels: public or private, join and request to join, approve, ban, roles, admins-only posting in channels, owner hand-over and deletion | ✅ | `social.e2e › communities and channels`; web e2e; Flutter `social_test › communities` |
 | Community moderation: remove posts and comments with a reason (audited), ban, rank checks | ✅ | `social.e2e › moderates…`; web e2e (moderator removes a post) |
 | Reports on posts, comments, stories and communities | ✅ (user side) | `social.e2e › accepts reports…`; Flutter reports a post. The review queue is the Stage 7 admin dashboard |
-| Spam protection: per-person rate limits on posts (30/h), comments (120/h), likes (600/h), stories (50/day), follows (200/day), community creation (5/day) and joins (100/day), group creation (20/h) | 🟡 | Limits are wired through the shared limiter, which `auth.e2e › rate limiting` tests; the social limits themselves have no dedicated test yet. No spam classifier |
+| Spam protection: per-person rate limits on posts (30/h), comments (120/h), likes (600/h), stories (50/day), follows (200/day), community creation (5/day) and joins (100/day), group creation (20/h) | ✅ limits, ⬜ spam classifier | `social-limits.e2e` checks each limit's size, that it is per person, and the `Retry-After` header. No spam classifier |
 | Export and account deletion include all social data; deactivated accounts' posts are hidden | ✅ | `social.e2e › exports social data…`, `› hides a deactivated account’s posts` |
 | Web: groups, feed, profiles with follow, stories, communities, privacy settings | ✅ for the flows in the browser test | `apps/web/e2e/run.mjs › socialFlow` |
 | Flutter: groups, feed, stories, comments, posting, communities | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/social_test.dart` |

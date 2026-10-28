@@ -22,6 +22,8 @@ export const TEST_ENV = {
   // Push tests drive the worker by hand; the rest don't need it polling.
   PUSH_WORKER_ENABLED: 'false',
   STORY_SWEEP_INTERVAL_SECONDS: '0',
+  // Test passwords such as "correct horse battery staple" are famous leaks; auth.e2e turns it on against a stand-in.
+  PASSWORD_BREACH_CHECK: 'off',
 };
 
 export function testConfig(overrides: Record<string, string> = {}): AppConfig {

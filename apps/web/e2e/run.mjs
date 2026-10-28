@@ -54,6 +54,8 @@ const env = {
   STRIPE_API_BASE: `http://127.0.0.1:${STRIPE_PORT}`,
   PAYMENTS_PLATFORM_FEE_BPS: '500',
   PAYMENTS_SWEEP_INTERVAL_SECONDS: '5',
+  // No calls to the real Pwned Passwords service from tests.
+  PASSWORD_BREACH_CHECK: 'off',
 };
 
 /** coturn with the TURN REST API shared secret, as in production, on loopback only. */

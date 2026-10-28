@@ -47,6 +47,12 @@ const schema = z.object({
 
   RATE_LIMIT_DISABLED: z.stringbool().default(false),
 
+  /** "hibp" refuses new passwords found in Have I Been Pwned's Pwned Passwords (free, no key; only a 5-character hash prefix is sent). */
+  PASSWORD_BREACH_CHECK: z.enum(['hibp', 'off']).default('hibp'),
+  PASSWORD_BREACH_API_URL: z.url().default('https://api.pwnedpasswords.com'),
+  /** Past this the password is allowed: an outage must not block sign-ups. */
+  PASSWORD_BREACH_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2000),
+
   /** S3-compatible object storage for media (MinIO locally, any S3 provider in staging/prod). */
   S3_ENDPOINT: z.url().optional(),
   /** Endpoint that clients use for presigned URLs, if it differs from the one the API uses. */

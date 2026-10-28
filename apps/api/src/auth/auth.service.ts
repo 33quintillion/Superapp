@@ -10,6 +10,7 @@ import { generateTotpSecret, otpauthUri, verifyTotp } from '../crypto/totp';
 import { DatabaseService, Queryable } from '../database/database.service';
 import { MailService } from '../mail/mail.service';
 import type { ClientInfo } from './auth.guard';
+import { BreachedPasswordsService } from './breached-passwords.service';
 import { hashPassword, verifyPassword } from './password';
 import { TokenService } from './token.service';
 
@@ -56,6 +57,7 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly limits: RateLimitService,
     private readonly audit: AuditService,
+    private readonly breached: BreachedPasswordsService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {
     this.box = new SecretBox(config.DATA_ENCRYPTION_KEY);
@@ -66,6 +68,7 @@ export class AuthService {
     client: ClientInfo,
   ): Promise<TokenPair> {
     await this.limits.consume(RULES.registerIp, client.ip ?? 'unknown');
+    await this.breached.assertNotBreached(input.password);
     const passwordHash = await hashPassword(input.password);
     const { userId, pair } = await this.db.tx(async (tx) => {
       const taken = await this.db.one<{ email: string | null; username: string | null }>(
@@ -259,6 +262,7 @@ export class AuthService {
   }
 
   async resetPassword(token: string, newPassword: string, client: ClientInfo) {
+    await this.breached.assertNotBreached(newPassword);
     const passwordHash = await hashPassword(newPassword);
     await this.db.tx(async (tx) => {
       const userId = await this.consumeOneTimeToken(tx, token, 'reset_password');
@@ -274,6 +278,7 @@ export class AuthService {
     await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
     const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
     if (!(await verifyPassword(u?.password_hash ?? null, current))) throw Errors.invalidCredentials();
+    await this.breached.assertNotBreached(next);
     const passwordHash = await hashPassword(next);
     await this.db.tx(async (tx) => {
       await this.db.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [userId, passwordHash], tx);

@@ -19,6 +19,7 @@ import { IceService } from './calls/ice.service';
 import { AuthController, SessionsController } from './auth/auth.controller';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { BreachedPasswordsService } from './auth/breached-passwords.service';
 import { TokenService } from './auth/token.service';
 import { AuditService } from './common/audit.service';
 import { RateLimitService } from './common/rate-limit.service';
@@ -84,6 +85,7 @@ export class AppModule {
         TokenService,
         AuthGuard,
         AuthService,
+        BreachedPasswordsService,
         UsersService,
         SafetyService,
         StorageService,

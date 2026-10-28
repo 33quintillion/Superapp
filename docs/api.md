@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3000` locally. Requests and responses are JSON. Authenticated routes need `Authorization: Bearer <accessToken>`.
 
-Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` / `cannot_add` / `admins_only` / `outranked` (403), `not_found` (404), `email_taken` / `username_taken` / `slug_taken` / `owner_cannot_leave` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` / `push_not_configured` (409), `rate_limited` (429, with a `Retry-After` header).
+Errors always look like `{ "error": { "code": "…", "message": "…", "requestId": "…", "details"?: … } }`. Common codes: `validation_failed` (400), `password_breached` (400, the new password is a known leak), `invalid_token` (400), `media_rejected` (400), `unauthorized` / `invalid_credentials` (401), `forbidden` / `cannot_message` / `cannot_add` / `admins_only` / `outranked` (403), `not_found` (404), `email_taken` / `username_taken` / `slug_taken` / `owner_cannot_leave` / `edit_window_passed` / `delete_window_passed` / `too_many_pins` / `media_not_ready` / `upload_missing` / `push_not_configured` (409), `rate_limited` (429, with a `Retry-After` header).
 
 A token pair looks like `{ accessToken, refreshToken, expiresIn, sessionId }`.
 
