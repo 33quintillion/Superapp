@@ -10,6 +10,9 @@ import '../chat/realtime.dart' show newClientId;
 import '../theme/tokens.g.dart';
 import 'business_screens.dart' show OpenUrl, openInBrowser;
 
+/// The theme makes filled buttons full width; these sit in rows, lists and dialogs.
+final _inline = FilledButton.styleFrom(minimumSize: const Size(64, 48));
+
 void _snack(BuildContext context, Object e) {
   if (!context.mounted) return;
   ScaffoldMessenger.of(context)
@@ -131,7 +134,7 @@ Future<bool> showRefundDialog(BuildContext context, AuthController auth, {requir
       ]),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-        FilledButton(
+        FilledButton(style: _inline, 
           key: const Key('refund-send'),
           onPressed: () async {
             try {
@@ -241,7 +244,7 @@ class _OrdersTabState extends State<OrdersTab> {
                       for (final (to, label) in orderNextSteps[o.status] ?? const <(String, String)>[])
                         to == 'rejected' || to == 'cancelled'
                             ? TextButton(key: Key('order-${o.id}-$to'), onPressed: () => _move(o, to), child: Text(label))
-                            : FilledButton.tonal(key: Key('order-${o.id}-$to'), onPressed: () => _move(o, to), child: Text(label)),
+                            : FilledButton.tonal(style: _inline, key: Key('order-${o.id}-$to'), onPressed: () => _move(o, to), child: Text(label)),
                     if (b.can('orders.refund') && o.refundable)
                       TextButton(
                         key: Key('refund-order-${o.id}'),
@@ -326,7 +329,7 @@ class _BookingsTabState extends State<BookingsTab> {
                   Wrap(spacing: NexaSpace.sm, children: [
                     if (k.status == 'confirmed' && b.can('bookings.manage')) ...[
                       if (!k.startsAt.isAfter(_now)) ...[
-                        FilledButton.tonal(key: Key('booking-${k.id}-came'), onPressed: () => _post('/v1/bookings/${k.id}/outcome', {'status': 'completed'}), child: const Text('Came')),
+                        FilledButton.tonal(style: _inline, key: Key('booking-${k.id}-came'), onPressed: () => _post('/v1/bookings/${k.id}/outcome', {'status': 'completed'}), child: const Text('Came')),
                         TextButton(key: Key('booking-${k.id}-no-show'), onPressed: () => _post('/v1/bookings/${k.id}/outcome', {'status': 'no_show'}), child: const Text('No-show')),
                       ] else
                         TextButton(key: Key('booking-${k.id}-cancel'), onPressed: () => _cancel(k), child: const Text('Cancel')),
@@ -405,7 +408,7 @@ class _CatalogueTabState extends State<CatalogueTab> {
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-          FilledButton(
+          FilledButton(style: _inline, 
             key: const Key('item-save'),
             onPressed: () async {
               try {
@@ -425,7 +428,7 @@ class _CatalogueTabState extends State<CatalogueTab> {
 
   @override
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(NexaSpace.md), children: [
-        Align(alignment: Alignment.centerLeft, child: FilledButton.icon(key: const Key('add-item'), onPressed: _add, icon: const Icon(Icons.add), label: const Text('Add item'))),
+        Align(alignment: Alignment.centerLeft, child: FilledButton.icon(style: _inline, key: const Key('add-item'), onPressed: _add, icon: const Icon(Icons.add), label: const Text('Add item'))),
         if (_items == null) const Padding(padding: EdgeInsets.all(NexaSpace.lg), child: Center(child: CircularProgressIndicator())),
         if (_items?.isEmpty ?? false) const ListTile(title: Text('Nothing for sale yet.')),
         for (final i in _items ?? <CatalogueItem>[])
@@ -551,7 +554,7 @@ class _MoneyTabState extends State<MoneyTab> {
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-          FilledButton(
+          FilledButton(style: _inline, 
             key: const Key('dispute-send'),
             onPressed: () async {
               if (text.text.trim().isEmpty) return;
@@ -630,7 +633,7 @@ class _MoneyTabState extends State<MoneyTab> {
                   onChanged: (c) => setState(() => _country = c ?? _country),
                 ),
               const SizedBox(width: NexaSpace.sm),
-              FilledButton(
+              FilledButton(style: _inline, 
                 key: const Key('setup-payouts'),
                 onPressed: () => _go('/v1/businesses/${b.id}/payments/account', {'country': _country}),
                 child: Text(a.connected ? 'Continue setup' : 'Set up payouts'),
@@ -728,7 +731,7 @@ class _MoneyTabState extends State<MoneyTab> {
               key: Key('plan-${p.code}'),
               title: Text(p.name),
               subtitle: Text('${formatMoney(p.priceMinor, p.currency)} a ${p.interval}'),
-              trailing: FilledButton(onPressed: () => _go('/v1/businesses/${b.id}/subscription', {'planCode': p.code, 'clientId': newClientId()}), child: const Text('Choose')),
+              trailing: FilledButton(style: _inline, onPressed: () => _go('/v1/businesses/${b.id}/subscription', {'planCode': p.code, 'clientId': newClientId()}), child: const Text('Choose')),
             ),
       ]),
     );

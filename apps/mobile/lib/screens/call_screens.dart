@@ -141,9 +141,18 @@ class _CallScreenState extends State<CallScreen> {
               if (!showVideo)
                 CircleAvatar(radius: 56, child: Text(calls.peerName.isEmpty ? '?' : calls.peerName.characters.first.toUpperCase(), style: theme.textTheme.headlineLarge)),
               const SizedBox(height: NexaSpace.md),
-              Text(calls.peerName, style: theme.textTheme.headlineSmall?.copyWith(color: Colors.white)),
-              const SizedBox(height: NexaSpace.xs),
-              Text(status, key: const Key('call-status'), style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70)),
+              // Over video the background could be anything, so the name and status get a dark backing.
+              DecoratedBox(
+                decoration: BoxDecoration(color: showVideo ? Colors.black.withValues(alpha: 0.7) : null, borderRadius: BorderRadius.circular(NexaRadius.md)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: NexaSpace.md, vertical: NexaSpace.xs),
+                  child: Column(children: [
+                    Text(calls.peerName, style: theme.textTheme.headlineSmall?.copyWith(color: Colors.white)),
+                    const SizedBox(height: NexaSpace.xs),
+                    Text(status, key: const Key('call-status'), style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70)),
+                  ]),
+                ),
+              ),
               if (phase == CallPhase.active && calls.quality != null && calls.quality != CallQuality.good)
                 Padding(
                   padding: const EdgeInsets.only(top: NexaSpace.sm),
@@ -191,19 +200,21 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
-        Semantics(
-          button: true,
-          toggled: color == null ? selected : null,
-          label: label,
-          child: IconButton.filled(
-            iconSize: 30,
-            style: IconButton.styleFrom(
-              backgroundColor: color ?? (selected ? Colors.white : Colors.white24),
-              foregroundColor: color != null ? Colors.white : (selected ? Colors.black : Colors.white),
-              minimumSize: const Size(64, 64),
+        // One node for screen readers: the button's name and, for toggles, whether it is on.
+        MergeSemantics(
+          child: Semantics(
+            toggled: color == null ? selected : null,
+            child: IconButton.filled(
+              tooltip: label,
+              iconSize: 30,
+              style: IconButton.styleFrom(
+                backgroundColor: color ?? (selected ? Colors.white : Colors.white24),
+                foregroundColor: color != null ? Colors.white : (selected ? Colors.black : Colors.white),
+                minimumSize: const Size(64, 64),
+              ),
+              onPressed: () => unawaited(onPressed()),
+              icon: Icon(icon),
             ),
-            onPressed: () => unawaited(onPressed()),
-            icon: Icon(icon),
           ),
         ),
         const SizedBox(height: NexaSpace.xs),

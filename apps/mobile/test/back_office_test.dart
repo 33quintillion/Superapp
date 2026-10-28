@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:nexa/business/business_models.dart';
 import 'package:nexa/screens/back_office_screens.dart';
 import 'package:nexa/screens/business_screens.dart';
+import 'package:nexa/theme/theme.dart';
 
 import 'business_test.dart' show FakeApi, bakery, booking, item, json, order, signedIn;
 
@@ -34,7 +35,7 @@ Map<String, dynamic> subscription(Map<String, dynamic>? p, {bool cancelling = fa
 
 /// Puts the screen under a button so it is pushed like it is in the app.
 Future<void> open(WidgetTester tester, Widget screen) async {
-  await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) => Scaffold(body: Center(child: TextButton(
+  await tester.pumpWidget(MaterialApp(theme: nexaTheme(Brightness.light), home: Builder(builder: (context) => Scaffold(body: Center(child: TextButton(
         onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen)),
         child: const Text('open'),
       ))))));

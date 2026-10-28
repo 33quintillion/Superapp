@@ -11,6 +11,8 @@ import 'package:nexa/auth/session_store.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
 
+import 'a11y_helpers.dart';
+
 // As in chat_test, only the HTTP and socket boundary is faked: the controllers and screens
 // are the real code, and every request they make is checked against what the API expects.
 
@@ -290,6 +292,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.bodies['PUT /v1/posts/p1/like'], {'liked': true});
     expect(find.descendant(of: find.byKey(const Key('like-p1')), matching: find.text('3')), findsOneWidget);
+    await expectAccessible(tester);
 
     await tester.tap(find.byKey(const Key('comments-p1')));
     await tester.pumpAndSettle();

@@ -24,7 +24,7 @@ Ranked roughly by how much harm each could do and how hard it would be to undo.
 - Chats are not end-to-end encrypted (ADR 0004, blocked on the libsignal licence review).
 - No malware or CSAM scanning of uploads, and no thumbnails or video transcoding. The file-signature check is not a scan.
 - Uploads that are started but never completed are not cleaned up yet. Use a bucket lifecycle rule until the job exists.
-- Unsent messages are kept in memory on web and mobile, so they are lost if the app is closed before reconnecting.
+- Unsent messages are kept in memory on the web, so they are lost if the tab is closed before reconnecting. The phone app saves them and sends them on the next launch.
 - Contacts discovery is not implemented. It will be opt-in only, with hashed identifiers and rate limits, and we know hashing alone does not anonymise phone numbers.
 - Account deletion scrubs personal data immediately. A scheduled purge of tombstone rows and backups (backup retention) is not built yet.
 - Simultaneous refreshes from two browser tabs can sign the user out (see ADR 0002).

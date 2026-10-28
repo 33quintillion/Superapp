@@ -100,4 +100,4 @@ Each user has a Redis pub/sub channel. A server subscribes only to the users who
 ## Not done yet
 - Push notifications reach browsers today. iPhone and Android need APNs and FCM credentials and app-side registration (see [`push.md`](push.md)).
 - Per-device delivery state. Receipts are per user, not per device.
-- Outboxes are kept in memory. A send that is still pending when the app is killed is lost and has to be typed again.
+- On the web the outbox is kept in memory, so a send still pending when the tab is closed is lost. The phone app keeps its outbox in the keystore and re-sends it, with the same `clientId`s, on the next launch; it is wiped on sign-out.

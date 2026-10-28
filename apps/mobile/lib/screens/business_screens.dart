@@ -81,7 +81,7 @@ class _BusinessesScreenState extends State<BusinessesScreen> {
             controller: _q,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _search(),
-            decoration: InputDecoration(hintText: 'Find shops, cafés, salons…', suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _search)),
+            decoration: InputDecoration(hintText: 'Find shops, cafés, salons…', suffixIcon: IconButton(tooltip: 'Search', icon: const Icon(Icons.search), onPressed: _search)),
           ),
           if (_results == null) const Padding(padding: EdgeInsets.all(NexaSpace.lg), child: Center(child: CircularProgressIndicator())),
           if (_results?.isEmpty ?? false) const ListTile(title: Text('No businesses found.')),

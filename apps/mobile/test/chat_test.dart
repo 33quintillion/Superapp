@@ -9,8 +9,11 @@ import 'package:nexa/api/api_client.dart';
 import 'package:nexa/auth/auth_controller.dart';
 import 'package:nexa/auth/session_store.dart';
 import 'package:nexa/chat/chat_controller.dart';
+import 'package:nexa/chat/outbox_store.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
+
+import 'a11y_helpers.dart';
 
 // The API is faked at the HTTP and socket boundary only. The chat controller, the
 // realtime connection (outbox, reconnects, resync) and the widgets are the real code.
@@ -189,6 +192,7 @@ void main() {
     await tester.tap(find.byKey(const Key('conv-ben')));
     await tester.pumpAndSettle();
     expect(find.text('hey ada'), findsOneWidget);
+    await expectAccessible(tester);
     // Opening the chat marks Ben's message read.
     final socket = server.sockets.single;
     expect(socket.sent.where((f) => f['type'] == 'receipt'), contains(predicate<Map>((f) => f['kind'] == 'read' && f['seq'] == 1)));
@@ -280,6 +284,58 @@ void main() {
     expect(chat.messagesFor('c1').single.pending.name, 'failed');
     expect(chat.rt.pendingCount, 0);
     expect(chat.lastError, 'You can’t message this person');
+    chat.dispose();
+  });
+
+  test('a message left unsent when the app closed is sent again on the next launch, once', () async {
+    final server = FakeServer();
+    final store = MemoryOutboxStore();
+    final auth = await signedIn(server);
+    var chat = ChatController(auth: auth, wsBase: 'ws://api.test', connect: server.connect, outbox: store);
+    await chat.start();
+    await pumpEventQueue();
+    await chat.open('c1');
+    server.sockets.single.answers = false;
+    unawaited(chat.sendText('c1', 'survives a restart'));
+    await pumpEventQueue();
+    await chat.flushOutbox();
+    final saved = store.saved.values.single.single;
+    expect(saved.body, 'survives a restart');
+    // The app is closed before the server answers.
+    chat.dispose();
+
+    chat = ChatController(auth: auth, wsBase: 'ws://api.test', connect: server.connect, outbox: store);
+    await chat.start();
+    await pumpEventQueue();
+    // Shown as sending straight away, then stored by the server under its original id.
+    final resent = server.sockets.last.sent.where((f) => f['type'] == 'send').toList();
+    expect(resent, hasLength(1));
+    expect((resent.single['message'] as Map)['clientId'], saved.clientId);
+    await pumpEventQueue();
+    await chat.flushOutbox();
+    expect(server.messages.where((m) => m['body'] == 'survives a restart'), hasLength(1));
+    expect(store.saved, isEmpty);
+    await chat.open('c1');
+    expect(chat.messagesFor('c1').where((m) => m.body == 'survives a restart').single.pending.name, 'none');
+    chat.dispose();
+  });
+
+  test('unsent messages are wiped from the phone on sign-out', () async {
+    final server = FakeServer();
+    final store = MemoryOutboxStore();
+    final auth = await signedIn(server);
+    final chat = ChatController(auth: auth, wsBase: 'ws://api.test', connect: server.connect, outbox: store);
+    await chat.start();
+    await pumpEventQueue();
+    await chat.open('c1');
+    server.sockets.single.answers = false;
+    unawaited(chat.sendText('c1', 'private draft'));
+    await pumpEventQueue();
+    await chat.flushOutbox();
+    expect(store.saved, isNotEmpty);
+    await auth.signOut();
+    await chat.flushOutbox();
+    expect(store.saved, isEmpty);
     chat.dispose();
   });
 

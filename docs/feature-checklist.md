@@ -85,7 +85,7 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
 | Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
 | End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
-| Durable outbox (survives app restart) | ⬜ | Outboxes are in memory today |
+| Durable outbox (survives app restart) | ✅ phone app, ⬜ web | Flutter keeps unsent messages in the keystore and re-sends them with their original ids on the next launch; wiped on sign-out (`chat_test › a message left unsent when the app closed…`, `› unsent messages are wiped…`). The web outbox is still in memory |
 | Load test of fan-out and presence | ✅ | `apps/api/load/run.mjs`, results in `docs/hardening.md` (one instance; multi-instance needs staging) |
 
 ## Stage 4: Push, offline and sync
@@ -111,7 +111,8 @@ Push services are exercised against local servers that speak the real protocols 
 | Web: notification settings, turn browser notifications on and off, service worker shows the notification, reports "delivered", opens the chat on click | ✅ settings and service worker, 🟡 subscribing and click | Web e2e `notificationsFlow` saves settings and hands the service worker a push (via Chrome DevTools Protocol), checking the notification and the delivered receipt. Subscribing needs a real browser push service, so the "Turn on" button and opening the chat from a click are not browser-tested; the API side of subscribing is |
 | iPhone and Android: permission prompt, token registration, tap handling | ⛔ | Needs the APNs key and Firebase project above, then Flutter work |
 | Clear notifications on other devices after reading | ⬜ | Planned |
-| Durable outbox (survives app restart) and background sync on mobile | ⬜ | Planned |
+| Durable outbox (survives app restart) on mobile | ✅ | See Stage 2 above |
+| Background sync on mobile (fetching while the app is closed) | ⛔ | Needs push (APNs/FCM) to wake the app |
 | Queue metrics and alerting | ⬜ | Stage 10 monitoring |
 
 ## Stage 5: Social
@@ -185,7 +186,7 @@ Business accounts with staff roles, a catalogue with pickup orders, bookings, th
 | Flutter: browse businesses, order for pickup, book, my orders and bookings | ✅ | `business_test` |
 | Flutter back office for staff: orders queue, bookings with came/no-show/cancel, item catalogue, tabs by role | ✅ | `back_office_test` |
 | Item photos and viewing reported media in the queue | ⛔ | Needs the media scanning provider (same blocker as chat media) |
-| Online payment for orders and bookings | ✅ / ⬜ | Orders: Stage 8 below. Bookings: not built |
+| Online payment for orders and booking deposits | ✅ | Stage 8 below |
 | Business verification checks (documents, company registry) | ⛔ | Needs a verification provider; admins mark businesses verified by hand today |
 | Partner API for integrations (OAuth, tokens, webhooks) | ⛔ | Needs a partner agreement and terms; the catalogue and grants are in place |
 | Escalation of child-safety reports to NCMEC or IWF | ⛔ | Needs legal and trust-and-safety sign-up |
@@ -235,7 +236,8 @@ Details and numbers in `hardening.md`.
 | Web accessibility: axe-core WCAG 2.2 AA on 17 screens, light and dark; skip link; focus rings | ✅ | Web e2e `a11yFlow` (`E2E_ONLY=a11y`) |
 | Independent penetration test | ⬜ | Needs staging (Stage 10) |
 | Multi-instance and soak load tests | ⬜ | Needs staging |
-| Flutter accessibility (TalkBack, VoiceOver) and a manual screen-reader pass on the web | ⬜ | Needs real devices and a person |
+| Flutter accessibility: automated checks (48×48 and 44×44 tap targets, labels on everything tappable, WCAG text contrast) on sign-in, home, chat, feed, calls, shopping and every back-office tab, in light and dark mode | ✅ | `a11y_test`, plus checks inside `chat_test`, `social_test`, `calls_test` |
+| Trying the phone app with TalkBack and VoiceOver, and a manual screen-reader pass on the web | ⛔ | Needs real devices and a person |
 | Arrow-key navigation for tabs | ⬜ | Tab and Enter work |
 
 ## Stage 10

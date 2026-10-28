@@ -7,6 +7,7 @@ import '../auth/auth_controller.dart';
 import '../calls/call_controller.dart';
 import '../calls/call_engine.dart';
 import '../chat/chat_controller.dart';
+import '../chat/outbox_store.dart';
 import '../chat/realtime.dart';
 import '../theme/tokens.g.dart';
 import 'business_screens.dart';
@@ -155,17 +156,18 @@ class _RegisterScreenState extends State<RegisterScreen> with _Submitting {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.auth, this.connectSocket, this.callEngine});
+  const HomeScreen({super.key, required this.auth, this.connectSocket, this.callEngine, this.outbox});
   final AuthController auth;
   final SocketFactory? connectSocket;
   final CallEngine Function()? callEngine;
+  final OutboxStore? outbox;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late final ChatController chat = ChatController(auth: widget.auth, wsBase: wsBaseFor(widget.auth.api.baseUrl), connect: widget.connectSocket);
+  late final ChatController chat = ChatController(auth: widget.auth, wsBase: wsBaseFor(widget.auth.api.baseUrl), connect: widget.connectSocket, outbox: widget.outbox);
   late final CallController calls;
 
   @override
