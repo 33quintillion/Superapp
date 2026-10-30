@@ -64,6 +64,8 @@ const schema = z.object({
   S3_FORCE_PATH_STYLE: z.stringbool().default(true),
   /** Creates the bucket at startup. For local development and tests only. */
   S3_AUTO_CREATE_BUCKET: z.stringbool().default(false),
+  /** Sets the bucket's CORS rule to CORS_ORIGINS at startup, for providers configured only over S3 (e.g. Neon). */
+  S3_MANAGE_CORS: z.stringbool().default(false),
 
   /** How often an open WebSocket re-checks that its session is still valid. */
   WS_SESSION_RECHECK_SECONDS: z.coerce.number().int().positive().default(30),

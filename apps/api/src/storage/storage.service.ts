@@ -44,15 +44,18 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   async onApplicationBootstrap() {
-    if (!this.config.S3_AUTO_CREATE_BUCKET) return;
-    try {
-      await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }));
-    } catch {
-      await this.internal.send(new CreateBucketCommand({ Bucket: this.bucket }));
-      this.logger.log(`Created bucket ${this.bucket}`);
+    if (this.config.S3_AUTO_CREATE_BUCKET) {
+      try {
+        await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }));
+      } catch {
+        await this.internal.send(new CreateBucketCommand({ Bucket: this.bucket }));
+        this.logger.log(`Created bucket ${this.bucket}`);
+      }
+    } else if (!this.config.S3_MANAGE_CORS) {
+      return;
     }
-    // Browsers upload straight to the bucket, so it has to allow the web origins. In
-    // staging and production this is set by infrastructure, like the bucket itself.
+    // Browsers upload straight to the bucket, so it has to allow the web origins. Locally the
+    // bucket is created here too; when deployed, S3_MANAGE_CORS sets the rule on a provisioned bucket.
     const origins = this.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
     if (origins.length === 0) return;
     try {

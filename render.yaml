@@ -1,0 +1,106 @@
+# Staging on Render's free plan (docs/staging.md).
+# Render → New → Blueprint → pick this repository. Values marked `sync: false` are asked for
+# once, in Render's dashboard; secrets never live in this file.
+services:
+  - type: web
+    name: nexa-api
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @nexa/api build
+    # The free plan has no pre-deploy step, so migrations run before the server starts.
+    # They take an advisory lock, so two starting instances never apply the same file twice.
+    startCommand: cd apps/api && node dist/src/database/migrate.cli.js && node dist/src/main.js
+    healthCheckPath: /health/ready
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: NODE_ENV
+        value: staging
+      # Render's load balancers reach the service from private addresses.
+      - key: TRUST_PROXY
+        value: uniquelocal
+      # Neon's DIRECT connection string (Connection pooling off): migrations hold a session lock.
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_POOL_MAX
+        value: '5'
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nexa-cache
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      # Render generates 256 random bits, base64: exactly the 32 bytes this key needs.
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true
+      # The web service's address, e.g. https://nexa-web.onrender.com
+      - key: PUBLIC_WEB_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: MAIL_TRANSPORT
+        value: smtp
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # Neon Object Storage on the production branch of the SUPERAPP project (bucket is private).
+      - key: S3_ENDPOINT
+        value: https://br-misty-bar-ao5h5m4y.storage.c-2.ap-southeast-1.aws.neon.tech
+      - key: S3_REGION
+        value: ap-southeast-1
+      - key: S3_FORCE_PATH_STYLE
+        value: 'true'
+      - key: S3_BUCKET
+        value: nexa-media
+      # A Neon credential with storage:read and storage:write on that branch.
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      # Neon buckets are configured over S3 only, so the API sets the browser-upload rule itself.
+      - key: S3_MANAGE_CORS
+        value: 'true'
+      - key: STUN_URLS
+        value: stun:stun.cloudflare.com:3478
+      - key: TURN_PROVIDER
+        value: none
+      - key: PAYMENTS_PROVIDER
+        value: none
+
+  - type: web
+    name: nexa-web
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @nexa/web build
+    startCommand: cd apps/web && node_modules/.bin/next start -p $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: NODE_ENV
+        value: production
+      # Free services can't talk privately, so both of these are the API's public address:
+      # https://nexa-api.onrender.com and wss://nexa-api.onrender.com
+      - key: API_INTERNAL_URL
+        sync: false
+      - key: API_PUBLIC_WS_URL
+        sync: false
+      - key: WEB_PROXY_HOPS
+        value: '1'
+      # The storage address, so photos load (Content Security Policy).
+      - key: CSP_MEDIA_ORIGINS
+        value: https://br-misty-bar-ao5h5m4y.storage.c-2.ap-southeast-1.aws.neon.tech
+
+  - type: keyvalue
+    name: nexa-cache
+    plan: free
+    region: singapore
+    # Rate limits and sessions keep working if the cache is full; keep newest keys.
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

@@ -7,6 +7,7 @@ import { matchesSignature } from '../src/media/media-types';
 import { parseForm } from '../src/dev/stripe-sandbox';
 import { paymentStatus } from '../src/payments/payments.service';
 import { formEncode, ProviderError, SignatureError, signStripePayload, verifyStripeSignature } from '../src/payments/stripe';
+import { StorageService } from '../src/storage/storage.service';
 import { TEST_ENV } from './helpers';
 
 describe('TOTP (RFC 6238 Appendix B vectors, SHA-1)', () => {
@@ -260,5 +261,34 @@ describe('payments configuration', () => {
     expect(() => cfg({ ...stripe, ...deployed, STRIPE_SECRET_KEY: 'sk_live_x', STRIPE_API_BASE: 'http://127.0.0.1:1' })).toThrow(/STRIPE_API_BASE is for tests only/);
     // Staging uses test keys.
     expect(cfg({ ...stripe, ...deployed, NODE_ENV: 'staging' }).STRIPE_SECRET_KEY).toBe('sk_test_x');
+  });
+});
+
+describe('bucket CORS on a provisioned bucket', () => {
+  async function commandsSent(overrides: Record<string, string>) {
+    const config = loadConfig({ ...TEST_ENV, CORS_ORIGINS: 'https://web.example', ...overrides } as NodeJS.ProcessEnv);
+    const storage = new StorageService(config);
+    const sent: { name: string; input: any }[] = [];
+    (storage as any).internal.send = async (cmd: any) => {
+      sent.push({ name: cmd.constructor.name, input: cmd.input });
+      return {};
+    };
+    await storage.onApplicationBootstrap();
+    return sent;
+  }
+
+  it('sets only the CORS rule when S3_MANAGE_CORS is on', async () => {
+    const sent = await commandsSent({ S3_AUTO_CREATE_BUCKET: 'false', S3_MANAGE_CORS: 'true' });
+    expect(sent.map((c) => c.name)).toEqual(['PutBucketCorsCommand']);
+    expect(sent[0].input.CORSConfiguration.CORSRules[0].AllowedOrigins).toEqual(['https://web.example']);
+  });
+
+  it('leaves a provisioned bucket alone by default', async () => {
+    expect(await commandsSent({ S3_AUTO_CREATE_BUCKET: 'false' })).toEqual([]);
+  });
+
+  it('is allowed when deployed, unlike auto-creating buckets', () => {
+    const deployed = { NODE_ENV: 'staging', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://mail', STUN_URLS: 'stun:stun.example.test:3478', S3_AUTO_CREATE_BUCKET: 'false' };
+    expect(loadConfig({ ...TEST_ENV, ...deployed, S3_MANAGE_CORS: 'true' } as NodeJS.ProcessEnv).S3_MANAGE_CORS).toBe(true);
   });
 });
