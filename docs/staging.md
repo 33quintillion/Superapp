@@ -16,4 +16,4 @@ A private test site on free plans, set up by `render.yaml` at the repository roo
 - `SMTP_USER` and `SMTP_PASS`: Brevo's SMTP login and key (Brevo → SMTP & API → SMTP), pasted as shown. `SMTP_URL` is Brevo's relay. `MAIL_FROM`: a sender address verified in Brevo.
 - `PUBLIC_WEB_URL` and `CORS_ORIGINS`: the web service's address. `API_INTERNAL_URL` and `API_PUBLIC_WS_URL`: the API's address (`https://` and `wss://`).
 
-`JWT_ACCESS_SECRET` and `DATA_ENCRYPTION_KEY` are generated in Render (the Generate button next to the value, or `generateValue` in a Blueprint). Never change `DATA_ENCRYPTION_KEY` afterwards: it encrypts stored secrets such as two-step codes.
+`JWT_ACCESS_SECRET` (64 hex characters) and `DATA_ENCRYPTION_KEY` (32 random bytes, base64) are set in Render. The dashboard's Generate button makes only 16 bytes, too short for the encryption key, so make them with `openssl rand -hex 32` and `openssl rand -base64 32` (a Blueprint's `generateValue` is long enough). Never change `DATA_ENCRYPTION_KEY` afterwards: it encrypts stored secrets such as two-step codes.
