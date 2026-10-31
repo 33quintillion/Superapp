@@ -9,13 +9,15 @@ body {
   font-size: var(--font-size-body);
   line-height: 1.5;
 }
-a { color: var(--color-primary); }
+a { color: var(--color-link); }
 main { max-width: 440px; margin: 0 auto; padding: var(--space-xxl) var(--space-lg); }
 main.wide { max-width: 720px; }
 h1 { font-size: var(--font-size-headline); margin: 0 0 var(--space-xl); }
 h2 { font-size: var(--font-size-title); margin: var(--space-xl) 0 var(--space-md); }
-.brand { font-weight: 700; letter-spacing: -0.02em; color: var(--color-primary); text-decoration: none; font-size: var(--font-size-title); }
-header.top { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.brand { font-weight: 700; letter-spacing: -0.02em; color: #E3B448; text-decoration: none; font-size: var(--font-size-title); }
+/* The bar is midnight navy with a gold rule in both themes: the brand's one constant. */
+header.top { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); border-bottom: 2px solid #E3B448; background: #14213D; }
+header.top :focus-visible { outline-color: #E3B448; }
 .stack { display: flex; flex-direction: column; gap: var(--space-lg); }
 .field { display: flex; flex-direction: column; gap: var(--space-xs); }
 .field span { font-weight: 500; }
@@ -27,7 +29,7 @@ input {
 /* Every control shows where keyboard focus is (WCAG 2.4.7), not only inputs and buttons. */
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .main-target:focus { outline: none; }
-.skip-link { position: absolute; left: var(--space-lg); top: -100px; z-index: 100; padding: var(--space-sm) var(--space-md); background: var(--color-surface); color: var(--color-primary); border-radius: var(--radius-md); }
+.skip-link { position: absolute; left: var(--space-lg); top: -100px; z-index: 100; padding: var(--space-sm) var(--space-md); background: var(--color-surface); color: var(--color-link); border-radius: var(--radius-md); }
 .skip-link:focus { top: var(--space-sm); }
 .btn {
   font: inherit; font-weight: 500; border: 0; cursor: pointer; padding: var(--space-md) var(--space-lg);
@@ -43,11 +45,12 @@ input {
 .pill { font-size: var(--font-size-caption); padding: 2px var(--space-sm); border-radius: var(--radius-pill); background: var(--color-surface-muted); }
 
 .top-nav { display: flex; gap: var(--space-lg); }
-.top-nav a { text-decoration: none; font-weight: 500; }
+.top-nav a { text-decoration: none; font-weight: 500; color: #F6F0E1; }
+.top-nav a:hover { color: #E3B448; }
 .small { font-size: var(--font-size-caption); }
 .btn.small { padding: var(--space-xs) var(--space-md); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.link-btn { background: none; border: 0; padding: 0; color: var(--color-primary); cursor: pointer; font: inherit; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--color-link); cursor: pointer; font: inherit; }
 /* A whole row that is a button keeps the row's padding, so it is a comfortable target (WCAG 2.5.8). */
 .row.link-btn { padding: var(--space-md) 0; }
 
@@ -68,7 +71,7 @@ main.chat-shell { max-width: none; margin: 0; padding: 0; }
 .conv.active, .conv:hover { background: var(--color-surface-muted); }
 .conv-name { font-weight: 500; }
 .conv-preview { grid-column: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--font-size-caption); }
-.badge { grid-column: 2; grid-row: 1 / span 2; align-self: center; background: var(--color-primary); color: var(--color-on-primary); border-radius: var(--radius-pill); padding: 0 var(--space-sm); font-size: var(--font-size-caption); }
+.badge { grid-column: 2; grid-row: 1 / span 2; align-self: center; background: var(--color-danger); color: var(--color-on-primary); border-radius: var(--radius-pill); padding: 0 var(--space-sm); font-size: var(--font-size-caption); }
 .archived { padding: var(--space-md) var(--space-lg); }
 .chat-main { display: flex; flex-direction: column; min-width: 0; position: relative; }
 .chat-head { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
@@ -110,7 +113,7 @@ main.chat-shell { max-width: none; margin: 0; padding: 0; }
 
 /* Groups */
 .system-note { align-self: center; text-align: center; padding: var(--space-xs) var(--space-md); background: var(--color-surface-muted); border-radius: var(--radius-pill); max-width: 90%; }
-.sender { color: var(--color-primary); }
+.sender { color: var(--color-link); }
 .group-panel { padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; gap: var(--space-sm); max-height: 45vh; overflow-y: auto; }
 .group-policies { display: flex; flex-wrap: wrap; gap: var(--space-md); }
 .group-members { list-style: none; margin: 0; padding: 0; }

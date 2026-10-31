@@ -9,9 +9,9 @@ ThemeData nexaTheme(Brightness brightness) {
     primary: p.primary,
     onPrimary: p.onPrimary,
     secondary: p.accent,
-    // Dark text on the green accent in both modes: white on it is only 3.1:1.
+    // Navy text on the gold accent in both modes: ivory on it would be too faint.
     onSecondary: brightness == Brightness.dark ? p.onPrimary : p.text,
-    // Selected segments and tonal buttons; left to Material they come out green with white text.
+    // Selected segments and tonal buttons; left to Material they come out gold with ivory text.
     secondaryContainer: p.surfaceMuted,
     onSecondaryContainer: p.text,
     error: p.danger,
@@ -24,6 +24,12 @@ ThemeData nexaTheme(Brightness brightness) {
     colorScheme: scheme,
     scaffoldBackgroundColor: p.bg,
     useMaterial3: true,
+    // Midnight navy with ivory text in both themes, as on the web: the brand's one constant.
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Color(0xFF14213D),
+      foregroundColor: Color(0xFFF6F0E1),
+      surfaceTintColor: Colors.transparent,
+    ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: p.surfaceMuted,

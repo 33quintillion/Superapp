@@ -1,11 +1,12 @@
 /*
  * Sign-in, sign-up and the steps after them: one calm card on a softly tinted page, steps on
- * the left and the form on the right (the QR code joins it there later). Indigo and marigold.
+ * the left and the form on the right (the QR code joins it there later). Ivory, midnight navy
+ * and gold.
  */
 .page {
-  --tint: #eceffb;
-  --marigold: #f4b23e;
-  --marigold-ink: #9a6a10;
+  --tint: #f3ecdc;
+  --marigold: #e3b448;
+  --marigold-ink: #8a6510;
   min-height: calc(100vh - 57px);
   display: flex;
   flex-direction: column;
@@ -15,12 +16,12 @@
 }
 @media (prefers-color-scheme: dark) {
   :global(:root:not([data-theme='light'])) .page {
-    --tint: #0b0e14;
+    --tint: #08101f;
     --marigold-ink: var(--marigold);
   }
 }
 :global(:root[data-theme='dark']) .page {
-  --tint: #0b0e14;
+  --tint: #08101f;
   --marigold-ink: var(--marigold);
 }
 
@@ -289,7 +290,7 @@
 .qrWait {
   padding: var(--space-lg);
   text-align: center;
-  color: #5a6372;
+  color: #5b6478;
 }
 .qrReload {
   width: 100%;
@@ -297,7 +298,7 @@
   padding: var(--space-xl);
   border: 0;
   background: #fff;
-  color: #3b5bdb;
+  color: #14213d;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -320,7 +321,7 @@
 }
 .email summary {
   cursor: pointer;
-  color: var(--color-primary);
+  color: var(--color-link);
 }
 .email[open] summary {
   margin-bottom: var(--space-lg);

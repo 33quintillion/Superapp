@@ -124,7 +124,7 @@ class _CallScreenState extends State<CallScreen> {
       // Leaving the screen does not end the call; the buttons do.
       canPop: phase == CallPhase.ended || phase == CallPhase.idle,
       child: Scaffold(
-        backgroundColor: const Color(0xFF0B0F14),
+        backgroundColor: const Color(0xFF0B1426),
         body: Stack(fit: StackFit.expand, children: [
           if (showVideo) Positioned.fill(child: KeyedSubtree(key: const Key('remote-video'), child: engine.remoteView())),
           if (showVideo && !calls.cameraOff)

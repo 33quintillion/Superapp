@@ -22,7 +22,7 @@ function QrSvg({ text }: { text: string }) {
   return (
     <svg viewBox={`0 0 ${n} ${n}`} className={styles.qr} role="img" aria-label="QR code to link this browser" shapeRendering="crispEdges">
       <rect width={n} height={n} fill="#fff" />
-      <path d={d} fill="#14181f" />
+      <path d={d} fill="#14213d" />
     </svg>
   );
 }

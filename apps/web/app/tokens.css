@@ -1,20 +1,21 @@
 /* Generated from packages/design-tokens/tokens.json. Do not edit by hand. */
 :root {
-  --color-bg: #F7F8FA;
-  --color-surface: #FFFFFF;
-  --color-surface-muted: #EEF1F5;
-  --color-text: #14181F;
-  --color-text-muted: #5A6372;
-  --color-border: #DDE2EA;
-  --color-primary: #3B5BDB;
-  --color-on-primary: #FFFFFF;
-  --color-accent: #0CA678;
-  --color-danger: #C2255C;
-  --color-warning: #E8590C;
-  --color-bubble-own: #3B5BDB;
-  --color-on-bubble-own: #FFFFFF;
-  --color-bubble-other: #EEF1F5;
-  --color-on-bubble-other: #14181F;
+  --color-bg: #FAF6EC;
+  --color-surface: #FFFDF7;
+  --color-surface-muted: #F2EBDB;
+  --color-text: #14213D;
+  --color-text-muted: #5B6478;
+  --color-border: #E4D9C3;
+  --color-primary: #14213D;
+  --color-on-primary: #FAF6EC;
+  --color-link: #8E1F43;
+  --color-accent: #E3B448;
+  --color-danger: #C1121F;
+  --color-warning: #A85F00;
+  --color-bubble-own: #7B1E3A;
+  --color-on-bubble-own: #FDF8EE;
+  --color-bubble-other: #F2EBDB;
+  --color-on-bubble-other: #14213D;
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 12px;
@@ -35,39 +36,41 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --color-bg: #0E1116;
-    --color-surface: #161A21;
-    --color-surface-muted: #1F242D;
-    --color-text: #E8ECF2;
-    --color-text-muted: #9AA4B2;
-    --color-border: #2A303B;
-    --color-primary: #748FFC;
-    --color-on-primary: #0E1116;
-    --color-accent: #38D9A9;
-    --color-danger: #F06595;
-    --color-warning: #FF922B;
-    --color-bubble-own: #3B5BDB;
-    --color-on-bubble-own: #FFFFFF;
-    --color-bubble-other: #1F242D;
-    --color-on-bubble-other: #E8ECF2;
+    --color-bg: #0B1426;
+    --color-surface: #111D35;
+    --color-surface-muted: #1A2846;
+    --color-text: #F6F0E1;
+    --color-text-muted: #AEB6C8;
+    --color-border: #263555;
+    --color-primary: #E3B448;
+    --color-on-primary: #0B1426;
+    --color-link: #EBC567;
+    --color-accent: #E3B448;
+    --color-danger: #FF5A68;
+    --color-warning: #F0A23B;
+    --color-bubble-own: #7B1E3A;
+    --color-on-bubble-own: #FDF8EE;
+    --color-bubble-other: #1A2846;
+    --color-on-bubble-other: #F6F0E1;
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --color-bg: #0E1116;
-  --color-surface: #161A21;
-  --color-surface-muted: #1F242D;
-  --color-text: #E8ECF2;
-  --color-text-muted: #9AA4B2;
-  --color-border: #2A303B;
-  --color-primary: #748FFC;
-  --color-on-primary: #0E1116;
-  --color-accent: #38D9A9;
-  --color-danger: #F06595;
-  --color-warning: #FF922B;
-  --color-bubble-own: #3B5BDB;
-  --color-on-bubble-own: #FFFFFF;
-  --color-bubble-other: #1F242D;
-  --color-on-bubble-other: #E8ECF2;
+  --color-bg: #0B1426;
+  --color-surface: #111D35;
+  --color-surface-muted: #1A2846;
+  --color-text: #F6F0E1;
+  --color-text-muted: #AEB6C8;
+  --color-border: #263555;
+  --color-primary: #E3B448;
+  --color-on-primary: #0B1426;
+  --color-link: #EBC567;
+  --color-accent: #E3B448;
+  --color-danger: #FF5A68;
+  --color-warning: #F0A23B;
+  --color-bubble-own: #7B1E3A;
+  --color-on-bubble-own: #FDF8EE;
+  --color-bubble-other: #1A2846;
+  --color-on-bubble-other: #F6F0E1;
   color-scheme: dark;
 }

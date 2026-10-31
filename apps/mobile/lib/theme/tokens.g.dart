@@ -12,6 +12,7 @@ class NexaPalette {
     required this.border,
     required this.primary,
     required this.onPrimary,
+    required this.link,
     required this.accent,
     required this.danger,
     required this.warning,
@@ -28,6 +29,7 @@ class NexaPalette {
   final Color border;
   final Color primary;
   final Color onPrimary;
+  final Color link;
   final Color accent;
   final Color danger;
   final Color warning;
@@ -39,38 +41,40 @@ class NexaPalette {
 
 class NexaColors {
   static const light = NexaPalette(
-    bg: Color(0xFFF7F8FA),
-    surface: Color(0xFFFFFFFF),
-    surfaceMuted: Color(0xFFEEF1F5),
-    text: Color(0xFF14181F),
-    textMuted: Color(0xFF5A6372),
-    border: Color(0xFFDDE2EA),
-    primary: Color(0xFF3B5BDB),
-    onPrimary: Color(0xFFFFFFFF),
-    accent: Color(0xFF0CA678),
-    danger: Color(0xFFC2255C),
-    warning: Color(0xFFE8590C),
-    bubbleOwn: Color(0xFF3B5BDB),
-    onBubbleOwn: Color(0xFFFFFFFF),
-    bubbleOther: Color(0xFFEEF1F5),
-    onBubbleOther: Color(0xFF14181F),
+    bg: Color(0xFFFAF6EC),
+    surface: Color(0xFFFFFDF7),
+    surfaceMuted: Color(0xFFF2EBDB),
+    text: Color(0xFF14213D),
+    textMuted: Color(0xFF5B6478),
+    border: Color(0xFFE4D9C3),
+    primary: Color(0xFF14213D),
+    onPrimary: Color(0xFFFAF6EC),
+    link: Color(0xFF8E1F43),
+    accent: Color(0xFFE3B448),
+    danger: Color(0xFFC1121F),
+    warning: Color(0xFFA85F00),
+    bubbleOwn: Color(0xFF7B1E3A),
+    onBubbleOwn: Color(0xFFFDF8EE),
+    bubbleOther: Color(0xFFF2EBDB),
+    onBubbleOther: Color(0xFF14213D),
   );
   static const dark = NexaPalette(
-    bg: Color(0xFF0E1116),
-    surface: Color(0xFF161A21),
-    surfaceMuted: Color(0xFF1F242D),
-    text: Color(0xFFE8ECF2),
-    textMuted: Color(0xFF9AA4B2),
-    border: Color(0xFF2A303B),
-    primary: Color(0xFF748FFC),
-    onPrimary: Color(0xFF0E1116),
-    accent: Color(0xFF38D9A9),
-    danger: Color(0xFFF06595),
-    warning: Color(0xFFFF922B),
-    bubbleOwn: Color(0xFF3B5BDB),
-    onBubbleOwn: Color(0xFFFFFFFF),
-    bubbleOther: Color(0xFF1F242D),
-    onBubbleOther: Color(0xFFE8ECF2),
+    bg: Color(0xFF0B1426),
+    surface: Color(0xFF111D35),
+    surfaceMuted: Color(0xFF1A2846),
+    text: Color(0xFFF6F0E1),
+    textMuted: Color(0xFFAEB6C8),
+    border: Color(0xFF263555),
+    primary: Color(0xFFE3B448),
+    onPrimary: Color(0xFF0B1426),
+    link: Color(0xFFEBC567),
+    accent: Color(0xFFE3B448),
+    danger: Color(0xFFFF5A68),
+    warning: Color(0xFFF0A23B),
+    bubbleOwn: Color(0xFF7B1E3A),
+    onBubbleOwn: Color(0xFFFDF8EE),
+    bubbleOther: Color(0xFF1A2846),
+    onBubbleOther: Color(0xFFF6F0E1),
   );
 }
 
