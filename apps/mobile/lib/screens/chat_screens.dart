@@ -607,7 +607,13 @@ class _PollView extends StatelessWidget {
           MergeSemantics(child: InkWell(
             key: Key('vote-${m.clientId}-$i'),
             onTap: () async {
-              final next = p.multiple ? (mine.contains(i) ? [...mine]..remove(i) : [...mine, i]) : (mine.contains(i) ? <int>[] : [i]);
+              final picked = mine.contains(i);
+              final List<int> next;
+              if (p.multiple) {
+                next = picked ? mine.where((x) => x != i).toList() : <int>[...mine, i];
+              } else {
+                next = picked ? <int>[] : <int>[i];
+              }
               try {
                 await chat.vote(m, next);
               } on ApiException catch (e) {
