@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { exportJWK, generateKeyPair, SignJWT, type JWK, type KeyLike } from 'jose';
@@ -60,6 +61,8 @@ async function idToken(phone: string, o: { aud?: string; iss?: string; provider?
     .setIssuer(o.iss ?? `https://securetoken.google.com/${PROJECT}`)
     .setAudience(o.aud ?? PROJECT)
     .setSubject(`firebase-uid-${phone.slice(1)}`)
+    // Real tokens differ by issue time; two made here within a second would otherwise be identical.
+    .setJti(randomUUID())
     .setIssuedAt(now - 5)
     .setExpirationTime(now + 3600)
     .sign(o.signer ?? key);
