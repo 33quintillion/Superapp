@@ -323,7 +323,7 @@ describe('SMTP sign-in kept apart from the URL', () => {
 });
 
 describe('email through Brevo\'s HTTPS API', () => {
-  const brevo = { MAIL_TRANSPORT: 'brevo', BREVO_API_KEY: 'xkeysib-test', MAIL_FROM: 'Nexa <hello@example.com>' };
+  const brevo = { MAIL_TRANSPORT: 'brevo', BREVO_API_KEY: 'xkeysib-test', MAIL_FROM: 'SuperApp <hello@example.com>' };
   let server: Server;
   let base: string;
   const seen: { headers: IncomingMessage['headers']; body: any }[] = [];
@@ -353,7 +353,7 @@ describe('email through Brevo\'s HTTPS API', () => {
     expect(last.body.path).toBe('/v3/smtp/email');
     expect(last.headers['api-key']).toBe('xkeysib-test');
     expect(last.body.json).toEqual({
-      sender: { name: 'Nexa', email: 'hello@example.com' },
+      sender: { name: 'SuperApp', email: 'hello@example.com' },
       to: [{ email: 'someone@example.org' }],
       subject: 'Confirm',
       textContent: 'Link: https://x/y',
@@ -369,7 +369,7 @@ describe('email through Brevo\'s HTTPS API', () => {
 
   it('needs a key and a usable sender, and keeps the test-only base URL out of deployments', () => {
     expect(() => loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', BREVO_API_KEY: undefined } as unknown as NodeJS.ProcessEnv)).toThrow(/BREVO_API_KEY/);
-    expect(() => loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', MAIL_FROM: 'Nexa' } as NodeJS.ProcessEnv)).toThrow(/MAIL_FROM/);
+    expect(() => loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', MAIL_FROM: 'SuperApp' } as NodeJS.ProcessEnv)).toThrow(/MAIL_FROM/);
     const deployed = { NODE_ENV: 'staging', STUN_URLS: 'stun:stun.example.test:3478', S3_AUTO_CREATE_BUCKET: 'false' };
     expect(loadConfig({ ...TEST_ENV, ...brevo, ...deployed } as NodeJS.ProcessEnv).MAIL_TRANSPORT).toBe('brevo');
     expect(() => loadConfig({ ...TEST_ENV, ...brevo, ...deployed, BREVO_API_BASE: base } as NodeJS.ProcessEnv)).toThrow(/BREVO_API_BASE is for tests only/);

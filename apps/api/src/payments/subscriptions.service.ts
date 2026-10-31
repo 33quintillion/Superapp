@@ -51,7 +51,7 @@ interface SubscriptionRow {
 const SUBSCRIPTION_EVENTS = ['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'invoice.paid'];
 
 /**
- * Plans that businesses pay Nexa for, billed by the provider. Plans are sold to
+ * Plans that businesses pay SuperApp for, billed by the provider. Plans are sold to
  * businesses on the web, where store billing rules don't apply (ADR 0005); plans for
  * individuals would have to go through the App Store and Google Play and aren't built.
  *
@@ -201,7 +201,7 @@ export class SubscriptionsService implements OnModuleInit, BillingHooks {
     return { url: session.url as string };
   }
 
-  /** The business as a customer of Nexa at the provider, created once. */
+  /** The business as a customer of SuperApp at the provider, created once. */
   private async customer(businessId: string, name: string) {
     const stripe = this.payments.provider();
     const have = await this.db.one<{ provider_customer_id: string; livemode: boolean }>('SELECT provider_customer_id, livemode FROM business_billing WHERE business_id = $1', [businessId]);

@@ -17,7 +17,7 @@ class MediaAccessError implements Exception {
   String describe({required bool video}) {
     final what = video ? 'camera and microphone' : 'microphone';
     return switch (problem) {
-      MediaProblem.denied => 'Allow Nexa to use your $what in Settings to make calls.',
+      MediaProblem.denied => 'Allow SuperApp to use your $what in Settings to make calls.',
       MediaProblem.notFound => 'No $what found on this device.',
       MediaProblem.inUse => 'Your $what is being used by another app.',
       MediaProblem.other => 'Couldn’t start your $what.',

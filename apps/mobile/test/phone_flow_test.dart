@@ -81,7 +81,7 @@ Future<(AuthController, FakeApi, FakePhoneVerifier)> start(WidgetTester tester, 
 void main() {
   testWidgets('a new number gets a code, picks a name, and lands signed in', (tester) async {
     final (auth, api, phone) = await start(tester);
-    expect(find.text('Welcome to Nexa'), findsOneWidget);
+    expect(find.text('Welcome to SuperApp'), findsOneWidget);
 
     await tester.enterText(find.byKey(const Key('phone')), '12');
     await tester.tap(find.byKey(const Key('send-code')));

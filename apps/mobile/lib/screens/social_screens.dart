@@ -767,7 +767,7 @@ class _FindPeopleScreenState extends State<FindPeopleScreen> {
     try {
       final book = await ContactsBook.instance.read();
       if (book == null) {
-        setState(() => _note = 'Nexa can’t see your contacts. You can allow it in your phone’s settings.');
+        setState(() => _note = 'SuperApp can’t see your contacts. You can allow it in your phone’s settings.');
         return;
       }
       final emails = <String>{for (final c in book) ...c.emails.map((e) => e.trim().toLowerCase())}.where((e) => e.contains('@')).toList();
@@ -811,7 +811,7 @@ class _FindPeopleScreenState extends State<FindPeopleScreen> {
             ),
           const Padding(
             padding: EdgeInsets.symmetric(vertical: NexaSpace.md),
-            child: Text('Nexa can check the email addresses and phone numbers in your contacts against people who chose to be found. Your contacts aren’t saved.'),
+            child: Text('SuperApp can check the email addresses and phone numbers in your contacts against people who chose to be found. Your contacts aren’t saved.'),
           ),
           FilledButton(key: const Key('check-contacts'), onPressed: _busy ? null : _check, child: Text(_busy ? 'Checking…' : 'Check my contacts')),
           if (_note != null) Padding(padding: const EdgeInsets.only(top: NexaSpace.md), child: Text(_note!, key: const Key('contacts-note'))),

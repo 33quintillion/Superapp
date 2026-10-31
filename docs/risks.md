@@ -14,7 +14,7 @@ Ranked roughly by how much harm each could do and how hard it would be to undo.
 | 8 | **Calls infrastructure** | TURN and SFU bandwidth costs, NAT traversal, and quality. | Use a managed TURN service or coturn, and a proven SFU (LiveKit or mediasoup) for groups. Cost model before Stage 6. |
 | 9 | **App store rules** (IAP for digital goods, rules on mini-app code, review of UGC apps) | Rejection blocks the launch. | Built into the payments and mini-app ADRs. Moderation and blocking are present from day one. |
 | 10 | **Mini-app sandbox escape or data overreach** | Third-party code would sit beside private data. | Curated catalogue first, and a runtime only after a security review (ADR 0006). |
-| 11 | **Brand and trademark** | "Nexa" is a placeholder and may clash with existing marks. | Trademark search before launch. Tokens make a rebrand cheap. |
+| 11 | **Brand and trademark** | "SuperApp" is a placeholder and may clash with existing marks. | Trademark search before launch. Tokens make a rebrand cheap. |
 | 12 | **Trusted proxy configuration** | If `TRUST_PROXY` is set wrong, clients can forge `X-Forwarded-For` and dodge per-IP limits. | Done in Stage 9: `TRUST_PROXY` is an allow-list of proxy addresses and `true` is refused in staging and production; the web server takes the address its own proxy added (`WEB_PROXY_HOPS`). Per-account limits apply as well. Set both for each deployment (`hardening.md`). |
 
 ## Known gaps in what is built today

@@ -28,7 +28,7 @@ Each person chooses in `PATCH /v1/me/notifications`:
 
 - `preview: "full"` (default): sender name and message text. Attachments show as "Photo", "Voice message" and so on, never file names.
 - `preview: "sender"`: sender name and "New message".
-- `preview: "none"`: "Nexa" and "New message".
+- `preview: "none"`: "SuperApp" and "New message".
 - `quietHours`: a daily window in the person's time zone. Notifications still arrive, without sound (APNs `interruption-level: passive`, Android channel `messages_quiet`, Web Push `silent`).
 
 Every payload also carries `{ type: "message", conversationId, messageId, seq }` so the app can open the chat and fetch the message. The badge is the unread count across unmuted chats.

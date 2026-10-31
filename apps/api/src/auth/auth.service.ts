@@ -435,7 +435,7 @@ export class AuthService {
     if (u!.mfa_enabled_at) throw Errors.conflict('mfa_already_enabled', 'Two-step verification is already on');
     const secret = generateTotpSecret();
     await this.db.query('UPDATE users SET mfa_pending_secret_enc = $2 WHERE id = $1', [userId, this.box.seal(secret, userId)]);
-    return { secret, otpauthUri: otpauthUri(secret, u!.email ?? u!.phone_e164 ?? u!.username ?? 'account', 'Nexa') };
+    return { secret, otpauthUri: otpauthUri(secret, u!.email ?? u!.phone_e164 ?? u!.username ?? 'account', 'SuperApp') };
   }
 
   async confirmMfaSetup(userId: string, code: string) {

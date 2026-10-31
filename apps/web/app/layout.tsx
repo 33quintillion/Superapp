@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { ACCESS_COOKIE, REFRESH_COOKIE } from '@/lib/cookies';
 import './globals.css';
 
-export const metadata: Metadata = { title: 'Nexa', description: 'Messaging, social and services in one place.' };
+export const metadata: Metadata = { title: 'SuperApp', description: 'Messaging, social and services in one place.' };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const jar = await cookies();
@@ -17,7 +17,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </a>
         <header className="top">
           <Link href="/" className="brand">
-            Nexa
+            SuperApp
           </Link>
           {signedIn && (
             <nav className="top-nav">

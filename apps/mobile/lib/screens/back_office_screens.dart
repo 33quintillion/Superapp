@@ -610,7 +610,7 @@ class _MoneyTabState extends State<MoneyTab> {
       child: ListView(padding: const EdgeInsets.all(NexaSpace.md), children: [
         Text('Online payments', style: text.titleMedium),
         if (!a.enabled)
-          const Text('Online payments aren’t switched on for Nexa yet. Customers pay when they collect.')
+          const Text('Online payments aren’t switched on for SuperApp yet. Customers pay when they collect.')
         else if (a.onlinePayments)
           Text(
             'Customers can pay by card. Money goes to your own account at our payment provider${a.payoutsEnabled ? ', which pays it out to your bank.' : '; finish your bank details there to get paid out.'}',
@@ -620,7 +620,7 @@ class _MoneyTabState extends State<MoneyTab> {
           Text(
             a.connected
                 ? 'Your payout account isn’t finished yet. The payment provider needs a few more details before you can take card payments.'
-                : 'Take card payments. Our payment provider checks who you are and pays out to your bank; Nexa never holds your money.',
+                : 'Take card payments. Our payment provider checks who you are and pays out to your bank; SuperApp never holds your money.',
             key: const Key('payouts-not-ready'),
           ),
           if (owner)

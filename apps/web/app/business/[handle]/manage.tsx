@@ -57,7 +57,7 @@ export function ManageBusiness({ initial, me, initialTab }: { initial: Business;
         </p>
         {b.state === 'suspended' && (
           <p className="error" data-testid="suspended">
-            Suspended by Nexa: {b.suspensionReason || 'no reason given'}. Customers can’t see this business.
+            Suspended by SuperApp: {b.suspensionReason || 'no reason given'}. Customers can’t see this business.
           </p>
         )}
       </div>
@@ -612,7 +612,7 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
       <section className="card stack" data-testid="payouts">
         <h2>Online payments</h2>
         {!account.enabled ? (
-          <p className="muted">Online payments aren’t switched on for Nexa yet. Customers pay when they collect.</p>
+          <p className="muted">Online payments aren’t switched on for SuperApp yet. Customers pay when they collect.</p>
         ) : account.onlinePayments ? (
           <p data-testid="payouts-ready">
             Customers can pay by card when they order. Money goes to your own account at our payment provider{account.payoutsEnabled ? ', which pays it out to your bank.' : '; finish your bank details there to get paid out.'}
@@ -622,7 +622,7 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
             <p data-testid="payouts-not-ready">
               {account.connected
                 ? 'Your payout account isn’t finished yet. The payment provider needs a few more details before you can take card payments.'
-                : 'Take card payments online. Our payment provider checks who you are and pays out to your bank; Nexa never holds your money.'}
+                : 'Take card payments online. Our payment provider checks who you are and pays out to your bank; SuperApp never holds your money.'}
             </p>
             {owner ? (
               <form
@@ -793,7 +793,7 @@ function PaymentsTab({ b, onChange }: { b: Business; onChange: (b: Business) => 
           {payments.totals.map((t) => (
             <p key={t.currency} className="small">
               Paid {money(t.paidMinor, t.currency)} · refunded {money(t.refundedMinor, t.currency)}
-              {t.disputedMinor > 0 && ` · held in disputes ${money(t.disputedMinor, t.currency)}`} · Nexa fee {money(t.feesMinor, t.currency)}
+              {t.disputedMinor > 0 && ` · held in disputes ${money(t.disputedMinor, t.currency)}`} · SuperApp fee {money(t.feesMinor, t.currency)}
             </p>
           ))}
           {payments.payments.map((p) => (

@@ -208,7 +208,7 @@ describe('delivery', () => {
     await worker.runOnce();
     const [first, second] = inbox(ben.endpoint, ben.sub);
     expect(first).toMatchObject({ title: expect.stringContaining(a.username), body: 'New message' });
-    expect(second).toMatchObject({ title: 'Nexa', body: 'New message' });
+    expect(second).toMatchObject({ title: 'SuperApp', body: 'New message' });
     expect(JSON.stringify([first, second])).not.toMatch(/PIN|secret/);
   });
 

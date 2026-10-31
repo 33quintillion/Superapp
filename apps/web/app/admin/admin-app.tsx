@@ -483,8 +483,8 @@ interface Reconciliation {
 
 const ACCOUNT_LABEL: Record<string, string> = {
   'external:customers': 'Customers (paid in, net of refunds)',
-  'platform:fees': 'Nexa fees on orders',
-  'platform:subscriptions': 'Nexa plan income',
+  'platform:fees': 'SuperApp fees on orders',
+  'platform:subscriptions': 'SuperApp plan income',
 };
 
 /** The ledger's reconciliation, recent card payments, and the plans businesses can buy. */

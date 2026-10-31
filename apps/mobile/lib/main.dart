@@ -28,7 +28,7 @@ class NexaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Nexa',
+        title: 'SuperApp',
         theme: nexaTheme(Brightness.light),
         darkTheme: nexaTheme(Brightness.dark),
         themeMode: themeMode,

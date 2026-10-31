@@ -335,7 +335,7 @@ void main() {
     await openChat(tester);
     await tester.tap(find.byKey(const Key('voice-call')));
     await tester.pumpAndSettle();
-    expect(find.text('Allow Nexa to use your microphone in Settings to make calls.'), findsOneWidget);
+    expect(find.text('Allow SuperApp to use your microphone in Settings to make calls.'), findsOneWidget);
     expect(server.socket.framesOf('call.start'), isEmpty);
     await tester.pump(const Duration(seconds: 6));
     await tester.pumpAndSettle();
@@ -345,7 +345,7 @@ void main() {
     await tester.tap(find.byKey(const Key('accept-call')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('call-notice')), findsOneWidget);
-    expect(find.text('Allow Nexa to use your camera and microphone in Settings to make calls.'), findsOneWidget);
+    expect(find.text('Allow SuperApp to use your camera and microphone in Settings to make calls.'), findsOneWidget);
     expect(find.text('Incoming video call…'), findsOneWidget);
     expect(server.socket.framesOf('call.accept'), isEmpty);
     await tester.tap(find.byKey(const Key('decline-call')));

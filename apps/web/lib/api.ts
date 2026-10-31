@@ -3,7 +3,7 @@ import { headers } from 'next/headers';
 import { clientAddress } from './client-address';
 
 /**
- * Server-side calls to the Nexa API. The browser never talks to the API directly and
+ * Server-side calls to the SuperApp API. The browser never talks to the API directly and
  * never sees access or refresh tokens: they live in httpOnly cookies set by this app.
  */
 const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';

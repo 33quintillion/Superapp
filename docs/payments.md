@@ -1,12 +1,12 @@
 # Payments, refunds and business plans
 
-Stage 8. Customers can pay for pickup orders and booking deposits by card, businesses get paid out by the payment provider, staff can refund and answer disputes, and businesses can buy a plan that raises their limits and change it later. The boundary is ADR 0005: card details only ever go to the provider's hosted pages, and Nexa never holds anyone's money.
+Stage 8. Customers can pay for pickup orders and booking deposits by card, businesses get paid out by the payment provider, staff can refund and answer disputes, and businesses can buy a plan that raises their limits and change it later. The boundary is ADR 0005: card details only ever go to the provider's hosted pages, and SuperApp never holds anyone's money.
 
 Everything here runs and is tested against a **local stand-in for Stripe** (`apps/api/src/dev/stripe-sandbox.ts`). Nothing has been run against a real Stripe account yet; see [What needs real accounts](#what-needs-real-accounts).
 
 ## How money moves
 - **Provider:** Stripe, with Connect Express accounts for businesses. Razorpay or another regional provider would be a second `PaymentsProvider`; it isn't built.
-- **Orders and deposits:** a destination charge. The customer pays on Stripe Checkout; Stripe sends the money to the business's own Stripe account (`transfer_data.destination`) and keeps Nexa's fee (`application_fee_amount`, `PAYMENTS_PLATFORM_FEE_BPS`, default 0). The business is the seller.
+- **Orders and deposits:** a destination charge. The customer pays on Stripe Checkout; Stripe sends the money to the business's own Stripe account (`transfer_data.destination`) and keeps SuperApp's fee (`application_fee_amount`, `PAYMENTS_PLATFORM_FEE_BPS`, default 0). The business is the seller.
 - **Plans:** Stripe Billing subscriptions on the platform account, bought through Checkout in subscription mode. Card changes and invoices are on Stripe's billing portal.
 - Plans are sold to **businesses only**. Selling to individuals inside the iPhone or Android apps would have to go through store billing, which isn't built.
 
@@ -39,7 +39,7 @@ Charging a no-show fee *after* the appointment, from a saved card, isn't built: 
 
 ## Refunds
 - Staff with `orders.refund` (owners and managers) refund all or part of a paid order: `POST /v1/orders/:id/refunds { clientId, amountMinor?, reason }`. The `clientId` makes a retry safe.
-- Refunds reverse the transfer from the business and give back the matching share of Nexa's fee. The last refund takes whatever fee is left, so the amounts always add up.
+- Refunds reverse the transfer from the business and give back the matching share of SuperApp's fee. The last refund takes whatever fee is left, so the amounts always add up.
 - A paid order that is cancelled or declined, by staff, the customer, closing the business or deleting an account, is refunded in full automatically.
 - Refunds made in the Stripe dashboard arrive by webhook and are recorded the same way.
 - While a dispute is open the money is with the bank, so refunds are refused with 409 `payment_disputed`, and automatic ones wait until the bank has decided.
@@ -55,7 +55,7 @@ A dispute (chargeback) is when the customer asks their bank to take a card payme
 - Disputes on plan invoices aren't tracked here; they show in Stripe's dashboard.
 
 ## Payouts
-Stripe pays each business's balance to its bank on Stripe's schedule. `GET /v1/businesses/:id/payouts` reads the latest payouts from the business's own Stripe account (with the `Stripe-Account` header), for owners and managers. Nexa never holds the money.
+Stripe pays each business's balance to its bank on Stripe's schedule. `GET /v1/businesses/:id/payouts` reads the latest payouts from the business's own Stripe account (with the `Stripe-Account` header), for owners and managers. SuperApp never holds the money.
 
 ## Reconciliation
 `GET /v1/admin/ledger` checks our own records: every transaction balances, and every payment, refund and dispute movement is recorded once with the right amount.
@@ -88,7 +88,7 @@ Double-entry, in `ledger_transactions` and `ledger_entries`. Positive amounts ar
 | --- | --- |
 | `external:customers` | Money from or back to customers |
 | `business:<id>:sales` | What the business has been paid, net of fees and refunds |
-| `platform:fees` | Nexa's fees (less its share of refunds and lost disputes) |
+| `platform:fees` | SuperApp's fees (less its share of refunds and lost disputes) |
 | `platform:subscriptions` | Plan revenue |
 
 The database enforces it. A deferred trigger refuses any transaction whose entries don't sum to zero per currency, and the tables are append-only. Each provider object is recorded once (`UNIQUE (kind, provider_ref)`). `GET /v1/admin/ledger` returns balances and a check that every succeeded payment and refund has matching entries.
@@ -117,7 +117,7 @@ The database enforces it. A deferred trigger refuses any transaction whose entri
 | `STRIPE_WEBHOOK_SECRET` | | `whsec_…`, comma-separated while rotating |
 | `STRIPE_API_BASE` | Stripe | Only for the local stand-in; refused in staging and production |
 | `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | 300 | |
-| `PAYMENTS_PLATFORM_FEE_BPS` | 0 | Nexa's fee on orders, in basis points |
+| `PAYMENTS_PLATFORM_FEE_BPS` | 0 | SuperApp's fee on orders, in basis points |
 | `PAYMENTS_CHECKOUT_MINUTES` | 30 | |
 | `PAYMENTS_SWEEP_INTERVAL_SECONDS` | 60 | 0 turns the sweep off |
 

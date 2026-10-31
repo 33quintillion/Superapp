@@ -198,7 +198,7 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
     const silent = inQuietHours(job.quiet_start, job.quiet_end, job.time_zone ?? 'UTC');
     const ttlSeconds = Math.max(60, this.config.PUSH_TTL_SECONDS - job.age_seconds);
     if (job.kind === 'test') {
-      return { title: 'Nexa', body: 'Notifications are working on this device.', threadId: 'test', silent, badge, data: { type: 'test' }, ttlSeconds };
+      return { title: 'SuperApp', body: 'Notifications are working on this device.', threadId: 'test', silent, badge, data: { type: 'test' }, ttlSeconds };
     }
     if (job.kind === 'clear') {
       const data = { type: 'clear', conversationId: job.conversation_id!, seq: String(job.clear_seq) };
@@ -209,11 +209,11 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
       // Missed calls: always say what it was, so the person knows to call back.
       const data = { type: 'missed_call', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
       const what = job.system_event.media === 'video' ? 'Missed video call' : 'Missed voice call';
-      return { title: job.preview === 'none' ? 'Nexa' : sender, body: job.preview === 'none' ? 'Missed call' : what, threadId: job.conversation_id!, silent, badge, data, ttlSeconds };
+      return { title: job.preview === 'none' ? 'SuperApp' : sender, body: job.preview === 'none' ? 'Missed call' : what, threadId: job.conversation_id!, silent, badge, data, ttlSeconds };
     }
     const data = { type: 'message', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
     const group = job.conversation_kind === 'group';
-    let title = 'Nexa';
+    let title = 'SuperApp';
     let body = 'New message';
     if (job.preview === 'full' || job.preview === null) {
       const label = KIND_LABEL[job.message_kind ?? ''];

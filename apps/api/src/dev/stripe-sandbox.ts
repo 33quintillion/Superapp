@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { signStripePayload } from '../payments/stripe';
 
 /**
- * A local stand-in for the parts of Stripe that Nexa uses: Connect accounts, hosted
+ * A local stand-in for the parts of Stripe that SuperApp uses: Connect accounts, hosted
  * Checkout (payments and subscriptions), refunds, products and prices, subscriptions and
  * plan changes with proration, disputes, transfers and their reversals, connected-account
  * payouts, the platform's balance transactions, the billing portal, and signed webhooks.

@@ -167,7 +167,7 @@ export function PhoneSignIn({ config }: { config: Config }) {
       {step === 'number' ? (
         <>
           <h1 className={styles.title}>Your phone number</h1>
-          <p className={styles.lede}>We’ll text you a code. New to Nexa? Your account is set up when you confirm it.</p>
+          <p className={styles.lede}>We’ll text you a code. New to SuperApp? Your account is set up when you confirm it.</p>
           <label htmlFor="phone" className="sr-only">
             Phone number
           </label>

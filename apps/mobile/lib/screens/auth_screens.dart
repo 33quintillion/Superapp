@@ -194,7 +194,7 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> with _Submitting 
 
   @override
   Widget build(BuildContext context) => _FormPage(
-        title: 'Welcome to Nexa',
+        title: 'Welcome to SuperApp',
         children: _handle == null
             ? [
                 const Text('Enter your phone number. We’ll text you a code to sign in, or to set up your account if you’re new.'),
@@ -391,7 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return CallOverlayHost(
       calls: calls,
       child: Scaffold(
-        appBar: AppBar(title: const Text('Nexa'), actions: [
+        appBar: AppBar(title: const Text('SuperApp'), actions: [
           IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut),
         ]),
         body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [

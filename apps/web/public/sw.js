@@ -1,5 +1,5 @@
 // Service worker for browser notifications. The payload arrives encrypted end to end
-// from the Nexa API (Web Push, RFC 8291); the browser decrypts it before this runs.
+// from the SuperApp API (Web Push, RFC 8291); the browser decrypts it before this runs.
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
@@ -30,7 +30,7 @@ async function handlePush(n) {
   // The chat screen already shows new messages live; don't pop a notification over it.
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   if (data.type === 'message' && windows.some((w) => w.focused && new URL(w.url).pathname.startsWith('/chats'))) return;
-  await self.registration.showNotification(n.title || 'Nexa', {
+  await self.registration.showNotification(n.title || 'SuperApp', {
     body: n.body || '',
     tag: n.tag,
     renotify: !!n.tag,

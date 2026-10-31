@@ -817,7 +817,7 @@ async function businessFlow(browser, API, tag, step) {
   await jo.page.click(`[data-testid=admin-integration][data-slug="${slug}"] [data-testid=kill-switch]`);
   await jo.page.waitForSelector(`[data-testid=admin-integration][data-slug="${slug}"][data-state=disabled]`);
   await ivy.page.reload();
-  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("Paused by Nexa")');
+  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("Paused by SuperApp")');
   assert((await ivy.page.locator('[data-testid=catalogue-app]:has-text("City Tickets")').count()) === 0, 'switched-off integration leaves the catalogue');
   step('an admin publishes an integration, a person connects it with only the scopes they tick, and the kill switch pauses it');
 

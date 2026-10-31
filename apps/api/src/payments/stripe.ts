@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
- * A small client for the parts of the Stripe API that Nexa uses, over plain HTTPS: form-
+ * A small client for the parts of the Stripe API that SuperApp uses, over plain HTTPS: form-
  * encoded requests, an Idempotency-Key on every POST, and a pinned API version so a
  * dashboard upgrade can't change response shapes under us. Hosted Checkout keeps card
  * details off our servers (PCI DSS SAQ A).

@@ -68,7 +68,7 @@ const schema = z.object({
   /** Sign-in for the SMTP server, kept apart from SMTP_URL so each can be pasted as is (no URL encoding). */
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  MAIL_FROM: z.string().default('Nexa <no-reply@localhost>'),
+  MAIL_FROM: z.string().default('SuperApp <no-reply@localhost>'),
   PUBLIC_WEB_URL: z.url().default('http://localhost:3001'),
 
   RATE_LIMIT_DISABLED: z.stringbool().default(false),
@@ -234,7 +234,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('MAIL_TRANSPORT=brevo needs BREVO_API_KEY (Brevo → SMTP & API → API keys)');
   }
   if (cfg.MAIL_TRANSPORT === 'brevo' && !parseMailbox(cfg.MAIL_FROM)) {
-    throw new Error('MAIL_FROM must be an address such as "Nexa <no-reply@example.com>"');
+    throw new Error('MAIL_FROM must be an address such as "SuperApp <no-reply@example.com>"');
   }
   if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
     throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');

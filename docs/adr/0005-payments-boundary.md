@@ -10,7 +10,7 @@
 - In-app purchases of digital goods on iOS and Android must follow store billing rules. This affects how premium subscriptions are sold.
 
 ## How Stage 8 applies it
-- **Stripe Connect Express with destination charges.** The business is the seller and is paid out by Stripe; Nexa takes an application fee and never holds the money. Card details go only to Stripe Checkout.
+- **Stripe Connect Express with destination charges.** The business is the seller and is paid out by Stripe; SuperApp takes an application fee and never holds the money. Card details go only to Stripe Checkout.
 - **Idempotency keys** come from our own row ids. Provider calls never happen inside a database transaction.
 - **Webhooks** are checked with `Stripe-Signature` (with a tolerance window and secret rotation), checked for live or test mode, deduplicated in `payment_events`, and applied in the same transaction as that record.
 - **The ledger** is double-entry. The database refuses unbalanced transactions and any change to past entries.
