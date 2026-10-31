@@ -10,6 +10,9 @@ import styles from './auth.module.css';
 export const LINK_PREFIX = 'SUPERAPP-LINK:';
 /** After this many codes expire unscanned, wait for a click rather than asking forever. */
 const AUTO_REFRESHES = 4;
+/** Asking again every 4 seconds, 25 times, covers the server waking from sleep. */
+const WAKE_ATTEMPTS = 25;
+const WAKE_DELAY_MS = 4000;
 
 function QrSvg({ text }: { text: string }) {
   const modules = useMemo(() => encodeQr(text), [text]);
@@ -36,17 +39,44 @@ export function LinkQr() {
   const [linked, setLinked] = useState(false);
   const refreshes = useRef(0);
 
+  const [waking, setWaking] = useState(false);
+  const unmounted = useRef(false);
+
+  // Asks for a code. While the server is waking up (up to a minute on the free hosting plan)
+  // it keeps asking quietly, then offers a button rather than spinning forever.
   const fresh = async () => {
     setStale(false);
-    setCode(null);
-    const r = await startLink();
-    if (r.error || !r.code) return setError(r.error ?? 'Couldn’t make a code. Try again.');
     setError(null);
-    setCode(r.code);
+    setCode(null);
+    for (let attempt = 0; ; attempt++) {
+      let r: Awaited<ReturnType<typeof startLink>>;
+      try {
+        r = await startLink();
+      } catch {
+        r = { error: 'Couldn’t make a code.', retry: true };
+      }
+      if (unmounted.current) return;
+      if (r.code) {
+        setWaking(false);
+        setCode(r.code);
+        return;
+      }
+      if (!r.retry || attempt >= WAKE_ATTEMPTS) {
+        setWaking(false);
+        setError(r.error ?? 'Couldn’t make a code.');
+        return;
+      }
+      setWaking(true);
+      await new Promise((done) => setTimeout(done, WAKE_DELAY_MS));
+      if (unmounted.current) return;
+    }
   };
 
   useEffect(() => {
     void fresh();
+    return () => {
+      unmounted.current = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -87,10 +117,14 @@ export function LinkQr() {
               void fresh();
             }}
           >
-            {error ?? 'This code ran out.'} Click to get a new one.
+            {error ?? 'This code ran out.'} Click to try again.
           </button>
         )}
-        {!code && !stale && !error && <span className={styles.qrWait}>Making a code…</span>}
+        {!code && !stale && !error && (
+          <span className={styles.qrWait} role="status">
+            {waking ? 'Waking up SuperApp… this can take up to a minute.' : 'Making a code…'}
+          </span>
+        )}
         {linked && <span className={styles.qrWait}>Linked. Opening SuperApp…</span>}
       </div>
       {code && !stale && !linked && (

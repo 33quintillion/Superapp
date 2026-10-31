@@ -124,14 +124,15 @@ export async function completePhoneSignUp(_: FormState, f: FormData): Promise<Fo
  * Asks for a code to link this browser from the phone app. The code is shown (as a QR code
  * and as text); the secret that collects the session stays in an httpOnly cookie.
  */
-export async function startLink(): Promise<{ code?: string; expiresIn?: number; error?: string }> {
+export async function startLink(): Promise<{ code?: string; expiresIn?: number; error?: string; retry?: boolean }> {
   try {
     const r = await api<{ code: string; secret: string; expiresIn: number }>('POST', '/v1/auth/link', { body: { deviceName: 'Web browser' } });
     (await cookies()).set(LINK_COOKIE, `${r.code}.${r.secret}`, cookieOpts(r.expiresIn + 10));
     return { code: r.code, expiresIn: r.expiresIn };
   } catch (e) {
-    if (e instanceof ApiError) return { error: e.message };
-    throw e;
+    // A server that is waking up or briefly down is worth asking again; anything else isn't.
+    if (e instanceof ApiError) return { error: e.message, retry: e.status >= 500 };
+    return { error: 'Couldn’t make a code.', retry: true };
   }
 }
 

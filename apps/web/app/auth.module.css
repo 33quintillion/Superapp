@@ -287,6 +287,8 @@
   display: block;
 }
 .qrWait {
+  padding: var(--space-lg);
+  text-align: center;
   color: #5a6372;
 }
 .qrReload {

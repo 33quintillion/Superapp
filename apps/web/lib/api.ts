@@ -46,7 +46,14 @@ export async function api<T = unknown>(
     throw new ApiError(503, 'api_unreachable', 'The service is unavailable right now. Please try again shortly.');
   }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : undefined;
+  let data: { error?: { code?: string; message?: string } } | undefined;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    // Not the API answering: on the free hosting plan this is the "starting up" page shown
+    // while the API wakes from sleep, or a proxy error. Either way, worth trying again.
+    throw new ApiError(res.ok ? 502 : Math.max(res.status, 500), 'api_unreachable', 'SuperApp is starting up. Try again in a moment.');
+  }
   if (!res.ok) {
     throw new ApiError(res.status, data?.error?.code ?? 'http_error', data?.error?.message ?? 'Request failed');
   }
