@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api/api_client.dart';
 import 'auth/auth_controller.dart';
+import 'auth/firebase_phone_verifier.dart';
 import 'auth/session_store.dart';
 import 'calls/call_engine.dart';
 import 'chat/outbox_store.dart';
@@ -9,8 +10,10 @@ import 'chat/realtime.dart';
 import 'screens/auth_screens.dart';
 import 'theme/theme.dart';
 
-void main() {
-  final auth = AuthController(ApiClient(), const SecureSessionStore())..restore();
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final phone = await FirebasePhoneVerifier.fromEnvironment();
+  final auth = AuthController(ApiClient(), const SecureSessionStore(), phone: phone)..restore();
   runApp(NexaApp(auth: auth, outbox: const SecureOutboxStore()));
 }
 
