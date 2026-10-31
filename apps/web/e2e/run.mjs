@@ -1227,7 +1227,7 @@ try {
   run('node', ['dist/src/main.js'], { cwd: apiDir, env });
   run('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], {
     cwd: join(here, '..'),
-    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, CSP_MEDIA_ORIGINS: env.S3_ENDPOINT, NODE_ENV: 'production' },
+    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, CSP_MEDIA_ORIGINS: env.S3_ENDPOINT, EMAIL_SIGNUP: env.EMAIL_SIGNUP, NODE_ENV: 'production' },
   });
   await waitFor(`http://127.0.0.1:${API_PORT}/health/ready`);
   await waitFor(`${WEB}/sign-in`);
