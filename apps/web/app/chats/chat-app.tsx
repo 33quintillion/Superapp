@@ -106,6 +106,30 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const [starred, setStarred] = useState<Set<string>>(new Set());
   const [showStarred, setShowStarred] = useState(false);
   const [starVersion, setStarVersion] = useState(0);
+  const [ai, setAi] = useState<{ translate: boolean; transcribe: boolean; languages: Record<string, string> } | null>(null);
+  /** Translations and voice-note text this person asked for, by message id. */
+  const [extraText, setExtraText] = useState<Record<string, { label: string; text: string }>>({});
+  useEffect(() => {
+    chatApi<{ translate: boolean; transcribe: boolean; languages: Record<string, string> }>('GET', 'ai/features')
+      .then(setAi)
+      .catch(() => setAi(null));
+  }, []);
+  const translate = useCallback(async (m: Message, to: string) => {
+    try {
+      const r = await chatApi<{ text: string }>('POST', `messages/${m.id}/translate`, { to });
+      setExtraText((x) => ({ ...x, [m.id]: { label: `Translated to ${ai?.languages[to] ?? to}`, text: r.text } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t translate');
+    }
+  }, [ai]);
+  const transcribe = useCallback(async (m: Message) => {
+    try {
+      const r = await chatApi<{ text: string }>('POST', `messages/${m.id}/transcribe`);
+      setExtraText((x) => ({ ...x, [m.id]: { label: 'Voice note as text', text: r.text } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t turn it into text');
+    }
+  }, []);
   const calls = useRef<CallManager | null>(null);
   const convsRef = useRef(convs);
   convsRef.current = convs;
@@ -587,6 +611,10 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
               now={now}
               starred={starred}
               onMessagePerson={openDirect}
+              ai={ai}
+              extraText={extraText}
+              onTranslate={translate}
+              onTranscribe={transcribe}
             />
             {active.group?.sendPolicy === 'admins' && active.group.myRole === 'member' ? (
               <p className="composer muted small" data-testid="admins-only">
@@ -728,6 +756,10 @@ function Thread({
   now,
   starred,
   onMessagePerson,
+  ai,
+  extraText,
+  onTranslate,
+  onTranscribe,
 }: {
   me: string;
   messages: Message[];
@@ -742,6 +774,10 @@ function Thread({
   now: number;
   starred: Set<string>;
   onMessagePerson: (userId: string) => void;
+  ai: { translate: boolean; transcribe: boolean; languages: Record<string, string> } | null;
+  extraText: Record<string, { label: string; text: string }>;
+  onTranslate: (m: Message, to: string) => void;
+  onTranscribe: (m: Message) => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
@@ -836,6 +872,16 @@ function Thread({
                   </span>
                 )}
               </div>
+              {extraText[m.id] && !m.deletedAt && (
+                <div className="quote small" data-testid="extra-text">
+                  <strong>{extraText[m.id].label}:</strong> {extraText[m.id].text}
+                </div>
+              )}
+              {ai?.transcribe && !m.pending && !m.deletedAt && m.kind === 'voice' && !extraText[m.id] && (
+                <button type="button" className="link-btn small" data-testid="transcribe" onClick={() => onTranscribe(m)}>
+                  Show as text
+                </button>
+              )}
               {m.reactions.length > 0 && (
                 <div className="reactions" data-testid="reactions">
                   {m.reactions.map((r) => (
@@ -852,6 +898,8 @@ function Thread({
                 mine={mine}
                 myReaction={m.reactions.find((r) => r.userId === me)?.emoji}
                 starred={starred.has(m.id)}
+                languages={ai?.translate && m.body && m.kind !== 'contact' && m.kind !== 'location' ? ai.languages : null}
+                onTranslate={(to) => onTranslate(m, to)}
                 others={conversations.filter((c) => c.id !== conversation.id)}
                 me={me}
                 act={act}
@@ -872,6 +920,8 @@ function MessageActions({
   mine,
   myReaction,
   starred,
+  languages,
+  onTranslate,
   others,
   me,
   act,
@@ -882,6 +932,8 @@ function MessageActions({
   mine: boolean;
   myReaction?: string;
   starred: boolean;
+  languages: Record<string, string> | null;
+  onTranslate: (to: string) => void;
   others: Conversation[];
   me: string;
   act: (fn: () => Promise<unknown>) => void;
@@ -911,6 +963,25 @@ function MessageActions({
           </button>
         )}
         <button onClick={() => act(() => chatApi('PUT', `messages/${m.id}/pin`, { pinned: !m.pinnedAt }))}>{m.pinnedAt ? 'Unpin' : 'Pin'}</button>
+        {languages && (
+          <select
+            aria-label="Translate to"
+            data-testid="translate"
+            defaultValue=""
+            onChange={(e) => {
+              const to = e.target.value;
+              e.target.value = '';
+              if (to) onTranslate(to);
+            }}
+          >
+            <option value="">Translate to…</option>
+            {Object.entries(languages).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
         <button data-testid="star" onClick={() => act(() => chatApi('PUT', `messages/${m.id}/star`, { starred: !starred }))}>
           {starred ? 'Unstar' : 'Star'}
         </button>

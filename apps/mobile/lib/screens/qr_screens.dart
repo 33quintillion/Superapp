@@ -138,7 +138,7 @@ class _MyQrScreenState extends State<MyQrScreen> {
               const SizedBox(height: NexaSpace.sm),
               const Text('Let people scan this in SuperApp to start a chat with you. Your phone number stays private.', textAlign: TextAlign.center),
               const SizedBox(height: NexaSpace.sm),
-              SelectableText('${code.substring(0, 5)}-${code.substring(5)}', key: const Key('my-code'), textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(letterSpacing: 2)),
+              Text('${code.substring(0, 5)}-${code.substring(5)}', key: const Key('my-code'), textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(letterSpacing: 2)),
               const SizedBox(height: NexaSpace.xl),
               FilledButton.icon(
                 key: const Key('scan-contact'),

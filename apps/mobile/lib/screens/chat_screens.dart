@@ -522,6 +522,23 @@ class _Bubble extends StatelessWidget {
               Text(TimeOfDay.fromDateTime(m.createdAt.toLocal()).format(context), style: Theme.of(context).textTheme.labelSmall),
               if (ticks != null) Text(' · $ticks', key: Key('ticks-${m.clientId}'), style: Theme.of(context).textTheme.labelSmall),
             ]),
+            if (chat.extraText[m.id] != null && m.deletedAt == null)
+              Padding(
+                padding: const EdgeInsets.only(top: NexaSpace.xs),
+                child: Text('${chat.extraText[m.id]!.label}: ${chat.extraText[m.id]!.text}', key: Key('extra-text-${m.clientId}'), style: Theme.of(context).textTheme.bodySmall),
+              )
+            else if (chat.canTranscribe && m.kind == 'voice' && m.pending == Pending.none && m.deletedAt == null)
+              TextButton(
+                key: Key('transcribe-${m.clientId}'),
+                onPressed: () async {
+                  try {
+                    await chat.transcribe(m);
+                  } on ApiException catch (e) {
+                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+                  }
+                },
+                child: const Text('Show as text'),
+              ),
             if (m.reactions.isNotEmpty) Text(m.reactions.map((r) => r.emoji).join(' '), key: Key('reactions-${m.clientId}')),
           ]),
         ))),
@@ -542,6 +559,8 @@ class _Bubble extends StatelessWidget {
             ]),
           ),
           ListTile(leading: const Icon(Icons.push_pin_outlined), title: Text(m.pinnedAt == null ? 'Pin' : 'Unpin'), onTap: () => Navigator.pop(ctx, 'pin')),
+          if (chat.languages.isNotEmpty && (m.body ?? '').isNotEmpty && m.kind != 'location' && m.kind != 'contact')
+            ListTile(key: const Key('action-translate'), leading: const Icon(Icons.translate), title: const Text('Translate'), onTap: () => Navigator.pop(ctx, 'translate')),
           ListTile(
             key: const Key('action-star'),
             leading: Icon(chat.starred.contains(m.id) ? Icons.star : Icons.star_outline),
@@ -562,6 +581,17 @@ class _Bubble extends StatelessWidget {
         await chat.react(m, mineNow == e ? null : e);
       } else if (action == 'pin') {
         await chat.pin(m, m.pinnedAt == null);
+      } else if (action == 'translate') {
+        final to = await showDialog<String>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('Translate to'),
+            children: [
+              for (final e in chat.languages.entries) SimpleDialogOption(key: Key('lang-${e.key}'), onPressed: () => Navigator.pop(ctx, e.key), child: Text(e.value)),
+            ],
+          ),
+        );
+        if (to != null) await chat.translate(m, to);
       } else if (action == 'star') {
         await chat.star(m, !chat.starred.contains(m.id));
       } else if (action == 'delete') {

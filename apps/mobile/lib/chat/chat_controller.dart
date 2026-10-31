@@ -49,6 +49,11 @@ class ChatController extends ChangeNotifier {
   /// What unsent messages carry besides text and media, so "retry" sends it again.
   final Map<String, Map<String, dynamic>> _extras = {};
   Timer? _liveTimer;
+  /// Languages offered for translation; empty when translation is off.
+  Map<String, String> languages = {};
+  bool canTranscribe = false;
+  /// Translations and voice-note text this person asked for, by message id.
+  final Map<String, ({String label, String text})> extraText = {};
 
   String get me => auth.profile!.id;
   ConnectionStatus get status => rt.status;
@@ -68,6 +73,30 @@ class ChatController extends ChangeNotifier {
     }
     await refreshList();
     rt.start();
+    unawaited(_loadAiFeatures());
+  }
+
+  Future<void> _loadAiFeatures() async {
+    try {
+      final f = await auth.authed('GET', '/v1/ai/features');
+      languages = {for (final e in ((f?['languages'] as Map?) ?? const {}).entries) e.key as String: e.value as String};
+      canTranscribe = f?['transcribe'] == true;
+      notifyListeners();
+    } on Object {
+      // Stays off.
+    }
+  }
+
+  Future<void> translate(ChatMessage m, String to) async {
+    final r = await auth.authed('POST', '/v1/messages/${m.id}/translate', body: {'to': to});
+    extraText[m.id] = (label: 'Translated to ${languages[to] ?? to}', text: r!['text'] as String);
+    notifyListeners();
+  }
+
+  Future<void> transcribe(ChatMessage m) async {
+    final r = await auth.authed('POST', '/v1/messages/${m.id}/transcribe');
+    extraText[m.id] = (label: 'Voice note as text', text: r!['text'] as String);
+    notifyListeners();
   }
 
   /// Unsent messages are private: they don't stay on the phone after signing out.

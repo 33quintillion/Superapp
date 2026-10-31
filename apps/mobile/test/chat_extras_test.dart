@@ -113,6 +113,10 @@ class Server {
         return json(200, {'changes': <Object>[], 'nextSince': seq, 'hasMore': false});
       case ('GET', '/v1/messages/starred'):
         return json(200, {'messages': [for (final m in messages) if (starred.contains(m['id'])) m], 'nextCursor': null});
+      case ('GET', '/v1/ai/features'):
+        return json(200, {'translate': true, 'transcribe': true, 'languages': {'hi': 'Hindi', 'gu': 'Gujarati'}});
+      case ('POST', '/v1/messages/m1/translate'):
+        return json(200, {'messageId': 'm1', 'to': 'gu', 'text': 'ગેટ કોડ 4521 છે'});
       case ('GET', '/v1/me/contact-code'):
         return json(200, {'code': contactCode, 'qr': 'SUPERAPP-ADD:$contactCode'});
       case ('POST', '/v1/me/contact-code/reset'):
@@ -402,7 +406,7 @@ void main() {
     final auth = await signedIn(server);
     await tester.pumpWidget(NexaApp(auth: auth, connectSocket: server.connect));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const Key('open-my-qr')));
+    await tester.scrollUntilVisible(find.byKey(const Key('open-my-qr')), 200, scrollable: find.byType(Scrollable).first);
     await tester.tap(find.byKey(const Key('open-my-qr')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('my-qr')), findsOneWidget);
@@ -428,6 +432,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('NEWPQ-R2345'), findsOneWidget);
 
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('translates a message into a chosen language', (tester) async {
+    final server = Server();
+    server.add('ben', 'text', body: 'the gate code is 4521');
+    await openChat(tester, server);
+    await tester.longPress(find.text('the gate code is 4521'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('action-translate')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('lang-gu')));
+    await tester.pumpAndSettle();
+    expect(server.bodies['POST /v1/messages/m1/translate'], {'to': 'gu'});
+    expect(find.text('Translated to Gujarati: ગેટ કોડ 4521 છે'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
