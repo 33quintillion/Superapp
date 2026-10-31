@@ -1,25 +1,16 @@
 import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
 import { signIn } from '../actions';
+import { AuthShell } from '../auth-shell';
+import styles from '../auth.module.css';
 import { ActionForm } from '../form-ui';
 import { PhoneSignIn } from '../phone-sign-in';
 
 export const dynamic = 'force-dynamic';
 
-export default async function SignInPage({ searchParams }: { searchParams: Promise<{ expired?: string }> }) {
-  const { expired } = await searchParams;
-  const phone = phoneConfig();
+function EmailSignIn() {
   return (
-    <main>
-      <h1>Sign in</h1>
-      {expired && <p className="muted">Your session ended. Please sign in again.</p>}
-      {phone && (
-        <>
-          <p className="muted">New here? Enter your number and we’ll set up your account.</p>
-          <PhoneSignIn config={phone} />
-          <h2>Signed up with email before?</h2>
-        </>
-      )}
+    <>
       <ActionForm
         action={signIn}
         submit="Sign in with email"
@@ -38,6 +29,29 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
           </>
         )}
       </p>
-    </main>
+    </>
+  );
+}
+
+export default async function SignInPage({ searchParams }: { searchParams: Promise<{ expired?: string }> }) {
+  const { expired } = await searchParams;
+  const phone = phoneConfig();
+  const notice = expired ? 'Your session ended. Please sign in again.' : undefined;
+  if (!phone) {
+    return (
+      <AuthShell title="Sign in" lede={notice}>
+        <EmailSignIn />
+      </AuthShell>
+    );
+  }
+  return (
+    <AuthShell>
+      {notice && <p className="muted">{notice}</p>}
+      <PhoneSignIn config={phone} />
+      <details className={styles.email}>
+        <summary>Signed up with email before? Sign in with email</summary>
+        <EmailSignIn />
+      </details>
+    </AuthShell>
   );
 }

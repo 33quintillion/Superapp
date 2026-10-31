@@ -1,0 +1,277 @@
+/* Sign-in, sign-up and the steps after them. Night indigo welcome panel, marigold accent. */
+.shell {
+  --night: #1b2466;
+  --night-2: #26318a;
+  --marigold: #f4b23e;
+  --on-night: #ffffff;
+  --on-night-muted: #c9cff5;
+  display: grid;
+  grid-template-columns: minmax(320px, 5fr) 7fr;
+  min-height: calc(100vh - 57px);
+}
+
+.welcome {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-xl);
+  padding: 56px 48px;
+  color: var(--on-night);
+  background:
+    radial-gradient(120% 80% at 0% 100%, var(--night-2) 0%, transparent 60%),
+    var(--night);
+}
+
+/* A field of faint chat bubbles: the app's shape, not decoration for its own sake. */
+.bubbles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.bubble {
+  position: absolute;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.bubble.mine {
+  background: rgba(244, 178, 62, 0.14);
+}
+
+.greeting {
+  position: relative;
+  margin: 0;
+  min-height: 1.25em;
+  font-size: clamp(48px, 7vw, 88px);
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--marigold);
+}
+.word {
+  display: inline-block;
+  animation: greet 2800ms ease-in-out both;
+}
+@keyframes greet {
+  0% { opacity: 0; transform: translateY(14px); }
+  14%, 82% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(-10px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .word { animation: none; }
+}
+
+.pitch {
+  position: relative;
+  margin: 0;
+  max-width: 30ch;
+  font-size: 20px;
+  line-height: 1.45;
+  color: var(--on-night);
+}
+.pitchSmall {
+  position: relative;
+  margin: 0;
+  color: var(--on-night-muted);
+  font-size: var(--font-size-body);
+}
+
+.panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px var(--space-xl);
+  background: var(--color-bg);
+}
+.form {
+  width: 100%;
+  max-width: 380px;
+}
+.title {
+  margin: 0 0 var(--space-sm);
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.lede {
+  margin: 0 0 var(--space-xl);
+  color: var(--color-text-muted);
+}
+
+/* Phone number: a fixed country chip joined to the number field. */
+.phoneRow {
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  transition: border-color 120ms;
+}
+.phoneRow:focus-within {
+  border-color: var(--color-primary);
+}
+.country {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-right: 1.5px solid var(--color-border);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.countryCode {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.phoneInput {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 16px 14px;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.phoneInput:focus-visible {
+  outline: none;
+}
+
+/* The code: six boxes drawn behind one real input, so SMS autofill and paste just work. */
+.code {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+.box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 5 / 6;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 120ms, transform 120ms;
+}
+.box.filled {
+  border-color: var(--color-text-muted);
+}
+.box.active {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 -3px 0 var(--marigold, #f4b23e);
+}
+.codeInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  border: 0;
+  font-size: 16px;
+  caret-color: transparent;
+  cursor: text;
+}
+.code:focus-within .box.active {
+  transform: translateY(-2px);
+}
+.code:focus-within {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+
+.sentTo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: baseline;
+  margin: 0 0 var(--space-lg);
+  color: var(--color-text-muted);
+}
+.sentTo strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.primary {
+  width: 100%;
+  margin-top: var(--space-xl);
+  padding: 15px var(--space-lg);
+  border: 0;
+  border-radius: 14px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary[disabled] {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.after {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+}
+.countdown {
+  font-variant-numeric: tabular-nums;
+}
+.fine {
+  margin: var(--space-lg) 0 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+}
+.error {
+  margin: var(--space-md) 0 0;
+  color: var(--color-danger);
+}
+
+/* Older email accounts: folded away under one quiet line. */
+.email {
+  margin-top: 40px;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border);
+}
+.email summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+.email[open] summary {
+  margin-bottom: var(--space-lg);
+}
+
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .welcome {
+    padding: 40px var(--space-xl) 32px;
+    gap: var(--space-md);
+    min-height: 220px;
+  }
+  .greeting {
+    font-size: 52px;
+  }
+  .pitch {
+    font-size: 17px;
+  }
+  .pitchSmall {
+    display: none;
+  }
+  .panel {
+    align-items: flex-start;
+    padding: 32px var(--space-lg) 48px;
+  }
+}

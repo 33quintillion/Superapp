@@ -1,8 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { phoneSignIn } from './actions';
+import styles from './auth.module.css';
 
 interface Config {
   apiKey: string;
@@ -44,6 +45,19 @@ export function toE164(input: string, countryCode: string): string {
  * and the signed ID token it returns for the right code goes to our server, which checks
  * it with the API. The browser talks to Firebase directly, so no SDK is bundled.
  */
+/** Groups an Indian number as people write it: 98765 43210. Other input is left alone. */
+function groupDigits(raw: string) {
+  const d = raw.replace(/\D/g, '').slice(0, 10);
+  return d.length > 5 ? `${d.slice(0, 5)} ${d.slice(5)}` : d;
+}
+
+const RESEND_AFTER_S = 30;
+
+/**
+ * Phone sign-in and sign-up in one: Firebase texts a code (after an invisible reCAPTCHA),
+ * and the signed ID token it returns for the right code goes to our server, which checks
+ * it with the API. The browser talks to Firebase directly, so no SDK is bundled.
+ */
 export function PhoneSignIn({ config }: { config: Config }) {
   const router = useRouter();
   const [step, setStep] = useState<'number' | 'code'>('number');
@@ -51,8 +65,22 @@ export function PhoneSignIn({ config }: { config: Config }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wait, setWait] = useState(0);
   const sessionInfo = useRef<string | null>(null);
   const captchaBox = useRef<HTMLDivElement>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const india = config.countryCode === '+91';
+  const number = toE164(phone.startsWith('+') ? phone : `${config.countryCode}${phone.replace(/\D/g, '')}`, config.countryCode);
+
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => setWait((w) => w - 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait]);
+
+  useEffect(() => {
+    if (step === 'code') codeInput.current?.focus();
+  }, [step]);
 
   const call = async <T,>(path: string, body?: unknown): Promise<T> => {
     const res = await fetch(`${config.authBase}/v1/${path}${path.includes('?') ? '&' : '?'}key=${encodeURIComponent(config.apiKey)}`, {
@@ -107,25 +135,29 @@ export function PhoneSignIn({ config }: { config: Config }) {
 
   const sendCode = () =>
     run(async () => {
-      const phoneNumber = toE164(phone, config.countryCode);
-      if (!/^\+[1-9][0-9]{6,14}$/.test(phoneNumber)) throw new FirebaseError(FIREBASE_ERRORS.INVALID_PHONE_NUMBER);
-      const r = await call<{ sessionInfo: string }>('accounts:sendVerificationCode', { phoneNumber, recaptchaToken: await recaptchaToken() });
+      if (!/^\+[1-9][0-9]{6,14}$/.test(number) || (india && !phone.startsWith('+') && phone.replace(/\D/g, '').length !== 10)) {
+        throw new FirebaseError(FIREBASE_ERRORS.INVALID_PHONE_NUMBER);
+      }
+      const r = await call<{ sessionInfo: string }>('accounts:sendVerificationCode', { phoneNumber: number, recaptchaToken: await recaptchaToken() });
       sessionInfo.current = r.sessionInfo;
       setCode('');
+      setWait(RESEND_AFTER_S);
       setStep('code');
     });
 
-  const checkCode = () =>
+  const checkCode = (value = code) =>
     run(async () => {
-      const r = await call<{ idToken: string }>('accounts:signInWithPhoneNumber', { sessionInfo: sessionInfo.current, code: code.trim() });
+      if (value.length !== 6) throw new FirebaseError('Enter all 6 digits.');
+      const r = await call<{ idToken: string }>('accounts:signInWithPhoneNumber', { sessionInfo: sessionInfo.current, code: value });
       const outcome = await phoneSignIn(r.idToken);
       if (outcome.error) throw new FirebaseError(outcome.error);
       router.push(outcome.next!);
     });
 
+  const shown = phone.startsWith('+') ? number : `${config.countryCode} ${groupDigits(phone)}`;
+
   return (
     <form
-      className="stack"
       data-testid="phone-sign-in"
       onSubmit={(e) => {
         e.preventDefault();
@@ -133,55 +165,99 @@ export function PhoneSignIn({ config }: { config: Config }) {
       }}
     >
       {step === 'number' ? (
-        <label className="field">
-          <span>Phone number</span>
-          <input
-            name="phone"
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            placeholder={`${config.countryCode} 98765 43210`}
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            required
-          />
-          <small>We’ll text you a 6-digit code.</small>
-        </label>
+        <>
+          <h1 className={styles.title}>Your phone number</h1>
+          <p className={styles.lede}>We’ll text you a code. New to Nexa? Your account is set up when you confirm it.</p>
+          <label htmlFor="phone" className="sr-only">
+            Phone number
+          </label>
+          <div className={styles.phoneRow}>
+            <span className={styles.country} aria-hidden="true">
+              {india && <span className={styles.countryCode}>IN</span>}
+              {config.countryCode}
+            </span>
+            <input
+              id="phone"
+              name="phone"
+              className={styles.phoneInput}
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel-national"
+              placeholder={india ? '98765 43210' : 'Phone number'}
+              value={phone.startsWith('+') ? phone : groupDigits(phone)}
+              onChange={(e) => {
+                const v = e.target.value;
+                // A pasted number with its country code is kept whole; anything else is digits.
+                setPhone(v.trim().startsWith('+') ? v.trim() : v.replace(/\D/g, '').replace(/^0+/, '').slice(0, india ? 10 : 15));
+              }}
+              aria-describedby="phone-help"
+              required
+            />
+          </div>
+          <p id="phone-help" className={styles.fine}>
+            Another country? Type + and its code first. Standard SMS rates may apply.
+          </p>
+        </>
       ) : (
         <>
-          <p className="muted">
-            Code sent to {toE164(phone, config.countryCode)}.{' '}
-            <button type="button" className="link-btn" onClick={() => setStep('number')}>
+          <h1 className={styles.title}>Enter the code</h1>
+          <p className={styles.sentTo}>
+            Sent by SMS to <strong>{shown}</strong>
+            <button type="button" className="link-btn" onClick={() => { setStep('number'); setError(null); }}>
               Change number
             </button>
           </p>
-          <label className="field">
-            <span>Code</span>
+          <label htmlFor="code" className="sr-only">
+            6-digit code
+          </label>
+          <div className={styles.code} onClick={() => codeInput.current?.focus()}>
+            {Array.from({ length: 6 }, (_, i) => (
+              <span key={i} className={`${styles.box} ${code[i] ? styles.filled : ''} ${i === Math.min(code.length, 5) ? styles.active : ''}`} aria-hidden="true">
+                {code[i] ?? ''}
+              </span>
+            ))}
             <input
+              ref={codeInput}
+              id="code"
               name="code"
+              className={styles.codeInput}
               inputMode="numeric"
               autoComplete="one-time-code"
               pattern="[0-9]{6}"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+                setCode(v);
+                // The sixth digit (typed, pasted or filled in from the SMS) checks the code at once.
+                if (v.length === 6 && !busy) void checkCode(v);
+              }}
               required
             />
-          </label>
+          </div>
         </>
       )}
       {error && (
-        <p className="error" role="alert">
+        <p className={styles.error} role="alert">
           {error}
         </p>
       )}
-      <button type="submit" className="btn" disabled={busy}>
-        {busy ? (step === 'number' ? 'Sending…' : 'Checking…') : step === 'number' ? 'Send code' : 'Continue'}
+      <button type="submit" className={styles.primary} disabled={busy}>
+        {busy ? (step === 'number' ? 'Sending code…' : 'Checking…') : step === 'number' ? 'Send code' : 'Continue'}
       </button>
       {step === 'code' && (
-        <button type="button" className="btn quiet" disabled={busy} onClick={() => void sendCode()}>
-          Send a new code
-        </button>
+        <div className={styles.after}>
+          <span>Didn’t get it?</span>
+          {wait > 0 ? (
+            <span className={styles.countdown} aria-live="polite">
+              New code in 0:{String(wait).padStart(2, '0')}
+            </span>
+          ) : (
+            <button type="button" className="link-btn" disabled={busy} onClick={() => void sendCode()}>
+              Send a new code
+            </button>
+          )}
+        </div>
       )}
       <div ref={captchaBox} />
     </form>
