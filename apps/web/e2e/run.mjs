@@ -789,6 +789,23 @@ async function businessFlow(browser, API, tag, step) {
   await gus.page.waitForSelector('[data-testid=hours-saved]');
   step('owner creates a business, turns on orders and bookings, adds items, a service and opening hours');
 
+  // Gus publishes a mini-program from the starter; Ivy finds it under Apps and sees the live menu.
+  await gus.page.click('role=tab[name="Mini-program"]');
+  await gus.page.waitForSelector('[data-testid=mini-editor] input[name=miniName]');
+  await gus.page.fill('[data-testid=mini-editor] input[name=miniName]', 'Sunrise Treats');
+  await gus.page.fill('[data-testid=mini-editor] input[name=miniIcon]', '🥐');
+  await gus.page.click('[data-testid=mini-publish]');
+  await gus.page.waitForSelector('[data-testid=mini-msg]:has-text("Published")');
+  await ivy.page.goto(`${WEB}/apps?q=Sunrise`);
+  await ivy.page.click('[data-testid=mini-list] a:has-text("Sunrise Treats")');
+  await ivy.page.waitForSelector('[data-testid=mini-view]:has-text("Welcome to Sunrise Bakery")');
+  await ivy.page.click('[data-testid=mini-view] button:has-text("See the menu")');
+  await ivy.page.waitForSelector('[data-testid=mini-items] li:has-text("Sourdough"):has-text("€4.50")');
+  assert((await ivy.page.getAttribute('[data-testid=mini-view] a:has-text("Order for pickup")', 'href')) === `/b/${handle}`, 'order button opens the business');
+  await ivy.page.goto(`${WEB}/apps`);
+  await ivy.page.waitForSelector('[data-testid=mini-recent] a:has-text("Sunrise Treats")');
+  step('owner publishes a mini-program; a customer finds it, sees the live menu, and it shows under recently used');
+
   // Hal is invited as staff and only gets the tabs staff may use.
   await gus.page.click('role=tab[name="Staff"]');
   await gus.page.fill('[data-testid=invite-staff] input[name=username]', hal.username);

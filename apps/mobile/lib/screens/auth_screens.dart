@@ -17,6 +17,7 @@ import 'business_screens.dart';
 import 'call_screens.dart';
 import 'chat_screens.dart';
 import 'link_screens.dart';
+import 'mini_screens.dart';
 import 'qr_screens.dart';
 import 'social_screens.dart';
 
@@ -487,6 +488,14 @@ class _HomeScreenState extends State<HomeScreen> {
             subtitle: const Text('Scan to chat, or show yours'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MyQrScreen(chat: chat))),
+          ),
+          ListTile(
+            key: const Key('open-mini-programs'),
+            leading: const Icon(Icons.apps_outlined),
+            title: const Text('Mini-programs'),
+            subtitle: const Text('Small apps from businesses'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MiniProgramsScreen(auth: auth))),
           ),
         ]),
       ),

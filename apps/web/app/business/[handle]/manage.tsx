@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { chatApi, newClientId } from '@/lib/chat-client';
 import { Tabs } from '../../tabs';
+import { MiniEditor } from './mini-editor';
 import {
   Booking,
   BOOKING_STATUS_LABEL,
@@ -31,12 +32,13 @@ import {
   toMinor,
 } from '@/lib/business-client';
 
-type Tab = 'orders' | 'bookings' | 'catalogue' | 'services' | 'staff' | 'payments' | 'settings';
+type Tab = 'orders' | 'bookings' | 'catalogue' | 'services' | 'mini' | 'staff' | 'payments' | 'settings';
 const TABS: { id: Tab; label: string; needs: string }[] = [
   { id: 'orders', label: 'Orders', needs: 'orders.view' },
   { id: 'bookings', label: 'Bookings', needs: 'bookings.view' },
   { id: 'catalogue', label: 'Catalogue', needs: 'catalogue.manage' },
   { id: 'services', label: 'Services and hours', needs: 'services.manage' },
+  { id: 'mini', label: 'Mini-program', needs: 'business.edit' },
   { id: 'staff', label: 'Staff', needs: 'staff.view' },
   { id: 'payments', label: 'Payments and plan', needs: 'payments.view' },
   { id: 'settings', label: 'Settings', needs: 'business.edit' },
@@ -66,6 +68,7 @@ export function ManageBusiness({ initial, me, initialTab }: { initial: Business;
         {tab === 'bookings' && <BookingsTab b={b} />}
         {tab === 'catalogue' && <CatalogueTab b={b} />}
         {tab === 'services' && <ServicesTab b={b} />}
+        {tab === 'mini' && <MiniEditor b={b} />}
         {tab === 'staff' && <StaffTab b={b} me={me} />}
         {tab === 'payments' && <PaymentsTab b={b} onChange={setB} />}
         {tab === 'settings' && <SettingsTab b={b} onChange={setB} />}

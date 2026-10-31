@@ -96,6 +96,13 @@ const ALLOWED: [string, RegExp][] = [
   ['PATCH', new RegExp(`^businesses/${ID}$`)],
   ['DELETE', new RegExp(`^businesses/${ID}$`)],
   ['PUT', new RegExp(`^businesses/${ID}/hours$`)],
+  // Mini-programs: the editor in the back office, and the list and recents for customers.
+  ['GET', new RegExp(`^businesses/${ID}/mini-program$`)],
+  ['PUT', new RegExp(`^businesses/${ID}/mini-program$`)],
+  ['POST', new RegExp(`^businesses/${ID}/mini-program/publish$`)],
+  ['DELETE', new RegExp(`^businesses/${ID}/mini-program/publish$`)],
+  ['GET', /^(mini-programs|me\/mini-programs\/recent)$/],
+  ['GET', new RegExp(`^mini-programs/${ID}$`)],
   ['POST', new RegExp(`^businesses/${ID}/(staff|staff/accept|transfer|items|services)$`)],
   ['PATCH', new RegExp(`^businesses/${ID}/(staff|items|services)/${ID}$`)],
   ['DELETE', new RegExp(`^businesses/${ID}/(staff|items|services)/${ID}$`)],

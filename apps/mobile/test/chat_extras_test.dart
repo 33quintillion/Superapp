@@ -12,6 +12,7 @@ import 'package:nexa/chat/chat_models.dart';
 import 'package:nexa/chat/location_source.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
+import 'package:nexa/business/business_models.dart';
 import 'package:nexa/screens/link_screens.dart';
 
 import 'a11y_helpers.dart';
@@ -36,6 +37,16 @@ class Server {
   int? disappear;
   final starred = <String>{};
   String contactCode = 'ADAPQR2345';
+  bool openedMini = false;
+  final miniCard = <String, dynamic>{
+    'id': 'mp1',
+    'name': 'Janpath Dining',
+    'tagline': 'Order ahead',
+    'icon': '🍛',
+    'accent': 'burgundy',
+    'hasMenu': true,
+    'business': {'id': 'b1', 'handle': 'janpath', 'name': 'Hotel New Janpath', 'verified': false},
+  };
 
   Map<String, dynamic> add(String sender, String kind, {String body = '', Map<String, dynamic> extra = const {}, String? clientId}) {
     seq += 1;
@@ -117,6 +128,39 @@ class Server {
         return json(200, {'translate': true, 'transcribe': true, 'languages': {'hi': 'Hindi', 'gu': 'Gujarati'}});
       case ('POST', '/v1/messages/m1/translate'):
         return json(200, {'messageId': 'm1', 'to': 'gu', 'text': 'ગેટ કોડ 4521 છે'});
+      case ('GET', '/v1/mini-programs'):
+        return json(200, {'miniPrograms': [miniCard]});
+      case ('GET', '/v1/me/mini-programs/recent'):
+        return json(200, {'miniPrograms': openedMini ? [miniCard] : <Object>[]});
+      case ('GET', '/v1/mini-programs/mp1'):
+        openedMini = true;
+        return json(200, {
+          ...miniCard,
+          'pages': [
+            {
+              'id': 'home',
+              'title': 'Home',
+              'blocks': [
+                {'type': 'heading', 'text': 'Welcome to Hotel New Janpath'},
+                {'type': 'button', 'label': 'See the menu', 'action': {'type': 'page', 'pageId': 'menu'}},
+                {'type': 'hours'},
+              ],
+            },
+            {
+              'id': 'menu',
+              'title': 'Menu',
+              'blocks': [
+                {'type': 'items', 'title': 'Today'},
+                {'type': 'button', 'label': 'Order for pickup', 'action': {'type': 'order'}},
+              ],
+            },
+          ],
+          'business': {...miniCard['business'] as Map, 'ordersEnabled': true, 'bookingsEnabled': false, 'phone': null},
+        });
+      case ('GET', '/v1/businesses/b1/items'):
+        return json(200, {'items': [{'id': 'i1', 'name': 'Masala dosa', 'description': '', 'priceMinor': 12000, 'currency': 'INR', 'available': true, 'stock': null, 'position': 0}]});
+      case ('GET', '/v1/businesses/b1/hours'):
+        return json(200, {'hours': [{'weekday': 1, 'opens': '08:00', 'closes': '22:00'}]});
       case ('GET', '/v1/me/contact-code'):
         return json(200, {'code': contactCode, 'qr': 'SUPERAPP-ADD:$contactCode'});
       case ('POST', '/v1/me/contact-code/reset'):
@@ -451,6 +495,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(server.bodies['POST /v1/messages/m1/translate'], {'to': 'gu'});
     expect(find.text('Translated to Gujarati: ગેટ કોડ 4521 છે'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('mini-programs: find one, open it, move between its pages, see the live menu', (tester) async {
+    final server = Server();
+    final auth = await signedIn(server);
+    await tester.pumpWidget(NexaApp(auth: auth, connectSocket: server.connect));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byKey(const Key('open-mini-programs')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.byKey(const Key('open-mini-programs')));
+    await tester.pumpAndSettle();
+    expect(find.text('Janpath Dining'), findsOneWidget);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('mini-mp1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Welcome to Hotel New Janpath'), findsOneWidget);
+    expect(find.text('08:00–22:00'), findsOneWidget);
+    await expectAccessible(tester);
+    await tester.tap(find.byKey(const Key('mini-button-See the menu')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mini-page-menu')), findsOneWidget);
+    expect(find.text('Masala dosa'), findsOneWidget);
+    expect(find.text(formatMoney(12000, 'INR')), findsOneWidget);
+    await expectAccessible(tester);
+
+    // Back goes to the mini-program's first page, then out to the list (now with it under recent).
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mini-page-home')), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mini-recent-mp1')), findsOneWidget);
+
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });

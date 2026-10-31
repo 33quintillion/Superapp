@@ -39,6 +39,8 @@ import { MessagingService } from './messaging/messaging.service';
 import { GroupsController } from './messaging/groups.controller';
 import { GroupsService } from './messaging/groups.service';
 import { AiController } from './ai/ai.controller';
+import { MiniProgramsController } from './mini/mini.controller';
+import { MiniProgramsService } from './mini/mini.service';
 import { AiService } from './ai/ai.service';
 import { ExpiryService } from './messaging/expiry.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
@@ -73,6 +75,7 @@ export class AppModule {
         UsersController,
         ContactCodeController,
         AiController,
+        MiniProgramsController,
         SafetyController,
         MessagingController,
         GroupsController,
@@ -102,6 +105,7 @@ export class AppModule {
         UsersService,
         ContactCodeService,
         AiService,
+        MiniProgramsService,
         SafetyService,
         StorageService,
         MediaService,
