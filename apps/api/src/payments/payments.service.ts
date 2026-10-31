@@ -214,6 +214,11 @@ export class PaymentsService implements OnApplicationBootstrap, OnModuleDestroy 
     await this.businesses.requireStaff(userId, businessId, 'payments.manage');
     const stripe = this.provider();
     await this.limits.consume({ name: 'payments:onboarding', limit: 20, windowSeconds: 3600 }, userId);
+    // Payouts and banking go with a confirmed email as well as the phone number.
+    const owner = await this.db.one<{ email_verified_at: Date | null }>('SELECT email_verified_at FROM users WHERE id = $1', [userId]);
+    if (!owner?.email_verified_at) {
+      throw Errors.conflict('email_required', 'Add and confirm an email address in your account settings before setting up payouts');
+    }
     const b = await this.businesses.get(userId, businessId);
     let a = await this.loadAccount(businessId);
     if (a && a.livemode !== stripe.livemode) throw Errors.conflict('account_mode_mismatch', 'This business’s payout account was made with test keys; ask support to reset it');

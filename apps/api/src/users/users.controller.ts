@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { emailSchema, parse, usernameSchema } from '../common/zod';
+import { IdentityProofBody } from '../auth/auth.controller';
 import { Auth, AuthGuard } from '../auth/auth.guard';
 import type { AccessClaims } from '../auth/token.service';
 import { CONTACTS_MAX, UsersService } from './users.service';
@@ -48,7 +49,7 @@ const ContactsMatch = z
     phones: b.phones.filter((p) => /^\+[1-9][0-9]{6,14}$/.test(p)),
   }));
 
-const PasswordConfirm = z.object({ password: z.string().min(1).max(256) });
+
 
 @Controller('v1')
 @UseGuards(AuthGuard)
@@ -93,13 +94,13 @@ export class UsersController {
   @Post('me/deactivate')
   @HttpCode(204)
   async deactivate(@Auth() a: AccessClaims, @Body() body: unknown) {
-    await this.users.deactivate(a.userId, parse(PasswordConfirm, body).password);
+    await this.users.deactivate(a.userId, parse(IdentityProofBody, body));
   }
 
   @Delete('me')
   @HttpCode(204)
   async remove(@Auth() a: AccessClaims, @Body() body: unknown) {
-    await this.users.deleteAccount(a.userId, parse(PasswordConfirm, body).password);
+    await this.users.deleteAccount(a.userId, parse(IdentityProofBody, body));
   }
 
   @Post('contacts/match')

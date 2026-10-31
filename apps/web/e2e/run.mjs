@@ -56,6 +56,8 @@ const env = {
   PAYMENTS_SWEEP_INTERVAL_SECONDS: '5',
   // No calls to the real Pwned Passwords service from tests.
   PASSWORD_BREACH_CHECK: 'off',
+  // The flows below sign up with email; the phone sign-up screens have their own browser test.
+  EMAIL_SIGNUP: 'true',
 };
 
 /** coturn with the TURN REST API shared secret, as in production, on loopback only. */
@@ -846,6 +848,8 @@ async function paymentsFlow(browser, API, tag, step) {
   assert((await fetch(`${API}/v1/auth/mfa/confirm`, { method: 'POST', headers: maxAuth, body: JSON.stringify({ code: totp(secret, Date.now() - 30_000) }) })).status === 204, 'admin MFA on');
   const pool = new Pool({ connectionString: env.DATABASE_URL });
   await pool.query(`INSERT INTO platform_staff (user_id, role) SELECT id, 'admin' FROM users WHERE email = $1`, [max.email]);
+  // Payouts need a confirmed email (the confirmation link itself is tested in the account flow).
+  await pool.query('UPDATE users SET email_verified_at = now() WHERE email = $1', [people.kim.email]);
   await pool.end();
 
   // The owner's shop, set up through the API: the browser part of that is covered by the business flow.

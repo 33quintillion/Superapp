@@ -5,8 +5,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
-import { verifyPassword } from '../auth/password';
-import { PASSWORD_CONFIRM_RULE } from '../auth/auth.service';
+import { AuthService, IdentityProof } from '../auth/auth.service';
 import { RateLimitService } from '../common/rate-limit.service';
 import { MediaService } from '../media/media.service';
 import { GroupsService } from '../messaging/groups.service';
@@ -75,6 +74,7 @@ export class UsersService {
     private readonly integrations: IntegrationsService,
     private readonly payments: PaymentsService,
     private readonly limits: RateLimitService,
+    private readonly auth: AuthService,
   ) {}
 
   async me(userId: string) {
@@ -276,8 +276,8 @@ export class UsersService {
     };
   }
 
-  async deactivate(userId: string, password: string) {
-    await this.confirmPassword(userId, password);
+  async deactivate(userId: string, proof: IdentityProof) {
+    await this.auth.confirmIdentity(userId, proof);
     await this.db.tx(async (tx) => {
       await this.db.query(`UPDATE users SET state = 'deactivated', updated_at = now() WHERE id = $1`, [userId], tx);
       await this.db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'deactivated' WHERE user_id = $1 AND revoked_at IS NULL`, [userId], tx);
@@ -292,8 +292,8 @@ export class UsersService {
    * user filed are kept for safety review with the reporter detached. Messages they sent
    * are wiped for everyone and their files deleted. See docs/security-privacy.md.
    */
-  async deleteAccount(userId: string, password: string) {
-    await this.confirmPassword(userId, password);
+  async deleteAccount(userId: string, proof: IdentityProof) {
+    await this.auth.confirmIdentity(userId, proof);
     const { mediaIds, groupNotices, closedBusinesses } = await this.db.tx(async (tx) => {
       const sentMedia = await this.messaging.scrubUser(userId, tx);
       const groupNotices = await this.groups.leaveAll(userId, tx);
@@ -331,11 +331,5 @@ export class UsersService {
     await this.groups.announceAll(groupNotices).catch(() => undefined);
     // Stored files go once nothing references them (a forwarded copy keeps its own reference).
     for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);
-  }
-
-  private async confirmPassword(userId: string, password: string) {
-    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
-    const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
-    if (!(await verifyPassword(u?.password_hash ?? null, password))) throw Errors.invalidCredentials();
   }
 }

@@ -70,6 +70,8 @@ let handles = 0;
 async function business() {
   handles += 1;
   const [owner, manager, staff, customer] = [await user(), await user(), await user(), await user()];
+  // Payouts need a confirmed email; that flow has its own test in auth.e2e.
+  await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [owner.id]);
   const b = (
     await call('POST', '/v1/businesses', owner, { handle: `pmore-${process.pid % 10000}-${handles}`, name: `Studio ${handles}`, category: 'beauty', timeZone: 'UTC', currency: 'GBP' })
   ).body;

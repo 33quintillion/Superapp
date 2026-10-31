@@ -30,6 +30,23 @@ const schema = z.object({
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
   REDIS_URL: z.url(),
 
+  /**
+   * Email and password sign-up. Off by default: people sign up with their phone number
+   * (Firebase codes). Existing email accounts can still sign in. Tests turn it on.
+   */
+  EMAIL_SIGNUP: z.stringbool().default(false),
+  /** Firebase project whose phone sign-in codes this API accepts. Unset turns phone sign-in off. */
+  FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]{4,40}$/, 'FIREBASE_PROJECT_ID is the project ID, e.g. superapp-1a2b3').optional(),
+  /** Overrides Google's signing keys for Firebase ID tokens. Tests only; refused in staging and production. */
+  FIREBASE_JWKS_URL: z.url().optional(),
+  /** Country codes phone sign-in is open to, comma-separated (+91 India). Limits SMS fraud to where the app runs. */
+  PHONE_COUNTRY_CODES: z
+    .string()
+    .default('+91')
+    .transform(list)
+    .refine((l) => l.length > 0 && l.every((c) => /^\+[1-9][0-9]{0,3}$/.test(c)), 'PHONE_COUNTRY_CODES is a list like +91,+1'),
+  /** A phone code proves who someone is for this long after they typed it. */
+  PHONE_CODE_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   JWT_ISSUER: z.string().default('nexa-api'),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
@@ -283,6 +300,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ['CLOUDFLARE_TURN_API_BASE', cfg.CLOUDFLARE_TURN_API_BASE],
     ['STRIPE_API_BASE', cfg.STRIPE_API_BASE],
     ['BREVO_API_BASE', cfg.BREVO_API_BASE],
+    ['FIREBASE_JWKS_URL', cfg.FIREBASE_JWKS_URL],
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { emailSchema, parse, passwordSchema, usernameSchema } from '../common/zod';
 import { Auth, AuthGuard, Client, ClientInfo } from './auth.guard';
@@ -18,6 +18,12 @@ const RegisterBody = z.object({
 });
 const LoginBody = z.object({ email: emailSchema, password: z.string().min(1).max(256), deviceName });
 const MfaLoginBody = z.object({ mfaToken: token, code: totpCode, deviceName });
+/** A Firebase ID token: three base64url parts, about 1 kB. */
+const idToken = z.string().min(100).max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, 'Not an ID token');
+const PhoneBody = z.object({ idToken, deviceName });
+const PhoneCompleteBody = z.object({ signupToken: token, displayName: z.string().trim().min(1).max(64), username: usernameSchema.optional(), deviceName });
+/** Password for accounts that have one; a fresh phone code otherwise. */
+export const IdentityProofBody = z.object({ password: z.string().min(1).max(256).optional(), phoneIdToken: idToken.optional() });
 
 @Controller('v1/auth')
 export class AuthController {
@@ -32,6 +38,17 @@ export class AuthController {
   @HttpCode(200)
   login(@Body() body: unknown, @Client() client: ClientInfo) {
     return this.auth.login(parse(LoginBody, body), client);
+  }
+
+  @Post('phone')
+  @HttpCode(200)
+  phone(@Body() body: unknown, @Client() client: ClientInfo) {
+    return this.auth.phoneSignIn(parse(PhoneBody, body), client);
+  }
+
+  @Post('phone/complete')
+  phoneComplete(@Body() body: unknown, @Client() client: ClientInfo) {
+    return this.auth.phoneSignUp(parse(PhoneCompleteBody, body), client);
   }
 
   @Post('login/mfa')
@@ -104,8 +121,26 @@ export class AuthController {
   @HttpCode(204)
   @UseGuards(AuthGuard)
   async mfaDisable(@Auth() a: AccessClaims, @Body() body: unknown) {
-    const b = parse(z.object({ password: z.string().min(1).max(256), code: totpCode }), body);
-    await this.auth.disableMfa(a.userId, b.password, b.code);
+    const b = parse(IdentityProofBody.extend({ code: totpCode }), body);
+    await this.auth.disableMfa(a.userId, b, b.code);
+  }
+}
+
+/** The optional email address, for receipts, banking and payouts. Phone accounts don't sign in with it. */
+@Controller('v1/me/email')
+@UseGuards(AuthGuard)
+export class EmailController {
+  constructor(private readonly auth: AuthService) {}
+
+  @Put()
+  set(@Auth() a: AccessClaims, @Body() body: unknown) {
+    return this.auth.setEmail(a.userId, parse(z.object({ email: emailSchema }), body).email);
+  }
+
+  @Delete()
+  @HttpCode(204)
+  async remove(@Auth() a: AccessClaims) {
+    await this.auth.removeEmail(a.userId);
   }
 }
 
