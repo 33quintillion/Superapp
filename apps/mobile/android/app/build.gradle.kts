@@ -30,11 +30,22 @@ android {
         versionName = flutter.versionName
     }
 
+    // The test builds (pointed at the test site) are signed with a fixed, public test key kept
+    // in the repo, so each new build installs over the last one and Firebase can recognise the
+    // app by its fingerprint. It must never sign a Play Store release: that needs a real,
+    // private key.
+    signingConfigs {
+        create("test") {
+            storeFile = file("test-signing.jks")
+            storePassword = "superapp-test"
+            keyAlias = "superapp-test"
+            keyPassword = "superapp-test"
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("test")
         }
     }
 }
