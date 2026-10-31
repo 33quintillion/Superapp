@@ -20,7 +20,11 @@ export class MailService {
   readonly sent: OutgoingMail[] = [];
 
   constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {
-    if (config.MAIL_TRANSPORT === 'smtp') this.transport = createTransport(config.SMTP_URL);
+    if (config.MAIL_TRANSPORT !== 'smtp') return;
+    // The sign-in is passed as is, not inside the URL, where nodemailer would keep some characters percent-encoded.
+    this.transport = config.SMTP_USER
+      ? createTransport({ url: config.SMTP_URL, auth: { user: config.SMTP_USER, pass: config.SMTP_PASS } } as Parameters<typeof createTransport>[0])
+      : createTransport(config.SMTP_URL);
   }
 
   async send(mail: OutgoingMail): Promise<void> {

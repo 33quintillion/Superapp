@@ -202,7 +202,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
     throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');
   }
-  if (cfg.SMTP_URL && cfg.SMTP_USER && cfg.SMTP_PASS) {
+  if (cfg.SMTP_URL && cfg.SMTP_USER) {
     let url: URL;
     try {
       url = new URL(cfg.SMTP_URL);
@@ -210,10 +210,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       throw new Error('SMTP_URL must be a URL such as smtp://smtp.example.com:587');
     }
     if (url.username || url.password) throw new Error('Put the SMTP sign-in in SMTP_USER and SMTP_PASS, or in SMTP_URL, not both');
-    // URL setters percent-encode, so logins containing @ or : need no escaping by hand.
-    url.username = cfg.SMTP_USER;
-    url.password = cfg.SMTP_PASS;
-    cfg.SMTP_URL = url.toString();
   }
   if (cfg.RATE_LIMIT_DISABLED && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
     throw new Error('RATE_LIMIT_DISABLED cannot be set in staging or production');

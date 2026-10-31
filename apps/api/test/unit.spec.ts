@@ -7,7 +7,7 @@ import { matchesSignature } from '../src/media/media-types';
 import { parseForm } from '../src/dev/stripe-sandbox';
 import { paymentStatus } from '../src/payments/payments.service';
 import { formEncode, ProviderError, SignatureError, signStripePayload, verifyStripeSignature } from '../src/payments/stripe';
-import { createTransport } from 'nodemailer';
+import { MailService } from '../src/mail/mail.service';
 import { StorageService } from '../src/storage/storage.service';
 import { TEST_ENV } from './helpers';
 
@@ -299,7 +299,7 @@ describe('SMTP sign-in kept apart from the URL', () => {
 
   it('hands nodemailer the login and key exactly as pasted, even with @ and :', () => {
     const cfg = loadConfig({ ...TEST_ENV, ...smtp, NODE_ENV: 'development', SMTP_USER: '9a1b2c@smtp-brevo.com', SMTP_PASS: 'xsmtpsib-k:ey/+=%' } as NodeJS.ProcessEnv);
-    const transport = createTransport(cfg.SMTP_URL) as any;
+    const transport = (new MailService(cfg) as any).transport;
     expect(transport.transporter.options.auth).toEqual({ user: '9a1b2c@smtp-brevo.com', pass: 'xsmtpsib-k:ey/+=%' });
     expect(transport.transporter.options.host).toBe('smtp-relay.example.com');
     expect(Number(transport.transporter.options.port)).toBe(587);
@@ -312,7 +312,10 @@ describe('SMTP sign-in kept apart from the URL', () => {
     ).toThrow(/not both/);
   });
 
-  it('leaves a URL without them unchanged', () => {
-    expect(loadConfig({ ...TEST_ENV, ...smtp, NODE_ENV: 'development' } as NodeJS.ProcessEnv).SMTP_URL).toBe(smtp.SMTP_URL);
+  it('still takes a sign-in inside SMTP_URL when the two are not set', () => {
+    const cfg = loadConfig({ ...TEST_ENV, MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://u:p@smtp.example.com:2525', NODE_ENV: 'development' } as NodeJS.ProcessEnv);
+    const options = (new MailService(cfg) as any).transport.transporter.options;
+    expect(options.auth).toEqual({ user: 'u', pass: 'p' });
+    expect(Number(options.port)).toBe(2525);
   });
 });
