@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { api, ApiError, TokenPair } from '@/lib/api';
-import { cookieOpts, MFA_COOKIE } from '@/lib/cookies';
+import { cookieOpts, MFA_COOKIE, PHONE_SIGNUP_COOKIE } from '@/lib/cookies';
 import { authed, clearTokens, requireAccessToken, storeTokens } from '@/lib/session';
 
 export interface FormState {
@@ -74,6 +74,62 @@ export async function register(_: FormState, f: FormData): Promise<FormState> {
   });
   if (res.error) return res;
   redirect('/account');
+}
+
+type PhoneOutcome = TokenPair | { mfaRequired: true; mfaToken: string } | { signupRequired: true; signupToken: string; phone: string };
+
+/**
+ * Called from the phone sign-in form once Firebase has checked the code. The API verifies
+ * the ID token; we keep the resulting tokens (or the next step's token) in httpOnly cookies.
+ */
+export async function phoneSignIn(idToken: string): Promise<{ next?: string; error?: string }> {
+  try {
+    const r = await api<PhoneOutcome>('POST', '/v1/auth/phone', { body: { idToken, deviceName: 'Web browser' } });
+    const jar = await cookies();
+    if ('signupRequired' in r) {
+      jar.set(PHONE_SIGNUP_COOKIE, r.signupToken, cookieOpts(15 * 60));
+      return { next: '/sign-in/name' };
+    }
+    if ('mfaRequired' in r) {
+      jar.set(MFA_COOKIE, r.mfaToken, cookieOpts(300));
+      return { next: '/sign-in/mfa' };
+    }
+    await storeTokens(r);
+    return { next: '/account' };
+  } catch (e) {
+    if (e instanceof ApiError) return { error: e.message };
+    throw e;
+  }
+}
+
+/** A new phone user's name (and optional username), which creates the account. */
+export async function completePhoneSignUp(_: FormState, f: FormData): Promise<FormState> {
+  const jar = await cookies();
+  const signupToken = jar.get(PHONE_SIGNUP_COOKIE)?.value;
+  if (!signupToken) return { error: 'Your sign-up expired. Please enter your number again.' };
+  const username = field(f, 'username').trim().toLowerCase();
+  const res = await attempt(f, async () => {
+    await storeTokens(
+      await api<TokenPair>('POST', '/v1/auth/phone/complete', {
+        body: { signupToken, displayName: field(f, 'displayName'), ...(username ? { username } : {}), deviceName: 'Web browser' },
+      }),
+    );
+    jar.delete(PHONE_SIGNUP_COOKIE);
+  });
+  if (res.error) return res;
+  redirect('/account');
+}
+
+/** Adds or changes the optional email (receipts, banking and payouts). */
+export async function setEmail(_: FormState, f: FormData): Promise<FormState> {
+  const res = await attempt(f, () => authed('PUT', '/v1/me/email', { email: field(f, 'email') }));
+  if (!res.error) revalidatePath('/account');
+  return res;
+}
+
+export async function removeEmail() {
+  await authed('DELETE', '/v1/me/email');
+  revalidatePath('/account');
 }
 
 export async function forgotPassword(_: FormState, f: FormData): Promise<FormState> {

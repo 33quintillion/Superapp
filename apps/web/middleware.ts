@@ -50,6 +50,10 @@ export function contentSecurityPolicy(nonce: string, env: Record<string, string 
   // Browsers upload to and download from object storage directly, with presigned URLs.
   const media = (env.CSP_MEDIA_ORIGINS ?? (dev ? 'http://localhost:9000 http://127.0.0.1:9000' : '')).split(/[\s,]+/).filter(Boolean).join(' ');
   const ws = env.API_PUBLIC_WS_URL ?? 'ws://localhost:3000';
+  // Phone sign-in: the browser asks Firebase (Identity Toolkit) to text a code, behind an
+  // invisible reCAPTCHA whose script the nonced sign-in script loads ('strict-dynamic').
+  const firebase = env.FIREBASE_WEB_API_KEY ? new URL(env.FIREBASE_AUTH_BASE ?? 'https://identitytoolkit.googleapis.com').origin : '';
+  const recaptchaFrames = env.FIREBASE_WEB_API_KEY ? 'https://www.google.com https://recaptcha.google.com' : '';
   return [
     "default-src 'self'",
     // 'strict-dynamic' lets Next's nonced loader pull in its chunks; dev mode also needs eval for fast refresh.
@@ -58,7 +62,8 @@ export function contentSecurityPolicy(nonce: string, env: Record<string, string 
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' blob: data: ${media}`.trim(),
     `media-src 'self' blob: ${media}`.trim(),
-    `connect-src 'self' ${ws} ${media}`.trim(),
+    `connect-src 'self' ${ws} ${media} ${firebase}`.trim().replace(/ +/g, ' '),
+    `frame-src 'self' ${recaptchaFrames}`.trim(),
     "font-src 'self'",
     "worker-src 'self'",
     "object-src 'none'",
