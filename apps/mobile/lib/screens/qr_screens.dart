@@ -45,7 +45,9 @@ class _MyQrScreenState extends State<MyQrScreen> {
     if (ok != true) return;
     try {
       await widget.chat.auth.authed('POST', '/v1/me/contact-code/reset');
-      setState(() => _mine = _load());
+      setState(() {
+        _mine = _load();
+      });
     } on ApiException catch (e) {
       _say(e.message);
     }
