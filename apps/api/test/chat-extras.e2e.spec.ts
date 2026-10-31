@@ -301,3 +301,15 @@ describe('my QR code', () => {
     expect((await call('GET', '/v1/contact-codes/short', b)).status).toBe(404);
   });
 });
+
+describe('translation when no AI gateway is set up', () => {
+  it('says it is off and refuses politely', async () => {
+    const [a, b] = [await user(), await user()];
+    expect((await call('GET', '/v1/ai/features', a)).body).toEqual({ translate: false, transcribe: false, languages: {} });
+    const cid = await direct(a, b);
+    const m = await sent(a, cid, { body: 'hello' });
+    const r = await call('POST', `/v1/messages/${m.id}/translate`, b, { to: 'hi' });
+    expect(r.status).toBe(503);
+    expect(r.body.error.code).toBe('ai_unavailable');
+  });
+});

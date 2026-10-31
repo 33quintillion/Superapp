@@ -103,10 +103,9 @@ async function chatFlow(browser, API, tag, step) {
     assert(r.status === 201, `register ${name}`);
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
-    if (process.env.E2E_DEBUG) {
-      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
-      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
-    }
+    // Page crashes and error toasts are always worth seeing when a step fails.
+    page.on('pageerror', (e) => console.log(`[${name} page error] ${e.stack}`));
+    page.on('console', (m) => (process.env.E2E_DEBUG || m.type() === 'error') && console.log(`[${name} console ${m.type()}] ${m.text()}`));
     await page.goto(`${WEB}/sign-in`);
     await page.fill('input[name=email]', u.email);
     await page.fill('input[name=password]', u.password);
@@ -236,7 +235,12 @@ async function chatFlow(browser, API, tag, step) {
   await ana.page.fill('input[name=pollQuestion]', 'Dinner on Friday?');
   await ana.page.fill('input[name=pollOption0]', 'Pizza');
   await ana.page.fill('input[name=pollOption1]', 'Dosa');
-  await ana.page.click('[data-testid=poll-form] button[type=submit]');
+  await ana.page.click('[data-testid=send-poll]');
+  // Sent and stored: the sender's own copy turns into a poll. If not, say why.
+  await bubble(ana.page, 'Dinner on Friday?').locator('[data-testid=poll-option]').first().waitFor({ timeout: 10000 }).catch(async (e) => {
+    const toast = await ana.page.locator('[role=alert]').allInnerTexts();
+    throw new Error(`poll not sent (${toast.join(' | ') || 'no error shown'}): ${e.message}`);
+  });
   const benPoll = bubble(ben.page, 'Dinner on Friday?');
   await benPoll.locator('[data-testid=poll-option]:has-text("Dosa")').click();
   await bubble(ana.page, 'Dinner on Friday?').locator('[data-testid=poll-option]:has-text("Dosa") [data-testid=poll-count]:has-text("1")').waitFor();
@@ -282,7 +286,7 @@ async function chatFlow(browser, API, tag, step) {
   await ana.page.click('[data-testid=extras]');
   await ana.page.click('[data-testid=extra-contact]');
   await ana.page.fill('input[name=contactUsername]', ben.username);
-  await ana.page.click('[data-testid=contact-form] button[type=submit]');
+  await ana.page.click('[data-testid=send-contact]');
   await ben.page.waitForSelector(`[data-testid=contact-card]:has-text("@${ben.username}")`);
   step('location and a contact card shared');
 
@@ -583,10 +587,9 @@ async function callsFlow(browser, API, tag, step, turn) {
     const ctx = await browser.newContext();
     await ctx.grantPermissions(['camera', 'microphone'], { origin: WEB });
     const page = await ctx.newPage();
-    if (process.env.E2E_DEBUG) {
-      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
-      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
-    }
+    // Page crashes and error toasts are always worth seeing when a step fails.
+    page.on('pageerror', (e) => console.log(`[${name} page error] ${e.stack}`));
+    page.on('console', (m) => (process.env.E2E_DEBUG || m.type() === 'error') && console.log(`[${name} console ${m.type()}] ${m.text()}`));
     await page.goto(`${WEB}/sign-in`);
     await page.fill('input[name=email]', u.email);
     await page.fill('input[name=password]', u.password);

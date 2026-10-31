@@ -238,18 +238,15 @@ function PollForm({ onSend, onCancel }: { onSend: (c: { kind: 'poll'; body: stri
   const [multiple, setMultiple] = useState(false);
   const filled = options.map((o) => o.trim()).filter(Boolean);
   const dupes = new Set(filled.map((o) => o.toLowerCase())).size !== filled.length;
+  const ready = !!q.trim() && filled.length >= 2 && !dupes;
+  const submit = () => {
+    if (ready) void onSend({ kind: 'poll', body: q.trim(), extras: { poll: { options: filled, multiple } } });
+  };
+  // Not a <form>: it sits inside the message composer's form, and forms can't nest.
   return (
-    <form
-      className="extras-panel"
-      data-testid="poll-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!q.trim() || filled.length < 2 || dupes) return;
-        void onSend({ kind: 'poll', body: q.trim(), extras: { poll: { options: filled, multiple } } });
-      }}
-    >
+    <div className="extras-panel" role="group" aria-label="New poll" data-testid="poll-form" onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), submit())}>
       <strong>New poll</strong>
-      <input name="pollQuestion" placeholder="Ask a question" value={q} onChange={(e) => setQ(e.target.value)} maxLength={300} aria-label="Question" required />
+      <input name="pollQuestion" placeholder="Ask a question" value={q} onChange={(e) => setQ(e.target.value)} maxLength={300} aria-label="Question" />
       {options.map((o, i) => (
         <input
           key={i}
@@ -274,11 +271,11 @@ function PollForm({ onSend, onCancel }: { onSend: (c: { kind: 'poll'; body: stri
         <button type="button" className="btn quiet small" onClick={onCancel}>
           Cancel
         </button>
-        <button type="submit" className="btn small" disabled={!q.trim() || filled.length < 2 || dupes}>
+        <button type="button" className="btn small" data-testid="send-poll" disabled={!ready} onClick={submit}>
           Send poll
         </button>
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -327,35 +324,31 @@ const round = (x: number) => Math.round(x * 1e6) / 1e6;
 function ContactForm({ onSend, onCancel }: { onSend: (c: { kind: 'contact'; extras: MessageExtras }) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    setErr(null);
+    const handle = name.trim().replace(/^@/, '').toLowerCase();
+    if (!handle) return;
+    try {
+      const u = await chatApi<{ id: string }>('GET', `users/${encodeURIComponent(handle)}`);
+      await onSend({ kind: 'contact', extras: { contactUserId: u.id } });
+    } catch {
+      setErr('No one with that username');
+    }
+  };
   return (
-    <form
-      className="extras-panel"
-      data-testid="contact-form"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        setErr(null);
-        const handle = name.trim().replace(/^@/, '').toLowerCase();
-        if (!handle) return;
-        try {
-          const u = await chatApi<{ id: string }>('GET', `users/${encodeURIComponent(handle)}`);
-          await onSend({ kind: 'contact', extras: { contactUserId: u.id } });
-        } catch {
-          setErr('No one with that username');
-        }
-      }}
-    >
+    <div className="extras-panel" role="group" aria-label="Share a contact" data-testid="contact-form" onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), void submit())}>
       <strong>Share a contact</strong>
-      <input name="contactUsername" placeholder="Their username" value={name} onChange={(e) => setName(e.target.value)} aria-label="Username to share" required />
+      <input name="contactUsername" placeholder="Their username" value={name} onChange={(e) => setName(e.target.value)} aria-label="Username to share" />
       {err && <small className="error">{err}</small>}
       <div className="extras-actions">
         <button type="button" className="btn quiet small" onClick={onCancel}>
           Cancel
         </button>
-        <button type="submit" className="btn small">
+        <button type="button" className="btn small" data-testid="send-contact" onClick={() => void submit()}>
           Send contact
         </button>
       </div>
-    </form>
+    </div>
   );
 }
 

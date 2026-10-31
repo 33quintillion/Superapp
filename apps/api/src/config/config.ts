@@ -64,6 +64,15 @@ const schema = z.object({
   BREVO_API_BASE: z.url().optional(),
   /** Gives up on a provider that does not answer, so a request that sends mail never hangs. */
   MAIL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
+
+  /**
+   * Translation and voice-to-text, through an AI gateway that speaks Gemini's generateContent
+   * (the Neon AI Gateway: the branch's bare host, with /gemini/v1beta/... appended). Off when unset.
+   */
+  AI_GATEWAY_BASE_URL: z.url().optional(),
+  AI_GATEWAY_TOKEN: z.string().min(10).optional(),
+  AI_MODEL: z.string().regex(/^[a-z0-9][a-z0-9.-]{1,60}$/).default('gemini-3-flash'),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
   SMTP_URL: z.string().optional(),
   /** Sign-in for the SMTP server, kept apart from SMTP_URL so each can be pasted as is (no URL encoding). */
   SMTP_USER: z.string().optional(),
@@ -238,6 +247,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.MAIL_TRANSPORT === 'brevo' && !parseMailbox(cfg.MAIL_FROM)) {
     throw new Error('MAIL_FROM must be an address such as "SuperApp <no-reply@example.com>"');
+  }
+  if (Boolean(cfg.AI_GATEWAY_BASE_URL) !== Boolean(cfg.AI_GATEWAY_TOKEN)) {
+    throw new Error('AI_GATEWAY_BASE_URL and AI_GATEWAY_TOKEN go together: set both or neither');
   }
   if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
     throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');

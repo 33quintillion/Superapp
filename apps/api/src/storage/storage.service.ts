@@ -122,6 +122,13 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
     return Buffer.from(arr.subarray(0, bytes));
   }
 
+  /** A whole object, refusing anything larger than maxBytes. */
+  async read(key: string, maxBytes: number): Promise<Buffer> {
+    const r = await this.internal.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (Number(r.ContentLength ?? 0) > maxBytes) throw new Error('object too large');
+    return Buffer.from(await r.Body!.transformToByteArray());
+  }
+
   async put(key: string, body: Buffer, contentType: string) {
     await this.internal.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }));
   }

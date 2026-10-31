@@ -38,6 +38,8 @@ import { MessagingController } from './messaging/messaging.controller';
 import { MessagingService } from './messaging/messaging.service';
 import { GroupsController } from './messaging/groups.controller';
 import { GroupsService } from './messaging/groups.service';
+import { AiController } from './ai/ai.controller';
+import { AiService } from './ai/ai.service';
 import { ExpiryService } from './messaging/expiry.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
@@ -70,6 +72,7 @@ export class AppModule {
         SessionsController,
         UsersController,
         ContactCodeController,
+        AiController,
         SafetyController,
         MessagingController,
         GroupsController,
@@ -98,6 +101,7 @@ export class AppModule {
         LinkService,
         UsersService,
         ContactCodeService,
+        AiService,
         SafetyService,
         StorageService,
         MediaService,
