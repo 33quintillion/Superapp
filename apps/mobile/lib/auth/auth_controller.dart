@@ -1,10 +1,11 @@
 import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
+import 'phone_verifier.dart';
 import 'session_store.dart';
 
 class Profile {
-  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified, this.avatarMediaId});
+  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified, this.avatarMediaId, this.phone});
   factory Profile.fromJson(Map<String, dynamic> j) => Profile(
         id: j['id'] as String? ?? '',
         username: j['username'] as String? ?? '',
@@ -12,6 +13,7 @@ class Profile {
         email: j['email'] as String? ?? '',
         emailVerified: j['emailVerified'] as bool? ?? false,
         avatarMediaId: j['avatarMediaId'] as String?,
+        phone: j['phone'] as String?,
       );
   final String id;
   final String username;
@@ -19,20 +21,27 @@ class Profile {
   final String email;
   final bool emailVerified;
   final String? avatarMediaId;
+  /// Set for accounts made with a phone number; '' username and email mean none yet.
+  final String? phone;
 }
 
-enum AuthStatus { unknown, signedOut, mfaRequired, signedIn }
+/// needsName: the phone number is confirmed but has no account yet.
+enum AuthStatus { unknown, signedOut, mfaRequired, needsName, signedIn }
 
 /// Owns the signed-in state. Every transition is driven by a real API response.
 class AuthController extends ChangeNotifier {
-  AuthController(this.api, this.store);
+  AuthController(this.api, this.store, {this.phone = const UnavailablePhoneVerifier()});
   final ApiClient api;
   final SessionStore store;
+  final PhoneVerifier phone;
 
   AuthStatus status = AuthStatus.unknown;
   Profile? profile;
   String? _accessToken;
   String? _mfaToken;
+  String? _signupToken;
+  /// The confirmed number waiting for a name (AuthStatus.needsName).
+  String? signupPhone;
 
   Future<void> restore() async {
     final refresh = await store.readRefreshToken();
@@ -53,6 +62,57 @@ class AuthController extends ChangeNotifier {
       return _set(AuthStatus.mfaRequired);
     }
     await _adopt(TokenPair.fromJson(res));
+  }
+
+  /// Signs in with the ID token from a confirmed SMS code. A new number moves to
+  /// [AuthStatus.needsName]; an account with two-step on moves to the code step.
+  Future<void> phoneSignIn(String idToken) async {
+    final res = (await api.send('POST', '/v1/auth/phone', body: {'idToken': idToken, 'deviceName': _deviceName()}))!;
+    if (res['signupRequired'] == true) {
+      _signupToken = res['signupToken'] as String;
+      signupPhone = res['phone'] as String?;
+      return _set(AuthStatus.needsName);
+    }
+    if (res['mfaRequired'] == true) {
+      _mfaToken = res['mfaToken'] as String;
+      return _set(AuthStatus.mfaRequired);
+    }
+    await _adopt(TokenPair.fromJson(res));
+  }
+
+  /// Creates the account for the confirmed number. The username is optional.
+  Future<void> completePhoneSignUp({required String displayName, String? username}) async {
+    final res = await api.send('POST', '/v1/auth/phone/complete', body: {
+      'signupToken': _signupToken,
+      'displayName': displayName,
+      if (username != null && username.isNotEmpty) 'username': username.toLowerCase(),
+      'deviceName': _deviceName(),
+    });
+    _signupToken = null;
+    signupPhone = null;
+    await _adopt(TokenPair.fromJson(res!));
+  }
+
+  void cancelPhoneSignUp() {
+    _signupToken = null;
+    signupPhone = null;
+    _set(AuthStatus.signedOut);
+  }
+
+  /// Adds or changes the optional email (receipts, banking, payouts); a link confirms it.
+  Future<void> setEmail(String email) async {
+    await authed('PUT', '/v1/me/email', body: {'email': email});
+    await _reloadProfile();
+  }
+
+  Future<void> removeEmail() async {
+    await authed('DELETE', '/v1/me/email');
+    await _reloadProfile();
+  }
+
+  Future<void> _reloadProfile() async {
+    profile = Profile.fromJson((await authed('GET', '/v1/me'))!);
+    notifyListeners();
   }
 
   Future<void> submitMfa(String code) async {

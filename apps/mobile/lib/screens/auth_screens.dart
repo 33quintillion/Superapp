@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_controller.dart';
+import '../auth/phone_verifier.dart';
 import '../calls/call_controller.dart';
 import '../calls/call_engine.dart';
 import '../chat/chat_controller.dart';
@@ -58,6 +59,8 @@ mixin _Submitting<T extends StatefulWidget> on State<T> {
     try {
       await action();
     } on ApiException catch (e) {
+      if (mounted) setState(() => error = e.message);
+    } on PhoneVerificationException catch (e) {
       if (mounted) setState(() => error = e.message);
     } finally {
       if (mounted) setState(() => busy = false);
@@ -157,6 +160,172 @@ class _RegisterScreenState extends State<RegisterScreen> with _Submitting {
       ]);
 }
 
+/// Phone sign-in and sign-up in one: a code is texted to the number, and the confirmed
+/// number either signs in or, if it's new, goes on to pick a name.
+class PhoneSignInScreen extends StatefulWidget {
+  const PhoneSignInScreen({super.key, required this.auth});
+  final AuthController auth;
+  @override
+  State<PhoneSignInScreen> createState() => _PhoneSignInScreenState();
+}
+
+class _PhoneSignInScreenState extends State<PhoneSignInScreen> with _Submitting {
+  final _phone = TextEditingController();
+  final _code = TextEditingController();
+  String? _handle;
+  String _number = '';
+
+  Future<void> _send() async {
+    final number = toE164(_phone.text);
+    if (!isE164(number)) throw PhoneVerificationException('That phone number doesn’t look right.');
+    final handle = await widget.auth.phone.sendCode(number);
+    if (!mounted) return;
+    setState(() {
+      _number = number;
+      _handle = handle;
+      _code.clear();
+    });
+  }
+
+  Future<void> _confirm() async {
+    final idToken = await widget.auth.phone.confirm(_handle!, _code.text.trim());
+    await widget.auth.phoneSignIn(idToken);
+  }
+
+  @override
+  Widget build(BuildContext context) => _FormPage(
+        title: 'Welcome to Nexa',
+        children: _handle == null
+            ? [
+                const Text('Enter your phone number. We’ll text you a code to sign in, or to set up your account if you’re new.'),
+                const SizedBox(height: NexaSpace.md),
+                TextField(
+                  key: const Key('phone'),
+                  controller: _phone,
+                  keyboardType: TextInputType.phone,
+                  autofillHints: const [AutofillHints.telephoneNumber],
+                  decoration: const InputDecoration(labelText: 'Phone number', prefixText: '+91 ', helperText: 'Other countries: start with + and the country code'),
+                ),
+                const SizedBox(height: NexaSpace.lg),
+                errorText(context),
+                FilledButton(key: const Key('send-code'), onPressed: busy ? null : () => run(_send), child: Text(busy ? 'Sending…' : 'Send code')),
+                TextButton(
+                  key: const Key('email-sign-in'),
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SignInScreen(auth: widget.auth))),
+                  child: const Text('Signed up with email before? Sign in with email'),
+                ),
+              ]
+            : [
+                Text('Enter the 6-digit code we sent to $_number.'),
+                const SizedBox(height: NexaSpace.md),
+                TextField(
+                  key: const Key('sms-code'),
+                  controller: _code,
+                  keyboardType: TextInputType.number,
+                  autofillHints: const [AutofillHints.oneTimeCode],
+                  maxLength: 6,
+                  decoration: const InputDecoration(labelText: 'Code'),
+                ),
+                errorText(context),
+                FilledButton(key: const Key('verify-code'), onPressed: busy ? null : () => run(_confirm), child: Text(busy ? 'Checking…' : 'Continue')),
+                TextButton(onPressed: busy ? null : () => run(_send), child: const Text('Send a new code')),
+                TextButton(key: const Key('change-number'), onPressed: busy ? null : () => setState(() => _handle = null), child: const Text('Change number')),
+              ],
+      );
+}
+
+/// A new phone number's account: a name, and optionally a username.
+class NameScreen extends StatefulWidget {
+  const NameScreen({super.key, required this.auth});
+  final AuthController auth;
+  @override
+  State<NameScreen> createState() => _NameScreenState();
+}
+
+class _NameScreenState extends State<NameScreen> with _Submitting {
+  final _name = TextEditingController();
+  final _username = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) => _FormPage(title: 'Create your account', children: [
+        Text('${widget.auth.signupPhone ?? 'Your number'} is confirmed. What should people call you?'),
+        const SizedBox(height: NexaSpace.md),
+        TextField(key: const Key('display-name-field'), controller: _name, autofillHints: const [AutofillHints.name], decoration: const InputDecoration(labelText: 'Your name')),
+        const SizedBox(height: NexaSpace.md),
+        TextField(
+          key: const Key('username-field'),
+          controller: _username,
+          decoration: const InputDecoration(labelText: 'Username (optional)', helperText: 'Lets people find you without your number'),
+        ),
+        const SizedBox(height: NexaSpace.lg),
+        errorText(context),
+        FilledButton(
+          key: const Key('create-account'),
+          onPressed: busy ? null : () => run(() => widget.auth.completePhoneSignUp(displayName: _name.text.trim(), username: _username.text.trim())),
+          child: Text(busy ? 'Creating…' : 'Create account'),
+        ),
+        TextButton(onPressed: busy ? null : widget.auth.cancelPhoneSignUp, child: const Text('Use a different number')),
+      ]);
+}
+
+/// The optional email: for receipts and banking, and needed before a business takes payouts.
+class EmailScreen extends StatefulWidget {
+  const EmailScreen({super.key, required this.auth});
+  final AuthController auth;
+  @override
+  State<EmailScreen> createState() => _EmailScreenState();
+}
+
+class _EmailScreenState extends State<EmailScreen> with _Submitting {
+  late final _email = TextEditingController(text: widget.auth.profile?.email ?? '');
+  bool _sent = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.auth.profile;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Email')),
+      body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
+        const Text('For receipts and banking. A business needs a confirmed email to receive payouts. You still sign in with your phone number.'),
+        const SizedBox(height: NexaSpace.md),
+        if (p != null && p.email.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: NexaSpace.md),
+            child: Text(p.emailVerified ? '${p.email} is confirmed.' : '${p.email} isn’t confirmed yet. Check your inbox for the link.', key: const Key('email-status')),
+          ),
+        TextField(key: const Key('email-field'), controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email], decoration: const InputDecoration(labelText: 'Email')),
+        const SizedBox(height: NexaSpace.lg),
+        errorText(context),
+        if (_sent) const Padding(padding: EdgeInsets.only(bottom: NexaSpace.md), child: Text('We sent a confirmation link. Open it to confirm your email.', key: Key('email-sent'))),
+        FilledButton(
+          key: const Key('save-email'),
+          onPressed: busy
+              ? null
+              : () => run(() async {
+                    await widget.auth.setEmail(_email.text.trim());
+                    if (mounted) setState(() => _sent = true);
+                  }),
+          child: Text(busy ? 'Saving…' : 'Save and send link'),
+        ),
+        if (p != null && p.email.isNotEmpty)
+          TextButton(
+            key: const Key('remove-email'),
+            onPressed: busy
+                ? null
+                : () => run(() async {
+                      await widget.auth.removeEmail();
+                      if (mounted) {
+                        _email.clear();
+                        setState(() => _sent = false);
+                      }
+                    }),
+            child: const Text('Remove email'),
+          ),
+      ]),
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.auth, this.connectSocket, this.callEngine, this.outbox});
   final AuthController auth;
@@ -234,13 +403,22 @@ class _HomeScreenState extends State<HomeScreen> {
               return ListTile(
                 leading: Avatar(auth: auth, mediaId: p.avatarMediaId, name: p.displayName),
                 title: Text(p.displayName, key: const Key('display-name')),
-                subtitle: Text('@${p.username}'),
+                subtitle: Text(p.username.isNotEmpty ? '@${p.username}' : (p.phone ?? '')),
                 trailing: IconButton(key: const Key('edit-photo'), tooltip: 'Profile photo', icon: const Icon(Icons.photo_camera_outlined), onPressed: () => _editPhoto(context)),
               );
             },
           ),
-          if (!p.emailVerified)
+          if (p.email.isNotEmpty && !p.emailVerified)
             const ListTile(leading: Icon(Icons.mark_email_unread_outlined), title: Text('Check your inbox to confirm your email address.')),
+          if (p.phone != null)
+            ListTile(
+              key: const Key('open-email'),
+              leading: const Icon(Icons.alternate_email),
+              title: Text(p.email.isEmpty ? 'Add an email' : 'Email'),
+              subtitle: Text(p.email.isEmpty ? 'For receipts, banking and payouts' : p.email),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EmailScreen(auth: auth))),
+            ),
           const Divider(),
           ListenableBuilder(
             listenable: chat,

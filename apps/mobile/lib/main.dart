@@ -36,8 +36,9 @@ class NexaApp extends StatelessWidget {
           listenable: auth,
           builder: (context, _) => switch (auth.status) {
             AuthStatus.unknown => const Scaffold(body: Center(child: CircularProgressIndicator())),
-            AuthStatus.signedOut => SignInScreen(auth: auth),
+            AuthStatus.signedOut => auth.phone.available ? PhoneSignInScreen(auth: auth) : SignInScreen(auth: auth),
             AuthStatus.mfaRequired => MfaScreen(auth: auth),
+            AuthStatus.needsName => NameScreen(auth: auth),
             AuthStatus.signedIn => HomeScreen(auth: auth, connectSocket: connectSocket, callEngine: callEngine, outbox: outbox),
           },
         ),
