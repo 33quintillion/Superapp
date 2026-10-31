@@ -40,6 +40,11 @@
   display: flex;
   flex-direction: column;
 }
+/* Grid columns shrink to the card, not to their widest line. */
+.intro,
+.side {
+  min-width: 0;
+}
 
 .greeting {
   margin: 0 0 var(--space-sm);
