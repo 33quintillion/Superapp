@@ -7,6 +7,11 @@ import type { AccessClaims } from '../auth/token.service';
 import {
   ChangesQuery,
   ConversationsQuery,
+  DisappearingBody,
+  LiveLocationBody,
+  StarBody,
+  StarredQuery,
+  VoteBody,
   EditBody,
   ForwardBody,
   MembershipPatch,
@@ -112,6 +117,45 @@ export class MessagingController {
   async forward(@Auth() a: AccessClaims, @Param('id') mid: string, @Body() body: unknown) {
     const { conversationIds, clientId } = parse(ForwardBody, body);
     return { messages: await this.messaging.forward(a.userId, id(mid), conversationIds, clientId) };
+  }
+
+  @Put('conversations/:id/disappearing')
+  disappearing(@Auth() a: AccessClaims, @Param('id') cid: string, @Body() body: unknown) {
+    return this.messaging.setDisappearing(a.userId, id(cid), parse(DisappearingBody, body).seconds);
+  }
+
+  @Put('messages/:id/vote')
+  vote(@Auth() a: AccessClaims, @Param('id') mid: string, @Body() body: unknown) {
+    return this.messaging.vote(a.userId, id(mid), parse(VoteBody, body).options);
+  }
+
+  @Put('messages/:id/star')
+  star(@Auth() a: AccessClaims, @Param('id') mid: string, @Body() body: unknown) {
+    return this.messaging.star(a.userId, id(mid), parse(StarBody, body).starred);
+  }
+
+  @Get('messages/starred')
+  starred(@Auth() a: AccessClaims, @Query() q: unknown) {
+    return this.messaging.starred(a.userId, parse(StarredQuery, q));
+  }
+
+  /** A view-once photo or video: one short download link per person. */
+  @Post('messages/:id/open')
+  @HttpCode(200)
+  open(@Auth() a: AccessClaims, @Param('id') mid: string) {
+    return this.messaging.openViewOnce(a.userId, id(mid));
+  }
+
+  @Put('messages/:id/location')
+  liveLocation(@Auth() a: AccessClaims, @Param('id') mid: string, @Body() body: unknown) {
+    const { lat, lng } = parse(LiveLocationBody, body);
+    return this.messaging.updateLiveLocation(a.userId, id(mid), lat, lng);
+  }
+
+  @Post('messages/:id/location/stop')
+  @HttpCode(200)
+  stopLive(@Auth() a: AccessClaims, @Param('id') mid: string) {
+    return this.messaging.stopLiveLocation(a.userId, id(mid));
   }
 
   @Get('messages/search')

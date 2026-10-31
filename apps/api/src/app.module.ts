@@ -38,6 +38,7 @@ import { MessagingController } from './messaging/messaging.controller';
 import { MessagingService } from './messaging/messaging.service';
 import { GroupsController } from './messaging/groups.controller';
 import { GroupsService } from './messaging/groups.service';
+import { ExpiryService } from './messaging/expiry.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
 import { PushController } from './push/push.controller';
@@ -103,6 +104,7 @@ export class AppModule {
         PushWorker,
         MessagingService,
         GroupsService,
+        ExpiryService,
         FollowsService,
         PostsService,
         StoriesService,

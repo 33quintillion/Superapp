@@ -25,6 +25,7 @@ export const TEST_ENV = {
   PUSH_WORKER_ENABLED: 'false',
   STORY_SWEEP_INTERVAL_SECONDS: '0',
   RETENTION_SWEEP_INTERVAL_SECONDS: '0',
+  DISAPPEAR_SWEEP_INTERVAL_SECONDS: '0',
   // Test passwords such as "correct horse battery staple" are famous leaks; auth.e2e turns it on against a stand-in.
   PASSWORD_BREACH_CHECK: 'off',
 };

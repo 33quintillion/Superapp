@@ -14,7 +14,16 @@ const PRUNE_EVERY_MS = 60_000;
 /** Finished jobs are kept this long for troubleshooting, then deleted. */
 const KEEP_FINISHED_DAYS = 7;
 
-const KIND_LABEL: Record<string, string> = { image: 'Photo', video: 'Video', audio: 'Audio', voice: 'Voice message', file: 'File' };
+const KIND_LABEL: Record<string, string> = {
+  image: 'Photo',
+  video: 'Video',
+  audio: 'Audio',
+  voice: 'Voice message',
+  file: 'File',
+  poll: 'Poll',
+  location: 'Location',
+  contact: 'Contact',
+};
 
 interface JobRow {
   id: string;

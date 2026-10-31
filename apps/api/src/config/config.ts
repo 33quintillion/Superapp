@@ -103,6 +103,9 @@ const schema = z.object({
   /** How often old sessions, spent links and abandoned uploads are deleted (docs/security-privacy.md). 0 turns it off on this instance. */
   RETENTION_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(3600),
 
+  /** How often disappearing messages whose time is up are removed. 0 turns it off on this instance. */
+  DISAPPEAR_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(30),
+
   /** Runs the push delivery loop in this process. Turn off on instances that should only serve requests. */
   PUSH_WORKER_ENABLED: z.stringbool().default(true),
   PUSH_WORKER_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),
