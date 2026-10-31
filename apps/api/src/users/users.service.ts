@@ -306,7 +306,7 @@ export class UsersService {
       await this.db.query('DELETE FROM follows WHERE follower_id = $1 OR followee_id = $1', [userId], tx);
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),
-           email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL,
+           email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL, contact_code = NULL,
            password_hash = NULL, display_name = '', bio = '', status_text = '', avatar_media_id = NULL,
            mfa_totp_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL, mfa_last_counter = NULL
          WHERE id = $1`,

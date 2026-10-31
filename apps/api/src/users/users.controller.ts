@@ -4,6 +4,7 @@ import { emailSchema, parse, usernameSchema } from '../common/zod';
 import { IdentityProofBody } from '../auth/auth.controller';
 import { Auth, AuthGuard } from '../auth/auth.guard';
 import type { AccessClaims } from '../auth/token.service';
+import { ContactCodeService } from './contact-code.service';
 import { CONTACTS_MAX, UsersService } from './users.service';
 
 const ProfilePatch = z
@@ -50,6 +51,29 @@ const ContactsMatch = z
   }));
 
 
+
+/** "My QR code": see your code, reset it, and look up a scanned one. */
+@Controller('v1')
+@UseGuards(AuthGuard)
+export class ContactCodeController {
+  constructor(private readonly codes: ContactCodeService) {}
+
+  @Get('me/contact-code')
+  mine(@Auth() a: AccessClaims) {
+    return this.codes.mine(a.userId);
+  }
+
+  @Post('me/contact-code/reset')
+  @HttpCode(200)
+  reset(@Auth() a: AccessClaims) {
+    return this.codes.reset(a.userId);
+  }
+
+  @Get('contact-codes/:code')
+  lookup(@Auth() a: AccessClaims, @Param('code') code: string) {
+    return this.codes.lookup(a.userId, parse(z.string().max(40), code));
+  }
+}
 
 @Controller('v1')
 @UseGuards(AuthGuard)

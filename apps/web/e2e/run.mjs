@@ -286,6 +286,23 @@ async function chatFlow(browser, API, tag, step) {
   await ben.page.waitForSelector(`[data-testid=contact-card]:has-text("@${ben.username}")`);
   step('location and a contact card shared');
 
+  // My QR code: Ben finds Ana by her code, and a reset code stops working.
+  await ana.page.goto(`${WEB}/account`);
+  const anaCode = (await ana.page.locator('[data-testid=my-code]').innerText()).trim();
+  assert(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/.test(anaCode), `code shown as XXXXX-XXXXX: ${anaCode}`);
+  await ben.page.goto(`${WEB}/add/${anaCode}`);
+  await ben.page.waitForSelector('[data-testid=code-person]:has-text("Ana")');
+  await ben.page.click('[data-testid=message-person]');
+  await ben.page.waitForURL(/\/chats\?c=/);
+  await ben.page.waitForSelector('[data-testid="peer-name"]:has-text("Ana")');
+  await ana.page.click('[data-testid=reset-code]');
+  await ana.page.waitForFunction((old) => document.querySelector('[data-testid=my-code]')?.textContent?.trim() !== old, anaCode);
+  await ben.page.goto(`${WEB}/add/${anaCode}`);
+  await ben.page.waitForSelector('[data-testid=code-unknown]');
+  await ana.page.goto(`${WEB}/chats`);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  step('my QR code: found by code, opens the chat, and stops working once reset');
+
   const proxied = await ana.page.evaluate(async () => (await fetch('/api/chat/me/export')).status);
   assert(proxied === 404, 'chat proxy only exposes messaging endpoints');
   const csrf = await fetch(`${WEB}/api/chat/conversations/direct`, { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });

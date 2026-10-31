@@ -16,11 +16,28 @@ String? linkCodeFrom(String raw) {
   return RegExp(r'^[2-9A-HJKMNP-Z]{8}$').hasMatch(code) ? code : null;
 }
 
+/// What a personal "My QR code" holds before the code itself.
+const contactPrefix = 'SUPERAPP-ADD:';
+
+/// The 10-character code in a scanned "My QR code" or in what someone typed, or null.
+String? contactCodeFrom(String raw) {
+  final text = raw.trim().toUpperCase();
+  final body = text.startsWith(contactPrefix) ? text.substring(contactPrefix.length) : text;
+  final code = body.replaceAll(RegExp(r'[^0-9A-Z]'), '');
+  return RegExp(r'^[2-9A-HJKMNP-Z]{10}$').hasMatch(code) ? code : null;
+}
+
 /// Opens the camera and returns the first SuperApp link code it sees.
-Future<String?> scanLinkCode(BuildContext context) => Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const _ScanScreen()));
+Future<String?> scanLinkCode(BuildContext context) => scanCode(context, linkCodeFrom, 'Point the camera at the code on your computer’s screen.');
+
+/// Opens the camera and returns the first code [parse] accepts.
+Future<String?> scanCode(BuildContext context, String? Function(String raw) parse, String hint) =>
+    Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => _ScanScreen(parse: parse, hint: hint)));
 
 class _ScanScreen extends StatefulWidget {
-  const _ScanScreen();
+  const _ScanScreen({required this.parse, required this.hint});
+  final String? Function(String raw) parse;
+  final String hint;
   @override
   State<_ScanScreen> createState() => _ScanScreenState();
 }
@@ -36,7 +53,7 @@ class _ScanScreenState extends State<_ScanScreen> {
             onDetect: (capture) {
               if (_done) return;
               for (final b in capture.barcodes) {
-                final code = b.rawValue == null ? null : linkCodeFrom(b.rawValue!);
+                final code = b.rawValue == null ? null : widget.parse(b.rawValue!);
                 if (code != null) {
                   _done = true;
                   Navigator.of(context).pop(code);
@@ -45,11 +62,11 @@ class _ScanScreenState extends State<_ScanScreen> {
               }
             },
           ),
-          const Align(
+          Align(
             alignment: Alignment.bottomCenter,
             child: Padding(
-              padding: EdgeInsets.all(NexaSpace.xl),
-              child: Text('Point the camera at the code on your computer’s screen.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 16)),
+              padding: const EdgeInsets.all(NexaSpace.xl),
+              child: Text(widget.hint, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 16)),
             ),
           ),
         ]),

@@ -119,6 +119,13 @@ class ChatController extends ChangeNotifier {
     return c.id;
   }
 
+  /// Opens (or finds) the direct chat with someone found by their QR code.
+  Future<String> openDirectById(String userId) async {
+    final c = Conversation.fromJson((await auth.authed('POST', '/v1/conversations/direct', body: {'userId': userId}))!);
+    _adopt(c);
+    return c.id;
+  }
+
   Future<String> createGroup(String title, List<String> usernames) async {
     final ids = <String>[];
     for (final u in usernames) {

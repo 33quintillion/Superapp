@@ -52,7 +52,8 @@ import { PostsService } from './social/posts.service';
 import { SocialController } from './social/social.controller';
 import { StoriesService } from './social/stories.service';
 import { StorageService } from './storage/storage.service';
-import { UsersController } from './users/users.controller';
+import { ContactCodeController, UsersController } from './users/users.controller';
+import { ContactCodeService } from './users/contact-code.service';
 import { UsersService } from './users/users.service';
 
 @Global()
@@ -68,6 +69,7 @@ export class AppModule {
         LinkController,
         SessionsController,
         UsersController,
+        ContactCodeController,
         SafetyController,
         MessagingController,
         GroupsController,
@@ -95,6 +97,7 @@ export class AppModule {
         PhoneTokenService,
         LinkService,
         UsersService,
+        ContactCodeService,
         SafetyService,
         StorageService,
         MediaService,

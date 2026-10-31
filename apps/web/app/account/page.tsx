@@ -5,6 +5,7 @@ import { removeEmail, resendVerification, revokeSession, setEmail, signOut } fro
 import { ActionForm } from '../form-ui';
 import { SignOutForm } from './sign-out-button';
 import { FindPeople } from './find-people';
+import { MyQrCode } from './my-qr';
 import { NotificationSettings } from './notifications';
 import { ProfilePhoto } from './profile-photo';
 import { SocialSettings } from './social-settings';
@@ -98,6 +99,9 @@ export default async function AccountPage() {
           <a href={`/u/${me.username}`}>View your profile</a>
         </p>
       )}
+
+      <h2>My QR code</h2>
+      <MyQrCode />
 
       <h2>Privacy</h2>
       <SocialSettings />

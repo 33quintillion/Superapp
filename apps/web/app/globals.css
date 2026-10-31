@@ -222,3 +222,10 @@ p.view-once { cursor: default; }
 .extras-panel { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; width: min(340px, 86vw); display: flex; flex-direction: column; gap: var(--space-sm); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: var(--space-md); box-shadow: 0 8px 24px rgba(8, 16, 31, 0.18); }
 .extras-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); justify-content: space-between; align-items: center; }
 .disappearing select { font: inherit; font-size: var(--font-size-caption); padding: 6px; border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+
+/* My QR code */
+.my-qr { display: grid; grid-template-columns: 200px 1fr; gap: var(--space-xl); align-items: start; }
+.my-qr-code { width: 200px; height: 200px; border-radius: var(--radius-md); border: 1px solid var(--color-border); }
+.my-qr p { margin: 0; }
+.typed-code { font-variant-numeric: tabular-nums; letter-spacing: 0.08em; }
+@media (max-width: 560px) { .my-qr { grid-template-columns: 1fr; justify-items: center; } }

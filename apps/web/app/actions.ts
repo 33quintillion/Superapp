@@ -195,3 +195,17 @@ export async function revokeSession(f: FormData) {
 export async function resendVerification() {
   await authed('POST', '/v1/auth/verify-email/resend');
 }
+
+/** "My QR code": a new code; the old one stops working. */
+export async function resetContactCode() {
+  await authed('POST', '/v1/me/contact-code/reset');
+  revalidatePath('/account');
+}
+
+/** From someone's code: opens (or finds) the chat with them. */
+export async function openChatWith(f: FormData) {
+  const userId = field(f, 'userId');
+  const c = await authed<{ id: string }>('POST', '/v1/conversations/direct', { userId });
+  redirect(`/chats?c=${encodeURIComponent(c.id)}`);
+}
+

@@ -17,6 +17,7 @@ import 'business_screens.dart';
 import 'call_screens.dart';
 import 'chat_screens.dart';
 import 'link_screens.dart';
+import 'qr_screens.dart';
 import 'social_screens.dart';
 
 /// Shared scaffold for the signed-out forms: one column, max 420 px, scrolls on small screens.
@@ -448,6 +449,14 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Find people you know'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FindPeopleScreen(auth: auth))),
+          ),
+          ListTile(
+            key: const Key('open-my-qr'),
+            leading: const Icon(Icons.qr_code_2),
+            title: const Text('My QR code'),
+            subtitle: const Text('Scan to chat, or show yours'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MyQrScreen(chat: chat))),
           ),
           ListTile(
             key: const Key('open-communities'),

@@ -12,6 +12,7 @@ import 'package:nexa/chat/chat_models.dart';
 import 'package:nexa/chat/location_source.dart';
 import 'package:nexa/chat/realtime.dart';
 import 'package:nexa/main.dart';
+import 'package:nexa/screens/link_screens.dart';
 
 import 'a11y_helpers.dart';
 
@@ -34,6 +35,7 @@ class Server {
   int seq = 0;
   int? disappear;
   final starred = <String>{};
+  String contactCode = 'ADAPQR2345';
 
   Map<String, dynamic> add(String sender, String kind, {String body = '', Map<String, dynamic> extra = const {}, String? clientId}) {
     seq += 1;
@@ -111,6 +113,15 @@ class Server {
         return json(200, {'changes': <Object>[], 'nextSince': seq, 'hasMore': false});
       case ('GET', '/v1/messages/starred'):
         return json(200, {'messages': [for (final m in messages) if (starred.contains(m['id'])) m], 'nextCursor': null});
+      case ('GET', '/v1/me/contact-code'):
+        return json(200, {'code': contactCode, 'qr': 'SUPERAPP-ADD:$contactCode'});
+      case ('POST', '/v1/me/contact-code/reset'):
+        contactCode = 'NEWPQR2345';
+        return json(200, {'code': contactCode, 'qr': 'SUPERAPP-ADD:$contactCode'});
+      case ('GET', '/v1/contact-codes/BENPQR2345'):
+        return json(200, {'id': 'ben', 'username': 'ben', 'displayName': 'Ben', 'avatarMediaId': null, 'self': false});
+      case ('POST', '/v1/conversations/direct'):
+        return json(200, conv());
       case ('PUT', '/v1/conversations/c1/disappearing'):
         disappear = (jsonDecode(req.body) as Map)['seconds'] as int?;
         return json(200, conv());
@@ -374,6 +385,48 @@ void main() {
     await tester.tap(find.byKey(const Key('menu-starred')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('starred-m1')), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  test('reads personal QR codes, scanned or typed', () {
+    expect(contactCodeFrom('SUPERAPP-ADD:BENPQR2345'), 'BENPQR2345');
+    expect(contactCodeFrom('benpqr-2345'), 'BENPQR2345');
+    expect(contactCodeFrom('SUPERAPP-LINK:ABCD2345'), isNull, reason: 'a computer-link code is not a contact');
+    expect(contactCodeFrom('BENPQR2341'), isNull, reason: '1 is never used');
+  });
+
+  testWidgets('My QR code: shows yours, finds someone by their code and opens the chat, and resets', (tester) async {
+    final server = Server();
+    final auth = await signedIn(server);
+    await tester.pumpWidget(NexaApp(auth: auth, connectSocket: server.connect));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('open-my-qr')));
+    await tester.tap(find.byKey(const Key('open-my-qr')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('my-qr')), findsOneWidget);
+    expect(find.text('ADAPQ-R2345'), findsOneWidget);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('type-contact-code')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('typed-contact-code')), 'benpqr-2345');
+    await tester.tap(find.byKey(const Key('find-contact')));
+    await tester.pumpAndSettle();
+    expect(find.text('Ben'), findsWidgets);
+    await tester.tap(find.byKey(const Key('message-person')));
+    await tester.pumpAndSettle();
+    expect(server.bodies['POST /v1/conversations/direct'], {'userId': 'ben'});
+    expect(find.byKey(const Key('composer')), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('reset-code')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-reset')));
+    await tester.pumpAndSettle();
+    expect(find.text('NEWPQ-R2345'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();

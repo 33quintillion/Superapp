@@ -264,3 +264,40 @@ describe('location and contacts', () => {
     expect((await send(a, cid, { kind: 'text', body: 'x', contactUserId: friend.id })).status).toBe(400);
   });
 });
+
+describe('my QR code', () => {
+  it('opens a chat with its owner, survives formatting, and stops working when reset', async () => {
+    const [a, b] = [await user(), await user()];
+    const mine = await call('GET', '/v1/me/contact-code', a);
+    expect(mine.status).toBe(200);
+    expect(mine.body.code).toMatch(/^[23456789A-HJ-NP-Z]{10}$/);
+    expect(mine.body.qr).toBe(`SUPERAPP-ADD:${mine.body.code}`);
+    // The same code each time until it's reset.
+    expect((await call('GET', '/v1/me/contact-code', a)).body.code).toBe(mine.body.code);
+
+    const seen = await call('GET', `/v1/contact-codes/${encodeURIComponent(mine.body.qr)}`, b);
+    expect(seen.status).toBe(200);
+    expect(seen.body).toMatchObject({ id: a.id, self: false, displayName: expect.any(String) });
+    expect(seen.body).not.toHaveProperty('phone');
+    const typed = mine.body.code.toLowerCase().replace(/(.{5})/, '$1-');
+    expect((await call('GET', `/v1/contact-codes/${typed}`, b)).body.id).toBe(a.id);
+    expect((await call('GET', `/v1/contact-codes/${mine.body.code}`, a)).body.self).toBe(true);
+
+    // Then they can chat as with anyone else.
+    expect((await call('POST', '/v1/conversations/direct', b, { userId: seen.body.id })).status).toBe(200);
+
+    const reset = await call('POST', '/v1/me/contact-code/reset', a);
+    expect(reset.body.code).not.toBe(mine.body.code);
+    expect((await call('GET', `/v1/contact-codes/${mine.body.code}`, b)).status).toBe(404);
+    expect((await call('GET', `/v1/contact-codes/${reset.body.code}`, b)).status).toBe(200);
+  });
+
+  it('hides people who blocked you or whom you blocked', async () => {
+    const [a, b] = [await user(), await user()];
+    const { code } = (await call('GET', '/v1/me/contact-code', a)).body;
+    await call('POST', '/v1/blocks', a, { userId: b.id });
+    expect((await call('GET', `/v1/contact-codes/${code}`, b)).status).toBe(404);
+    expect((await call('GET', '/v1/contact-codes/NOTACODE00', b)).status).toBe(404);
+    expect((await call('GET', '/v1/contact-codes/short', b)).status).toBe(404);
+  });
+});
