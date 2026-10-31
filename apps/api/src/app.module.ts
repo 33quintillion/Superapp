@@ -16,7 +16,8 @@ import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
 import { IceService } from './calls/ice.service';
-import { AuthController, EmailController, SessionsController } from './auth/auth.controller';
+import { AuthController, EmailController, LinkController, SessionsController } from './auth/auth.controller';
+import { LinkService } from './auth/link.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
 import { BreachedPasswordsService } from './auth/breached-passwords.service';
@@ -63,6 +64,7 @@ export class AppModule {
         HealthController,
         AuthController,
         EmailController,
+        LinkController,
         SessionsController,
         UsersController,
         SafetyController,
@@ -90,6 +92,7 @@ export class AppModule {
         AuthService,
         BreachedPasswordsService,
         PhoneTokenService,
+        LinkService,
         UsersService,
         SafetyService,
         StorageService,

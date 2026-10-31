@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { emailSchema, parse, passwordSchema, usernameSchema } from '../common/zod';
 import { Auth, AuthGuard, Client, ClientInfo } from './auth.guard';
 import { AuthService } from './auth.service';
+import { LinkService } from './link.service';
 import type { AccessClaims } from './token.service';
 
 const deviceName = z.string().trim().max(100).optional();
@@ -141,6 +142,39 @@ export class EmailController {
   @HttpCode(204)
   async remove(@Auth() a: AccessClaims) {
     await this.auth.removeEmail(a.userId);
+  }
+}
+
+const linkCode = z.string().trim().min(8).max(12);
+
+/** Linking a computer to a signed-in phone with a QR code or typed code (see LinkService). */
+@Controller('v1/auth/link')
+export class LinkController {
+  constructor(private readonly links: LinkService) {}
+
+  @Post()
+  create(@Body() body: unknown, @Client() client: ClientInfo) {
+    return this.links.create(parse(z.object({ deviceName }), body ?? {}).deviceName, client);
+  }
+
+  @Post('collect')
+  @HttpCode(200)
+  collect(@Body() body: unknown, @Client() client: ClientInfo) {
+    const b = parse(z.object({ code: linkCode, secret: token }), body);
+    return this.links.collect(b.code, b.secret, client);
+  }
+
+  @Get(':code')
+  @UseGuards(AuthGuard)
+  describe(@Auth() a: AccessClaims, @Param('code') code: string) {
+    return this.links.describe(a.userId, parse(linkCode, code));
+  }
+
+  @Post(':code/approve')
+  @HttpCode(204)
+  @UseGuards(AuthGuard)
+  async approve(@Auth() a: AccessClaims, @Param('code') code: string) {
+    await this.links.approve(a.userId, parse(linkCode, code));
   }
 }
 

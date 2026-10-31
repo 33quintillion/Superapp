@@ -194,6 +194,17 @@ export class AuthService {
     if ((await this.phone.verify(proof.phoneIdToken)) !== u.phone_e164) throw Errors.invalidToken();
   }
 
+  /** A session for a computer the person linked from their signed-in phone (LinkService). */
+  async openLinkedSession(userId: string, deviceName: string, client: ClientInfo): Promise<TokenPair> {
+    const u = await this.db.one<{ state: string }>('SELECT state FROM users WHERE id = $1', [userId]);
+    if (u?.state === 'suspended') throw Errors.accountSuspended();
+    if (u?.state !== 'active') throw Errors.invalidToken();
+    return this.db.tx(async (tx) => {
+      await this.audit.record({ actorId: userId, action: 'auth.device_linked', ip: client.ip, metadata: { deviceName } }, tx);
+      return this.createSession(tx, userId, deviceName, client);
+    });
+  }
+
   // --- Optional email (for receipts, banking and payouts) ---
 
   /** Adds or changes the account's email and sends a confirmation link. Not a way to sign in for phone accounts. */
