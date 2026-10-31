@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
 import { skipIfSignedIn } from '@/lib/signed-in';
 import { register } from '../actions';
-import { AuthShell } from '../auth-shell';
+import { AuthShell, PHONE_STEPS } from '../auth-shell';
 import styles from '../auth.module.css';
 import { ActionForm } from '../form-ui';
 import { PhoneSignIn } from '../phone-sign-in';
@@ -40,7 +40,7 @@ export default async function RegisterPage() {
     );
   }
   return (
-    <AuthShell>
+    <AuthShell steps={PHONE_STEPS}>
       <PhoneSignIn config={phone} />
       {email && (
         <details className={styles.email}>

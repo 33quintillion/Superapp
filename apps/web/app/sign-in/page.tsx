@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
 import { skipIfSignedIn } from '@/lib/signed-in';
 import { signIn } from '../actions';
-import { AuthShell } from '../auth-shell';
+import { AuthShell, PHONE_STEPS } from '../auth-shell';
 import styles from '../auth.module.css';
 import { ActionForm } from '../form-ui';
 import { PhoneSignIn } from '../phone-sign-in';
@@ -47,7 +47,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     );
   }
   return (
-    <AuthShell>
+    <AuthShell steps={PHONE_STEPS}>
       {notice && <p className="muted">{notice}</p>}
       <PhoneSignIn config={phone} />
       <details className={styles.email}>

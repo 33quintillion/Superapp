@@ -166,7 +166,7 @@ export function PhoneSignIn({ config }: { config: Config }) {
     >
       {step === 'number' ? (
         <>
-          <h1 className={styles.title}>Your phone number</h1>
+          <h2 className={styles.title}>Your phone number</h2>
           <p className={styles.lede}>We’ll text you a code. New to SuperApp? Your account is set up when you confirm it.</p>
           <label htmlFor="phone" className="sr-only">
             Phone number
@@ -200,7 +200,7 @@ export function PhoneSignIn({ config }: { config: Config }) {
         </>
       ) : (
         <>
-          <h1 className={styles.title}>Enter the code</h1>
+          <h2 className={styles.title}>Enter the code</h2>
           <p className={styles.sentTo}>
             Sent by SMS to <strong>{shown}</strong>
             <button type="button" className="link-btn" onClick={() => { setStep('number'); setError(null); }}>

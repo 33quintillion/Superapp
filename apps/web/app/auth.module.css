@@ -1,102 +1,122 @@
-/* Sign-in, sign-up and the steps after them. Night indigo welcome panel, marigold accent. */
-.shell {
-  --night: #1b2466;
-  --night-2: #26318a;
+/*
+ * Sign-in, sign-up and the steps after them: one calm card on a softly tinted page, steps on
+ * the left and the form on the right (the QR code joins it there later). Indigo and marigold.
+ */
+.page {
+  --tint: #eceffb;
   --marigold: #f4b23e;
-  --on-night: #ffffff;
-  --on-night-muted: #c9cff5;
-  display: grid;
-  grid-template-columns: minmax(320px, 5fr) 7fr;
+  --marigold-ink: #9a6a10;
   min-height: calc(100vh - 57px);
-}
-
-.welcome {
-  position: relative;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  gap: var(--space-xl);
-  padding: 56px 48px;
-  color: var(--on-night);
-  background:
-    radial-gradient(120% 80% at 0% 100%, var(--night-2) 0%, transparent 60%),
-    var(--night);
+  align-items: center;
+  padding: 56px var(--space-lg) 40px;
+  background: var(--tint);
+}
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme='light'])) .page {
+    --tint: #0b0e14;
+    --marigold-ink: var(--marigold);
+  }
+}
+:global(:root[data-theme='dark']) .page {
+  --tint: #0b0e14;
+  --marigold-ink: var(--marigold);
 }
 
-/* A field of faint chat bubbles: the app's shape, not decoration for its own sake. */
-.bubbles {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+.card {
+  width: 100%;
+  max-width: 940px;
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 56px;
+  padding: 52px 56px;
+  border-radius: 28px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
-.bubble {
-  position: absolute;
-  border-radius: 20px 20px 20px 6px;
-  background: rgba(255, 255, 255, 0.045);
-}
-/* Your own messages sit on the right with the tail on the other side, as in a chat. */
-.bubble.mine {
-  border-radius: 20px 20px 6px 20px;
-  background: rgba(244, 178, 62, 0.11);
+
+.intro {
+  display: flex;
+  flex-direction: column;
 }
 
 .greeting {
-  position: relative;
-  margin: 0;
-  min-height: 1.25em;
-  font-size: clamp(48px, 7vw, 88px);
-  line-height: 1.1;
+  margin: 0 0 var(--space-sm);
+  min-height: 1.3em;
+  font-size: 30px;
+  line-height: 1.3;
   font-weight: 700;
-  color: var(--marigold);
+  color: var(--marigold-ink);
 }
 .word {
   display: inline-block;
   animation: greet 2800ms ease-in-out both;
 }
 @keyframes greet {
-  0% { opacity: 0; transform: translateY(14px); }
+  0% { opacity: 0; transform: translateY(8px); }
   14%, 82% { opacity: 1; transform: none; }
-  100% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 0; transform: translateY(-6px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .word { animation: none; }
 }
 
-.pitch {
-  position: relative;
-  margin: 0;
-  max-width: 30ch;
-  font-size: 20px;
-  line-height: 1.45;
-  color: var(--on-night);
-}
-.pitchSmall {
-  position: relative;
-  margin: 0;
-  color: var(--on-night-muted);
-  font-size: var(--font-size-body);
+.heading {
+  margin: 0 0 var(--space-xl);
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
-.panel {
+/* The steps really are a sequence, so they're numbered. */
+.steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 0;
+  padding: 0;
   display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 14px;
+  align-items: baseline;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.steps li::before {
+  content: counter(step);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 48px var(--space-xl);
-  background: var(--color-bg);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
 }
-.form {
-  width: 100%;
-  max-width: 380px;
+
+.side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
+
 .title {
-  margin: 0 0 var(--space-sm);
-  font-size: 28px;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-xs);
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 600;
 }
 .lede {
-  margin: 0 0 var(--space-xl);
+  margin: 0 0 var(--space-lg);
   color: var(--color-text-muted);
 }
 
@@ -166,7 +186,7 @@
 }
 .box.active {
   border-color: var(--color-primary);
-  box-shadow: inset 0 -3px 0 var(--marigold, #f4b23e);
+  box-shadow: inset 0 -3px 0 var(--marigold);
 }
 .codeInput {
   position: absolute;
@@ -205,7 +225,7 @@
   margin-top: var(--space-xl);
   padding: 15px var(--space-lg);
   border: 0;
-  border-radius: 14px;
+  border-radius: 999px;
   background: var(--color-primary);
   color: var(--color-on-primary);
   font: inherit;
@@ -230,7 +250,7 @@
   font-variant-numeric: tabular-nums;
 }
 .fine {
-  margin: var(--space-lg) 0 0;
+  margin: var(--space-md) 0 0;
   font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
@@ -241,42 +261,46 @@
 
 /* Older email accounts: folded away under one quiet line. */
 .email {
-  margin-top: 40px;
+  margin-top: 28px;
   padding-top: var(--space-lg);
   border-top: 1px solid var(--color-border);
 }
 .email summary {
   cursor: pointer;
-  color: var(--color-text-muted);
+  color: var(--color-primary);
 }
 .email[open] summary {
   margin-bottom: var(--space-lg);
 }
 
+.note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  max-width: 940px;
+  margin: var(--space-xl) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
 @media (max-width: 860px) {
-  .shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+  .page {
+    padding: 24px var(--space-lg) 32px;
   }
-  .welcome {
-    padding: 40px var(--space-xl) 32px;
-    gap: var(--space-md);
-    min-height: 220px;
+  .card {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 32px 24px;
+    border-radius: 22px;
   }
   .greeting {
-    font-size: 52px;
+    font-size: 26px;
   }
-  .bubbles {
-    display: none;
+  .heading {
+    font-size: 26px;
+    margin-bottom: var(--space-lg);
   }
-  .pitch {
-    font-size: 17px;
-  }
-  .pitchSmall {
-    display: none;
-  }
-  .panel {
-    align-items: flex-start;
-    padding: 32px var(--space-lg) 48px;
+  .steps li {
+    font-size: 15px;
   }
 }
