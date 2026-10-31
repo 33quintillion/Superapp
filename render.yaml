@@ -8,7 +8,7 @@ services:
     plan: free
     region: singapore
     branch: main
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @nexa/api build
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --production=false && pnpm --filter @nexa/api build
     # The free plan has no pre-deploy step, so migrations run before the server starts.
     # They take an advisory lock, so two starting instances never apply the same file twice.
     startCommand: cd apps/api && node dist/src/database/migrate.cli.js && node dist/src/main.js
@@ -36,7 +36,7 @@ services:
       # Render generates 256 random bits, base64: exactly the 32 bytes this key needs.
       - key: DATA_ENCRYPTION_KEY
         generateValue: true
-      # The web service's address, e.g. https://nexa-web.onrender.com
+      # The web service's address, https://nexa-web-yuma.onrender.com on the current staging
       - key: PUBLIC_WEB_URL
         sync: false
       - key: CORS_ORIGINS
@@ -82,7 +82,7 @@ services:
     plan: free
     region: singapore
     branch: main
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @nexa/web build
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --production=false && pnpm --filter @nexa/web build
     startCommand: cd apps/web && node_modules/.bin/next start -p $PORT
     healthCheckPath: /
     envVars:
@@ -91,7 +91,7 @@ services:
       - key: NODE_ENV
         value: production
       # Free services can't talk privately, so both of these are the API's public address:
-      # https://nexa-api.onrender.com and wss://nexa-api.onrender.com
+      # https://nexa-api-3l54.onrender.com and wss://nexa-api-3l54.onrender.com on the current staging
       - key: API_INTERNAL_URL
         sync: false
       - key: API_PUBLIC_WS_URL
