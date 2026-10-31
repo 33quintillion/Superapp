@@ -96,6 +96,9 @@ export async function middleware(req: NextRequest) {
   const pair = outcome === 'invalid' ? null : outcome;
 
   if (!pair) {
+    // The session is over: this request is handled as signed out, and the cookie goes.
+    req.cookies.delete(REFRESH_COOKIE);
+    headers.set('cookie', req.cookies.toString());
     const res = next();
     res.cookies.delete(REFRESH_COOKIE);
     return res;
