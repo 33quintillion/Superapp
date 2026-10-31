@@ -198,6 +198,95 @@ class _ChatScreenState extends State<ChatScreen> {
         _text.clear();
       });
 
+  void _say(String text) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Poll, location, contact card or view-once photo.
+  Future<void> _extras() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(children: [
+          ListTile(key: const Key('extra-poll'), leading: const Icon(Icons.poll_outlined), title: const Text('Poll'), onTap: () => Navigator.pop(ctx, 'poll')),
+          ListTile(key: const Key('extra-location'), leading: const Icon(Icons.place_outlined), title: const Text('Location'), onTap: () => Navigator.pop(ctx, 'location')),
+          ListTile(key: const Key('extra-contact'), leading: const Icon(Icons.person_outline), title: const Text('Contact'), onTap: () => Navigator.pop(ctx, 'contact')),
+          ListTile(key: const Key('extra-view-once'), leading: const Icon(Icons.looks_one_outlined), title: const Text('View-once photo'), onTap: () => Navigator.pop(ctx, 'once')),
+        ]),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    try {
+      switch (choice) {
+        case 'poll':
+          final poll = await showDialog<({String q, List<String> options, bool multiple})>(context: context, builder: (_) => const _PollDialog());
+          if (poll != null) await chat.sendPoll(cid, poll.q, poll.options, multiple: poll.multiple);
+        case 'location':
+          final pick = await showDialog<({String label, int? minutes})>(context: context, builder: (_) => const _LocationDialog());
+          if (pick == null) return;
+          setState(() => _busy = true);
+          final ok = await chat.sendLocation(cid, label: pick.label, liveMinutes: pick.minutes);
+          if (!ok) _say('Turn on location and allow SuperApp to use it to share where you are.');
+        case 'contact':
+          final ctrl = TextEditingController();
+          final name = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Share a contact'),
+              content: TextField(key: const Key('contact-username'), controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Their username')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                FilledButton(key: const Key('send-contact'), onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Send')),
+              ],
+            ),
+          );
+          if (name != null && name.trim().isNotEmpty) await chat.sendContact(cid, name);
+        case 'once':
+          await _upload(() async {
+            final picked = await MediaDevices.instance.pickPhotos();
+            if (picked.isEmpty) return;
+            await chat.sendViewOnce(cid, picked.single);
+          });
+      }
+    } on ApiException catch (e) {
+      _say(e.status == 404 ? 'No one with that username' : e.message);
+    } finally {
+      if (mounted && _busy) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _chatMenu(String action) async {
+    if (action == 'starred') {
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => StarredScreen(chat: chat, conversationId: cid)));
+      return;
+    }
+    final current = chat.conversation(cid)?.disappearSeconds;
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Disappearing messages'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: NexaSpace.xl),
+            child: Text('New messages in this chat disappear for everyone after the time you choose.'),
+          ),
+          for (final secs in disappearChoices)
+            SimpleDialogOption(
+              key: Key('disappear-${secs ?? 'off'}'),
+              onPressed: () => Navigator.pop(ctx, secs ?? 0),
+              child: Text('${secs == current ? '✓ ' : ''}${disappearLabel(secs)}'),
+            ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    try {
+      await chat.setDisappearing(cid, picked == 0 ? null : picked);
+    } on ApiException catch (e) {
+      _say(e.message);
+    }
+  }
+
   Future<void> _startVoice() async {
     try {
       final r = await MediaDevices.instance.startVoice();
@@ -255,10 +344,27 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.info_outline),
                     onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => GroupInfoScreen(chat: chat, conversationId: cid))),
                   ),
+                PopupMenuButton<String>(
+                  key: const Key('chat-menu'),
+                  tooltip: 'More',
+                  onSelected: _chatMenu,
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(key: Key('menu-disappearing'), value: 'disappearing', child: Text('Disappearing messages')),
+                    PopupMenuItem(key: Key('menu-starred'), value: 'starred', child: Text('Starred messages')),
+                  ],
+                ),
                 _StatusChip(status: chat.status),
               ],
             ),
             body: Column(children: [
+              if (c?.disappearSeconds != null)
+                Container(
+                  key: const Key('disappearing-on'),
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  padding: const EdgeInsets.all(NexaSpace.sm),
+                  child: Text('⏱ Disappearing messages are on: new messages go after ${disappearLabel(c!.disappearSeconds)}.', style: Theme.of(context).textTheme.labelMedium),
+                ),
               Expanded(
                 child: ListView.builder(
                   key: const Key('thread'),
@@ -270,6 +376,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       return TextButton(onPressed: () => chat.loadEarlier(cid), child: const Text('Load earlier messages'));
                     }
                     final m = msgs[msgs.length - 1 - i];
+                    if (m.disappeared) return const SizedBox.shrink();
                     if (m.kind == 'system') {
                       return Center(
                         child: Padding(
@@ -322,6 +429,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           IconButton(key: const Key('send-voice'), tooltip: 'Send voice note', icon: const Icon(Icons.send), onPressed: _sendVoice),
                         ])
                       : Row(children: [
+                    IconButton(key: const Key('extras'), tooltip: 'Poll, location, contact or view once', icon: const Icon(Icons.add_circle_outline), onPressed: _busy ? null : _extras),
                     IconButton(key: const Key('attach-photo'), tooltip: 'Send a photo', icon: const Icon(Icons.photo_outlined), onPressed: _busy ? null : _sendPhoto),
                     Expanded(
                       child: TextField(
@@ -366,12 +474,22 @@ class _Bubble extends StatelessWidget {
             Pending.failed => 'Not sent',
             Pending.none => (peerRead ?? -1) >= m.seq ? 'Read' : (peerDelivered >= m.seq ? 'Delivered' : 'Sent'),
           };
+    // Everything inside a bubble takes the bubble's own text colour (ivory on your burgundy).
+    final theme = Theme.of(context);
+    final fg = mine ? scheme.onPrimaryContainer : scheme.onSurface;
+    final inside = theme.copyWith(
+      colorScheme: mine ? scheme.copyWith(primary: fg, onSurface: fg, onSurfaceVariant: fg) : scheme,
+      textTheme: theme.textTheme.apply(bodyColor: fg, displayColor: fg),
+      iconTheme: theme.iconTheme.copyWith(color: fg),
+    );
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: m.pending == Pending.none && m.deletedAt == null ? () => _actions(context, mine) : null,
         onTap: m.pending == Pending.failed ? () => chat.retry(m) : null,
-        child: Container(
+        child: Theme(
+          data: inside,
+          child: Builder(builder: (context) => DefaultTextStyle.merge(style: TextStyle(color: fg), child: Container(
           key: Key('msg-${m.clientId}'),
           constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.78),
           margin: const EdgeInsets.symmetric(vertical: NexaSpace.xs),
@@ -383,17 +501,30 @@ class _Bubble extends StatelessWidget {
             if (m.replyPreview != null) Text('↩ ${m.replyPreview}', style: Theme.of(context).textTheme.labelSmall),
             if (m.deletedAt != null)
               const Text('This message was deleted', style: TextStyle(fontStyle: FontStyle.italic))
+            else if (m.viewOnce && m.media != null)
+              _ViewOnce(chat: chat, m: m, mine: mine)
+            else if (m.kind == 'poll' && m.poll != null)
+              _PollView(chat: chat, m: m)
+            else if (m.kind == 'location' && m.location != null)
+              _LocationView(chat: chat, m: m, mine: mine)
+            else if (m.kind == 'contact' && m.contact != null)
+              _ContactView(chat: chat, card: m.contact!)
+            else if (m.kind == 'poll' || m.kind == 'location' || m.kind == 'contact')
+              Text('${m.preview}…', style: Theme.of(context).textTheme.labelMedium)
             else ...[
               if (m.media != null) _MediaView(chat: chat, media: m.media!),
               if ((m.body ?? '').isNotEmpty) Text(m.body!),
             ],
             Row(mainAxisSize: MainAxisSize.min, children: [
+              if (chat.starred.contains(m.id)) Text('★ ', key: Key('star-${m.clientId}'), style: Theme.of(context).textTheme.labelSmall),
+              if (m.expiresAt != null && m.deletedAt == null) Semantics(label: 'Disappearing message', child: Text('⏱ ', style: Theme.of(context).textTheme.labelSmall)),
               if (m.editedAt != null && m.deletedAt == null) Text('edited · ', style: Theme.of(context).textTheme.labelSmall),
               Text(TimeOfDay.fromDateTime(m.createdAt.toLocal()).format(context), style: Theme.of(context).textTheme.labelSmall),
               if (ticks != null) Text(' · $ticks', key: Key('ticks-${m.clientId}'), style: Theme.of(context).textTheme.labelSmall),
             ]),
             if (m.reactions.isNotEmpty) Text(m.reactions.map((r) => r.emoji).join(' '), key: Key('reactions-${m.clientId}')),
           ]),
+        ))),
         ),
       ),
     );
@@ -411,6 +542,12 @@ class _Bubble extends StatelessWidget {
             ]),
           ),
           ListTile(leading: const Icon(Icons.push_pin_outlined), title: Text(m.pinnedAt == null ? 'Pin' : 'Unpin'), onTap: () => Navigator.pop(ctx, 'pin')),
+          ListTile(
+            key: const Key('action-star'),
+            leading: Icon(chat.starred.contains(m.id) ? Icons.star : Icons.star_outline),
+            title: Text(chat.starred.contains(m.id) ? 'Unstar' : 'Star'),
+            onTap: () => Navigator.pop(ctx, 'star'),
+          ),
           if (mine && m.kind == 'text') ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Edit'), onTap: () => Navigator.pop(ctx, 'edit')),
           if (mine) ListTile(leading: const Icon(Icons.delete_outline), title: const Text('Delete for everyone'), onTap: () => Navigator.pop(ctx, 'delete')),
           ListTile(leading: const Icon(Icons.visibility_off_outlined), title: const Text('Delete for me'), onTap: () => Navigator.pop(ctx, 'hide')),
@@ -425,6 +562,8 @@ class _Bubble extends StatelessWidget {
         await chat.react(m, mineNow == e ? null : e);
       } else if (action == 'pin') {
         await chat.pin(m, m.pinnedAt == null);
+      } else if (action == 'star') {
+        await chat.star(m, !chat.starred.contains(m.id));
       } else if (action == 'delete') {
         await chat.deleteForEveryone(m);
       } else if (action == 'hide') {
@@ -445,6 +584,288 @@ class _Bubble extends StatelessWidget {
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
+}
+
+/// A poll: tap an option to vote, tap it again to take the vote back.
+class _PollView extends StatelessWidget {
+  const _PollView({required this.chat, required this.m});
+  final ChatController chat;
+  final ChatMessage m;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = m.poll!;
+    final mine = p.mine(chat.me);
+    final voters = p.voters;
+    final text = Theme.of(context).textTheme;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 220),
+      child: Column(key: Key('poll-${m.clientId}'), crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        Text('📊 ${m.body ?? ''}', style: text.titleSmall),
+        Text(p.multiple ? 'Choose one or more' : 'Choose one', style: text.labelSmall),
+        for (var i = 0; i < p.options.length; i++)
+          MergeSemantics(child: InkWell(
+            key: Key('vote-${m.clientId}-$i'),
+            onTap: () async {
+              final next = p.multiple ? (mine.contains(i) ? [...mine]..remove(i) : [...mine, i]) : (mine.contains(i) ? <int>[] : [i]);
+              try {
+                await chat.vote(m, next);
+              } on ApiException catch (e) {
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            },
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: NexaSpace.xs),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                  Row(children: [
+                    Icon(mine.contains(i) ? Icons.check_box : Icons.check_box_outline_blank, size: 20),
+                    const SizedBox(width: NexaSpace.xs),
+                    Expanded(child: Text(p.options[i])),
+                    Text('${p.count(i)}', key: Key('votes-${m.clientId}-$i'), style: text.labelLarge),
+                  ]),
+                  const SizedBox(height: 4),
+                  LinearProgressIndicator(value: voters == 0 ? 0 : p.count(i) / voters, semanticsLabel: '${p.count(i)} votes'),
+                ]),
+              ),
+            ),
+          )),
+        Text('$voters ${voters == 1 ? 'vote' : 'votes'}', style: text.labelSmall),
+      ]),
+    );
+  }
+}
+
+class _LocationView extends StatelessWidget {
+  const _LocationView({required this.chat, required this.m, required this.mine});
+  final ChatController chat;
+  final ChatMessage m;
+  final bool mine;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = m.location!;
+    final text = Theme.of(context).textTheme;
+    String at(DateTime t) => TimeOfDay.fromDateTime(t.toLocal()).format(context);
+    return Column(key: Key('location-${m.clientId}'), crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      MergeSemantics(child: InkWell(
+        onTap: () => openInBrowser(l.mapUri),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.place, size: 32),
+            const SizedBox(width: NexaSpace.xs),
+            Flexible(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(l.label.isNotEmpty ? l.label : (l.liveUntil != null ? 'Live location' : 'Location'), style: text.titleSmall),
+                Text('${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)} · Open map', style: text.labelSmall),
+              ]),
+            ),
+          ]),
+        ),
+      )),
+      if (l.liveUntil != null)
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(l.isLive ? '● Live until ${at(l.liveUntil!)}' : 'Live location ended', style: text.labelSmall),
+          if (l.isLive && mine)
+            TextButton(
+              key: Key('stop-live-${m.clientId}'),
+              onPressed: () => chat.stopLiveLocation(m),
+              child: const Text('Stop sharing'),
+            ),
+        ]),
+    ]);
+  }
+}
+
+class _ContactView extends StatelessWidget {
+  const _ContactView({required this.chat, required this.card});
+  final ChatController chat;
+  final ContactCard card;
+
+  @override
+  Widget build(BuildContext context) => Row(key: Key('contact-${card.userId}'), mainAxisSize: MainAxisSize.min, children: [
+        CircleAvatar(child: Text(_initial(card.displayName))),
+        const SizedBox(width: NexaSpace.sm),
+        Flexible(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(card.displayName, style: Theme.of(context).textTheme.titleSmall),
+            if (card.username != null) Text('@${card.username}', style: Theme.of(context).textTheme.labelSmall),
+          ]),
+        ),
+        if (card.userId != chat.me && card.username != null)
+          TextButton(
+            onPressed: () async {
+              final id = await chat.openDirectByUsername(card.username!);
+              if (context.mounted) await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: id)));
+            },
+            child: const Text('Message'),
+          ),
+      ]);
+}
+
+/// A view-once photo: others open it once, full screen; the sender sees who has.
+class _ViewOnce extends StatelessWidget {
+  const _ViewOnce({required this.chat, required this.m, required this.mine});
+  final ChatController chat;
+  final ChatMessage m;
+  final bool mine;
+
+  @override
+  Widget build(BuildContext context) {
+    final what = m.media?.kind == 'video' ? 'Video' : 'Photo';
+    final conv = chat.conversation(m.conversationId);
+    if (mine) {
+      final who = m.openedBy.map((u) => conv?.nameOf(u) ?? 'someone').join(', ');
+      return Text('① $what · ${m.openedBy.isEmpty ? 'Not opened yet' : 'Opened by $who'}', key: Key('once-${m.clientId}'));
+    }
+    final opened = m.openedBy.contains(chat.me);
+    return OutlinedButton.icon(
+      key: Key('once-${m.clientId}'),
+      icon: const Icon(Icons.looks_one_outlined),
+      label: Text(opened ? 'Opened' : '$what · view once'),
+      onPressed: opened || m.pending != Pending.none
+          ? null
+          : () async {
+              try {
+                final url = await chat.openViewOnce(m);
+                if (!context.mounted) return;
+                await showDialog<void>(
+                  context: context,
+                  builder: (ctx) => Dialog.fullscreen(
+                    backgroundColor: const Color(0xFF08101F),
+                    child: SafeArea(
+                      child: Column(children: [
+                        Expanded(
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            semanticLabel: 'View-once photo',
+                            errorBuilder: (_, _, _) => const Center(child: Text('Photo not available', style: TextStyle(color: Color(0xFFF6F0E1)))),
+                          ),
+                        ),
+                        const Text('This won’t be shown again.', style: TextStyle(color: Color(0xFFF6F0E1))),
+                        Padding(
+                          padding: const EdgeInsets.all(NexaSpace.md),
+                          child: FilledButton(key: const Key('close-once'), onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+                        ),
+                      ]),
+                    ),
+                  ),
+                );
+              } on ApiException catch (e) {
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            },
+    );
+  }
+}
+
+class _PollDialog extends StatefulWidget {
+  const _PollDialog();
+  @override
+  State<_PollDialog> createState() => _PollDialogState();
+}
+
+class _PollDialogState extends State<_PollDialog> {
+  final _q = TextEditingController();
+  final _options = [TextEditingController(), TextEditingController()];
+  bool _multiple = false;
+
+  List<String> get _filled => [for (final o in _options) if (o.text.trim().isNotEmpty) o.text.trim()];
+  bool get _dupes => _filled.map((o) => o.toLowerCase()).toSet().length != _filled.length;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('New poll'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(key: const Key('poll-question'), controller: _q, autofocus: true, maxLength: 300, decoration: const InputDecoration(labelText: 'Question'), onChanged: (_) => setState(() {})),
+            for (var i = 0; i < _options.length; i++)
+              TextField(
+                key: Key('poll-option-$i'),
+                controller: _options[i],
+                maxLength: 100,
+                decoration: InputDecoration(labelText: 'Option ${i + 1}', counterText: ''),
+                onChanged: (v) => setState(() {
+                  // A new box appears as the last one is filled, up to 12.
+                  if (i == _options.length - 1 && v.isNotEmpty && _options.length < 12) _options.add(TextEditingController());
+                }),
+              ),
+            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Allow more than one answer'), value: _multiple, onChanged: (v) => setState(() => _multiple = v)),
+            if (_dupes) Text('Each option must be different.', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            key: const Key('send-poll'),
+            onPressed: _q.text.trim().isEmpty || _filled.length < 2 || _dupes ? null : () => Navigator.pop(context, (q: _q.text.trim(), options: _filled, multiple: _multiple)),
+            child: const Text('Send'),
+          ),
+        ],
+      );
+}
+
+class _LocationDialog extends StatefulWidget {
+  const _LocationDialog();
+  @override
+  State<_LocationDialog> createState() => _LocationDialogState();
+}
+
+class _LocationDialogState extends State<_LocationDialog> {
+  final _label = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    void pick(int? minutes) => Navigator.pop(context, (label: _label.text, minutes: minutes));
+    return AlertDialog(
+      title: const Text('Share location'),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        TextField(key: const Key('place-name'), controller: _label, maxLength: 200, decoration: const InputDecoration(labelText: 'Place name (optional)')),
+        FilledButton(key: const Key('send-here'), onPressed: () => pick(null), child: const Text('Send my current location')),
+        const SizedBox(height: NexaSpace.md),
+        const Text('Share live location (updates while SuperApp is open):'),
+        Wrap(spacing: NexaSpace.sm, children: [
+          OutlinedButton(key: const Key('live-15'), onPressed: () => pick(15), child: const Text('15 min')),
+          OutlinedButton(key: const Key('live-60'), onPressed: () => pick(60), child: const Text('1 hour')),
+          OutlinedButton(key: const Key('live-480'), onPressed: () => pick(480), child: const Text('8 hours')),
+        ]),
+      ]),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
+    );
+  }
+}
+
+/// Starred messages in one chat, newest star first.
+class StarredScreen extends StatelessWidget {
+  const StarredScreen({super.key, required this.chat, required this.conversationId});
+  final ChatController chat;
+  final String conversationId;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Starred messages')),
+        body: FutureBuilder<List<ChatMessage>>(
+          future: chat.starredIn(conversationId),
+          builder: (context, snap) {
+            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+            final items = snap.data!;
+            if (items.isEmpty) return const Center(child: Text('Nothing starred yet. Long-press a message, then Star.'));
+            final c = chat.conversation(conversationId);
+            return ListView(children: [
+              for (final m in items)
+                ListTile(
+                  key: Key('starred-${m.id}'),
+                  leading: const Icon(Icons.star),
+                  title: Text(m.kind == 'text' ? (m.body ?? '') : m.preview),
+                  subtitle: Text(m.senderId == chat.me ? 'You' : (c?.nameOf(m.senderId) ?? 'Someone')),
+                ),
+            ]);
+          },
+        ),
+      );
 }
 
 /// Fetches a short-lived download link, then shows images inline and other files as a tile.

@@ -17,9 +17,18 @@ export interface Message {
   changeSeq: number;
   senderId: string;
   clientId: string;
-  kind: Media['kind'] | 'text' | 'system';
+  kind: Media['kind'] | 'text' | 'system' | 'poll' | 'location' | 'contact';
   body: string | null;
   media: Media | null;
+  poll?: Poll | null;
+  location?: SharedLocation | null;
+  contact?: { userId: string; username: string | null; displayName: string } | null;
+  /** A photo or video each other person can open once. */
+  viewOnce?: boolean;
+  /** View once: who has opened it. */
+  openedBy?: string[] | null;
+  /** Disappearing messages: when it goes for everyone. */
+  expiresAt?: string | null;
   replyTo: { id: string; senderId: string; preview: string; deleted: boolean } | null;
   forwarded: boolean;
   mentions: string[];
@@ -34,6 +43,29 @@ export interface Message {
   pending?: 'sending' | 'failed';
 }
 
+export interface Poll {
+  options: string[];
+  multiple: boolean;
+  votes: { userId: string; option: number }[];
+}
+
+export interface SharedLocation {
+  lat: number;
+  lng: number;
+  label: string;
+  /** Set while (and after) it was shared live; null for a one-off place. */
+  liveUntil: string | null;
+  updatedAt: string;
+}
+
+/** What a new message can carry besides text and media. */
+export interface MessageExtras {
+  poll?: { options: string[]; multiple: boolean };
+  location?: { lat: number; lng: number; label?: string; liveMinutes?: 15 | 60 | 480 };
+  contactUserId?: string;
+  viewOnce?: boolean;
+}
+
 export type SystemEvent =
   | { type: 'group_created'; title: string }
   | { type: 'members_added'; userIds: string[] }
@@ -41,7 +73,8 @@ export type SystemEvent =
   | { type: 'member_left' }
   | { type: 'role_changed'; userId: string; role: GroupRole }
   | { type: 'group_updated'; fields: string[]; title?: string }
-  | { type: 'call'; callId: string; media: CallMedia; outcome: CallEndReason; durationSeconds: number };
+  | { type: 'call'; callId: string; media: CallMedia; outcome: CallEndReason; durationSeconds: number }
+  | { type: 'disappearing_changed'; seconds: number | null };
 
 export type CallMedia = 'audio' | 'video';
 export type CallEndReason = 'completed' | 'cancelled' | 'missed' | 'declined' | 'busy' | 'failed' | 'connection_lost';
@@ -92,6 +125,8 @@ export interface Conversation {
   unreadCount: number;
   mutedUntil: string | null;
   archived: boolean;
+  /** Disappearing messages: null when off. */
+  disappearSeconds?: number | null;
   peerId: string | null;
   title: string;
   group: { description: string; sendPolicy: GroupPolicy; infoPolicy: GroupPolicy; addPolicy: GroupPolicy; myRole: GroupRole } | null;

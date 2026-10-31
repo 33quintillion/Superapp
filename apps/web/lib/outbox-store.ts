@@ -1,4 +1,4 @@
-import type { Media, Message } from './chat-client';
+import type { Media, Message, MessageExtras } from './chat-client';
 
 /** A message sent but not yet stored by the server. */
 export interface OutboxEntry {
@@ -11,6 +11,8 @@ export interface OutboxEntry {
   replyToId?: string;
   /** The uploaded photo or file, to show while it is sending. */
   media?: Media | null;
+  /** Poll, location, contact card or view once. */
+  extras?: MessageExtras;
   createdAt: string;
 }
 

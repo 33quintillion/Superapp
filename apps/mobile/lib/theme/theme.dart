@@ -18,6 +18,10 @@ ThemeData nexaTheme(Brightness brightness) {
     onError: p.onPrimary,
     surface: p.surface,
     onSurface: p.text,
+    // Chat bubbles: your own are burgundy with ivory text, other people's a warm ivory.
+    primaryContainer: p.bubbleOwn,
+    onPrimaryContainer: p.onBubbleOwn,
+    surfaceContainerHighest: p.bubbleOther,
   );
   final radius = BorderRadius.circular(NexaRadius.md);
   return ThemeData(

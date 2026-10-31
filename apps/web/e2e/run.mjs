@@ -230,6 +230,62 @@ async function chatFlow(browser, API, tag, step) {
   await ben.page.waitForSelector('[data-testid=search-results] >> text=missed one');
   step('message search');
 
+  // Poll: Ana asks, Ben votes, Ana sees the count.
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-poll]');
+  await ana.page.fill('input[name=pollQuestion]', 'Dinner on Friday?');
+  await ana.page.fill('input[name=pollOption0]', 'Pizza');
+  await ana.page.fill('input[name=pollOption1]', 'Dosa');
+  await ana.page.click('[data-testid=poll-form] button[type=submit]');
+  const benPoll = bubble(ben.page, 'Dinner on Friday?');
+  await benPoll.locator('[data-testid=poll-option]:has-text("Dosa")').click();
+  await bubble(ana.page, 'Dinner on Friday?').locator('[data-testid=poll-option]:has-text("Dosa") [data-testid=poll-count]:has-text("1")').waitFor();
+  await benPoll.locator('[data-testid=poll-option][aria-pressed=true]:has-text("Dosa")').waitFor();
+  step('poll: one person asks, another votes, and both see the count');
+
+  await (await actions(ben.page, 'hi ana')).locator('[data-testid=star]').click();
+  await bubble(ben.page, 'hi ana').locator('[data-testid=star-mark]').waitFor();
+  await ben.page.click('[data-testid=starred-toggle]');
+  await ben.page.waitForSelector('[data-testid=starred-item]:has-text("hi ana")');
+  assert((await bubble(ana.page, 'hi ana').locator('[data-testid=star-mark]').count()) === 0, 'stars are private');
+  await ben.page.click('[data-testid=starred-toggle]');
+  step('starred message marked and listed for the person who starred it only');
+
+  await ana.page.selectOption('[data-testid=disappearing]', '86400');
+  await ben.page.waitForSelector('[data-testid=system-note]:has-text("turned on disappearing messages")');
+  await ben.page.waitForSelector('[data-testid=disappearing-on]');
+  await ana.page.fill('input[name=message]', 'this one disappears');
+  await ana.page.press('input[name=message]', 'Enter');
+  await bubble(ben.page, 'this one disappears').locator('[aria-label="Disappearing message"]').waitFor();
+  await ana.page.selectOption('[data-testid=disappearing]', '');
+  await ben.page.waitForSelector('[data-testid=system-note]:has-text("turned off disappearing messages")');
+  step('disappearing messages turned on with a notice, new messages marked, then turned off');
+
+  await ana.page.setInputFiles('[data-testid=view-once-input]', { name: 'secret.png', mimeType: 'image/png', buffer: PNG });
+  const once = ben.page.locator('button[data-testid=view-once]');
+  await once.waitFor();
+  await once.click();
+  await ben.page.waitForFunction(() => document.querySelector('[data-testid=once-overlay] img')?.naturalWidth === 1);
+  await ben.page.click('[data-testid=once-overlay] button');
+  await ben.page.waitForSelector('button[data-testid=view-once]:has-text("Opened")');
+  await ana.page.waitForSelector('[data-testid=view-once]:has-text("Opened by Ben")');
+  step('view-once photo opened once by the other person; the sender sees it was opened');
+
+  await ana.ctx.grantPermissions(['geolocation'], { origin: WEB });
+  await ana.ctx.setGeolocation({ latitude: 23.1205, longitude: 72.0396 });
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-location]');
+  await ana.page.fill('input[name=placeName]', 'Hotel New Janpath');
+  await ana.page.click('[data-testid=location-form] button:has-text("Send my current location")');
+  await ben.page.waitForSelector('[data-testid=location]:has-text("Hotel New Janpath")');
+  await ben.page.waitForSelector('[data-testid=location] a[href*="mlat=23.1205"]');
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-contact]');
+  await ana.page.fill('input[name=contactUsername]', ben.username);
+  await ana.page.click('[data-testid=contact-form] button[type=submit]');
+  await ben.page.waitForSelector(`[data-testid=contact-card]:has-text("@${ben.username}")`);
+  step('location and a contact card shared');
+
   const proxied = await ana.page.evaluate(async () => (await fetch('/api/chat/me/export')).status);
   assert(proxied === 404, 'chat proxy only exposes messaging endpoints');
   const csrf = await fetch(`${WEB}/api/chat/conversations/direct`, { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });

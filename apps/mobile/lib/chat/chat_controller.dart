@@ -6,6 +6,7 @@ import '../auth/auth_controller.dart';
 import '../calls/call_controller.dart';
 import '../media/media.dart';
 import 'chat_models.dart';
+import 'location_source.dart';
 import 'outbox_store.dart';
 import 'realtime.dart';
 
@@ -43,6 +44,11 @@ class ChatController extends ChangeNotifier {
   final Map<String, DateTime> _typingUntil = {};
   String? activeId;
   String? lastError;
+  /// Messages this person starred (private to them).
+  final Set<String> starred = {};
+  /// What unsent messages carry besides text and media, so "retry" sends it again.
+  final Map<String, Map<String, dynamic>> _extras = {};
+  Timer? _liveTimer;
 
   String get me => auth.profile!.id;
   ConnectionStatus get status => rt.status;
@@ -172,6 +178,13 @@ class ChatController extends ChangeNotifier {
       conversations = [...conversations.where((x) => x.id != cid), c];
       _sortList();
       await _resync(cid);
+      try {
+        final s = await auth.authed('GET', '/v1/messages/starred?conversationId=$cid&limit=100');
+        starred.addAll([for (final m in (s?['messages'] as List? ?? const [])) (m as Map<String, dynamic>)['id'] as String]);
+      } on Object {
+        // Stars show up next time.
+      }
+      if (_myLive.isNotEmpty) _keepLiveMoving();
     }
     _markRead(cid);
     notifyListeners();
@@ -210,7 +223,99 @@ class ChatController extends ChangeNotifier {
       'body': m.body ?? '',
       if (media != null)
         'media': {'id': media.id, 'kind': media.kind, 'contentType': media.contentType, 'byteSize': media.byteSize, 'fileName': media.fileName, 'durationMs': media.durationMs},
+      if (_extras[m.clientId] != null) 'extras': _extras[m.clientId],
     });
+  }
+
+  // ------------------------------------------------------------------ polls, places, contacts, view once
+
+  Future<void> sendPoll(String cid, String question, List<String> options, {bool multiple = false}) => _send(cid, {
+        'kind': 'poll',
+        'body': question.trim(),
+        'extras': {
+          'poll': {'options': [for (final o in options) if (o.trim().isNotEmpty) o.trim()], 'multiple': multiple},
+        },
+      });
+
+  /// Sends where the phone is now, or starts a live location for [liveMinutes] (15, 60 or 480).
+  /// Returns false if the phone couldn't tell where it is.
+  Future<bool> sendLocation(String cid, {String label = '', int? liveMinutes}) async {
+    final here = await LocationSource.instance.current();
+    if (here == null) return false;
+    await _send(cid, {
+      'kind': 'location',
+      'body': '',
+      'extras': {
+        'location': {'lat': here.lat, 'lng': here.lng, 'label': label.trim(), 'liveMinutes': ?liveMinutes},
+      },
+    });
+    if (liveMinutes != null) _keepLiveMoving();
+    return true;
+  }
+
+  Future<void> sendContact(String cid, String username) async {
+    final u = await auth.authed('GET', '/v1/users/${Uri.encodeComponent(username.trim().replaceFirst('@', '').toLowerCase())}');
+    await _send(cid, {'kind': 'contact', 'body': '', 'extras': {'contactUserId': u!['id']}});
+  }
+
+  Future<void> sendViewOnce(String cid, LocalMedia file) async {
+    final media = await uploadMedia(auth, file, kind: 'image');
+    await _send(cid, {'kind': 'image', 'body': '', 'media': media, 'extras': {'viewOnce': true}});
+  }
+
+  Future<void> vote(ChatMessage m, List<int> options) => _mutate(() => auth.authed('PUT', '/v1/messages/${m.id}/vote', body: {'options': options}));
+
+  Future<void> star(ChatMessage m, bool on) async {
+    await auth.authed('PUT', '/v1/messages/${m.id}/star', body: {'starred': on});
+    if (on) {
+      starred.add(m.id);
+    } else {
+      starred.remove(m.id);
+    }
+    notifyListeners();
+  }
+
+  Future<List<ChatMessage>> starredIn(String cid) async {
+    final r = await auth.authed('GET', '/v1/messages/starred?conversationId=$cid&limit=100');
+    return [for (final m in r!['messages'] as List) ChatMessage.fromJson(m as Map<String, dynamic>)];
+  }
+
+  Future<void> setDisappearing(String cid, int? seconds) async {
+    _adopt(Conversation.fromJson((await auth.authed('PUT', '/v1/conversations/$cid/disappearing', body: {'seconds': seconds}))!));
+  }
+
+  /// A view-once photo: a short link to show it once. The server records that it was opened.
+  Future<String> openViewOnce(ChatMessage m) async => (await auth.authed('POST', '/v1/messages/${m.id}/open'))!['url'] as String;
+
+  Future<void> stopLiveLocation(ChatMessage m) => _mutate(() => auth.authed('POST', '/v1/messages/${m.id}/location/stop'));
+
+  List<ChatMessage> get _myLive => [
+        for (final list in _messages.values)
+          for (final m in list)
+            if (m.senderId == me && m.deletedAt == null && m.pending == Pending.none && (m.location?.isLive ?? false)) m,
+      ];
+
+  /// While this person has a live location on, the app reports where they are every 30 seconds.
+  void _keepLiveMoving() {
+    _liveTimer ??= Timer.periodic(const Duration(seconds: 30), (_) => unawaited(_pushLiveLocations()));
+  }
+
+  Future<void> _pushLiveLocations() async {
+    final live = _myLive;
+    if (live.isEmpty) {
+      _liveTimer?.cancel();
+      _liveTimer = null;
+      return;
+    }
+    try {
+      final here = await LocationSource.instance.current();
+      if (here == null) return;
+      for (final m in live) {
+        await _mutate(() => auth.authed('PUT', '/v1/messages/${m.id}/location', body: {'lat': here.lat, 'lng': here.lng}));
+      }
+    } on Object {
+      // Tried again on the next tick.
+    }
   }
 
   Future<void> _send(String cid, Map<String, dynamic> content) async {
@@ -221,6 +326,7 @@ class ChatController extends ChangeNotifier {
       body: content['body'] as String?,
       createdAt: DateTime.now(),
       media: content['media'] as Map<String, dynamic>?,
+      extras: content['extras'] as Map<String, dynamic>?,
     );
     _unsent.add(e);
     _persist();
@@ -243,11 +349,19 @@ class ChatController extends ChangeNotifier {
       media: e.media == null ? null : ChatMedia.fromJson(e.media!),
       createdAt: e.createdAt,
       pending: Pending.sending,
+      viewOnce: e.extras?['viewOnce'] == true,
     );
+    if (e.extras != null) _extras[e.clientId] = e.extras!;
     _upsert(cid, [local]);
     notifyListeners();
     try {
-      final ack = await rt.send(cid, {'clientId': e.clientId, 'kind': e.kind, if (e.body != null) 'body': e.body, if (e.media != null) 'mediaId': e.media!['id']});
+      final ack = await rt.send(cid, {
+        'clientId': e.clientId,
+        'kind': e.kind,
+        if (e.body != null) 'body': e.body,
+        if (e.media != null) 'mediaId': e.media!['id'],
+        ...?e.extras,
+      });
       _upsert(cid, [ChatMessage.fromJson(ack['message'] as Map<String, dynamic>)]);
     } on SendRejected catch (err) {
       lastError = err.message;
@@ -373,6 +487,12 @@ class ChatController extends ChangeNotifier {
           rt.frame({'type': 'receipt', 'conversationId': cid, 'kind': activeId == cid ? 'read' : 'delivered', 'seq': m.seq});
         }
         unawaited(_refreshOne(cid));
+      case 'message.starred':
+        if (d['starred'] == true) {
+          starred.add(d['id'] as String);
+        } else {
+          starred.remove(d['id'] as String);
+        }
       case 'message.hidden':
         final cid = d['conversationId'] as String;
         _upsert(cid, const [], remove: [d['id'] as String]);
@@ -402,6 +522,7 @@ class ChatController extends ChangeNotifier {
   @override
   void dispose() {
     auth.removeListener(_onAuth);
+    _liveTimer?.cancel();
     rt.dispose();
     super.dispose();
   }

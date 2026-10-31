@@ -22,6 +22,51 @@ class ChatMedia {
   final int? durationMs;
 }
 
+/// A poll: the question is the message body.
+class Poll {
+  Poll({required this.options, required this.multiple, required this.votes});
+  factory Poll.fromJson(Map<String, dynamic> j) => Poll(
+        options: (j['options'] as List).cast<String>(),
+        multiple: j['multiple'] as bool? ?? false,
+        votes: [for (final v in (j['votes'] as List? ?? const [])) (userId: v['userId'] as String, option: (v['option'] as num).toInt())],
+      );
+  final List<String> options;
+  final bool multiple;
+  final List<({String userId, int option})> votes;
+
+  List<int> mine(String me) => [for (final v in votes) if (v.userId == me) v.option];
+  int count(int option) => votes.where((v) => v.option == option).length;
+  int get voters => votes.map((v) => v.userId).toSet().length;
+}
+
+/// A shared place; [liveUntil] is set for a live location.
+class SharedLocation {
+  SharedLocation({required this.lat, required this.lng, required this.label, this.liveUntil, this.updatedAt});
+  factory SharedLocation.fromJson(Map<String, dynamic> j) => SharedLocation(
+        lat: (j['lat'] as num).toDouble(),
+        lng: (j['lng'] as num).toDouble(),
+        label: j['label'] as String? ?? '',
+        liveUntil: j['liveUntil'] == null ? null : DateTime.parse(j['liveUntil'] as String),
+        updatedAt: j['updatedAt'] == null ? null : DateTime.parse(j['updatedAt'] as String),
+      );
+  final double lat;
+  final double lng;
+  final String label;
+  final DateTime? liveUntil;
+  final DateTime? updatedAt;
+  bool get isLive => liveUntil != null && liveUntil!.isAfter(DateTime.now());
+  Uri get mapUri => Uri.parse('https://www.openstreetmap.org/?mlat=$lat&mlon=$lng#map=17/$lat/$lng');
+}
+
+class ContactCard {
+  ContactCard({required this.userId, required this.displayName, this.username});
+  factory ContactCard.fromJson(Map<String, dynamic> j) =>
+      ContactCard(userId: j['userId'] as String, displayName: j['displayName'] as String? ?? '', username: j['username'] as String?);
+  final String userId;
+  final String displayName;
+  final String? username;
+}
+
 class Reaction {
   Reaction(this.userId, this.emoji);
   final String userId;
@@ -48,6 +93,12 @@ class ChatMessage {
     this.pinnedAt,
     this.system,
     this.pending = Pending.none,
+    this.poll,
+    this.location,
+    this.contact,
+    this.viewOnce = false,
+    this.openedBy = const [],
+    this.expiresAt,
   });
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) {
@@ -71,6 +122,12 @@ class ChatMessage {
       pinnedAt: date('pinnedAt'),
       system: j['system'] as Map<String, dynamic>?,
       createdAt: DateTime.parse(j['createdAt'] as String),
+      poll: j['poll'] == null ? null : Poll.fromJson(j['poll'] as Map<String, dynamic>),
+      location: j['location'] == null ? null : SharedLocation.fromJson(j['location'] as Map<String, dynamic>),
+      contact: j['contact'] == null ? null : ContactCard.fromJson(j['contact'] as Map<String, dynamic>),
+      viewOnce: j['viewOnce'] as bool? ?? false,
+      openedBy: (j['openedBy'] as List?)?.cast<String>() ?? const [],
+      expiresAt: date('expiresAt'),
     );
   }
 
@@ -93,6 +150,18 @@ class ChatMessage {
   /// Group notices ("Ana added Ben"): what happened, worded by [describeSystem].
   final Map<String, dynamic>? system;
   final Pending pending;
+  final Poll? poll;
+  final SharedLocation? location;
+  final ContactCard? contact;
+  /// A photo or video each other person can open once.
+  final bool viewOnce;
+  /// View once: who has opened it.
+  final List<String> openedBy;
+  /// Disappearing messages: when it goes for everyone.
+  final DateTime? expiresAt;
+
+  /// A disappearing message whose time is up: it just goes, with no "deleted" placeholder.
+  bool get disappeared => expiresAt != null && (deletedAt != null || !expiresAt!.isAfter(DateTime.now()));
 
   ChatMessage withPending(Pending p) => ChatMessage(
         id: id,
@@ -113,12 +182,22 @@ class ChatMessage {
         pinnedAt: pinnedAt,
         system: system,
         pending: p,
+        poll: poll,
+        location: location,
+        contact: contact,
+        viewOnce: viewOnce,
+        openedBy: openedBy,
+        expiresAt: expiresAt,
       );
 
   String get preview {
-    if (deletedAt != null) return 'Message deleted';
+    if (deletedAt != null) return expiresAt != null ? '⏱ Message disappeared' : 'Message deleted';
     if (kind == 'system') return 'Group updated';
     if (kind == 'text') return body ?? '';
+    if (viewOnce) return kind == 'video' ? '① Video' : '① Photo';
+    if (kind == 'poll') return '📊 ${body ?? 'Poll'}';
+    if (kind == 'location') return location?.liveUntil != null ? '📍 Live location' : '📍 Location';
+    if (kind == 'contact') return '👤 ${contact?.displayName ?? 'Contact'}';
     const labels = {'image': '📷 Photo', 'video': '🎬 Video', 'audio': '🎵 Audio', 'voice': '🎤 Voice note', 'file': '📄 File'};
     return '${labels[kind] ?? kind}${(body ?? '').isEmpty ? '' : ' $body'}';
   }
@@ -149,6 +228,11 @@ String describeSystem(Map<String, dynamic> e, String actorId, String me, String 
       return e['title'] != null ? '$actor renamed the group to “${e['title']}”' : '$actor changed the group settings';
     case 'call':
       return describeCall(e, actorId == me);
+    case 'disappearing_changed':
+      final secs = (e['seconds'] as num?)?.toInt();
+      return secs == null
+          ? '$actor turned off disappearing messages.'
+          : '$actor turned on disappearing messages. New messages will disappear after ${disappearLabel(secs)}.';
   }
   return 'Group updated';
 }
@@ -170,6 +254,17 @@ String describeCall(Map<String, dynamic> e, bool mine) {
     _ => title,
   };
 }
+
+/// WhatsApp's choices for disappearing messages, in seconds (null is off).
+const disappearChoices = <int?>[null, 86400, 604800, 7776000];
+
+String disappearLabel(int? seconds) => switch (seconds) {
+      null => 'Off',
+      86400 => '24 hours',
+      604800 => '7 days',
+      7776000 => '90 days',
+      _ => '${(seconds / 86400).round()} days',
+    };
 
 String formatDuration(int s) {
   final h = s ~/ 3600;
@@ -230,6 +325,7 @@ class Conversation {
     this.lastMessageAt,
     this.archived = false,
     this.mutedUntil,
+    this.disappearSeconds,
   });
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
         id: j['id'] as String,
@@ -243,6 +339,7 @@ class Conversation {
         lastMessageAt: j['lastMessageAt'] == null ? null : DateTime.parse(j['lastMessageAt'] as String),
         archived: j['archived'] as bool? ?? false,
         mutedUntil: j['mutedUntil'] == null ? null : DateTime.parse(j['mutedUntil'] as String),
+        disappearSeconds: (j['disappearSeconds'] as num?)?.toInt(),
       );
 
   final String id;
@@ -256,6 +353,8 @@ class Conversation {
   final DateTime? lastMessageAt;
   final bool archived;
   final DateTime? mutedUntil;
+  /// Disappearing messages: null when off.
+  final int? disappearSeconds;
 
   bool get isGroup => kind == 'group';
   ChatMember? peer(String me) => isGroup ? null : members.where((m) => m.userId != me).firstOrNull;

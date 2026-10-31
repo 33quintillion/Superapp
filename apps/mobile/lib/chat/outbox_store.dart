@@ -4,7 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// A message that was sent but not yet stored by the server.
 class OutboxEntry {
-  OutboxEntry({required this.conversationId, required this.clientId, required this.kind, required this.body, required this.createdAt, this.media});
+  OutboxEntry({required this.conversationId, required this.clientId, required this.kind, required this.body, required this.createdAt, this.media, this.extras});
   factory OutboxEntry.fromJson(Map<String, dynamic> j) => OutboxEntry(
         conversationId: j['conversationId'] as String,
         clientId: j['clientId'] as String,
@@ -12,6 +12,7 @@ class OutboxEntry {
         body: j['body'] as String?,
         createdAt: DateTime.parse(j['createdAt'] as String),
         media: j['media'] as Map<String, dynamic>?,
+        extras: j['extras'] as Map<String, dynamic>?,
       );
   final String conversationId;
 
@@ -24,7 +25,18 @@ class OutboxEntry {
   /// A photo or voice note already uploaded; only its id is sent with the message.
   final Map<String, dynamic>? media;
 
-  Map<String, dynamic> toJson() => {'conversationId': conversationId, 'clientId': clientId, 'kind': kind, 'body': body, 'createdAt': createdAt.toIso8601String(), if (media != null) 'media': media};
+  /// What the message carries besides text and media: a poll, a place, a contact card, or view once.
+  final Map<String, dynamic>? extras;
+
+  Map<String, dynamic> toJson() => {
+        'conversationId': conversationId,
+        'clientId': clientId,
+        'kind': kind,
+        'body': body,
+        'createdAt': createdAt.toIso8601String(),
+        if (media != null) 'media': media,
+        if (extras != null) 'extras': extras,
+      };
 }
 
 /// Keeps unsent messages across app restarts, per account. Cleared on sign-out.
