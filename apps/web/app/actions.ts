@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { api, ApiError, TokenPair } from '@/lib/api';
-import { cookieOpts, MFA_COOKIE, PHONE_SIGNUP_COOKIE } from '@/lib/cookies';
+import { cookieOpts, LINK_COOKIE, MFA_COOKIE, PHONE_SIGNUP_COOKIE } from '@/lib/cookies';
 import { authed, clearTokens, requireAccessToken, storeTokens } from '@/lib/session';
 
 export interface FormState {
@@ -118,6 +118,41 @@ export async function completePhoneSignUp(_: FormState, f: FormData): Promise<Fo
   });
   if (res.error) return res;
   redirect('/account');
+}
+
+/**
+ * Asks for a code to link this browser from the phone app. The code is shown (as a QR code
+ * and as text); the secret that collects the session stays in an httpOnly cookie.
+ */
+export async function startLink(): Promise<{ code?: string; expiresIn?: number; error?: string }> {
+  try {
+    const r = await api<{ code: string; secret: string; expiresIn: number }>('POST', '/v1/auth/link', { body: { deviceName: 'Web browser' } });
+    (await cookies()).set(LINK_COOKIE, `${r.code}.${r.secret}`, cookieOpts(r.expiresIn + 10));
+    return { code: r.code, expiresIn: r.expiresIn };
+  } catch (e) {
+    if (e instanceof ApiError) return { error: e.message };
+    throw e;
+  }
+}
+
+/** Asked every couple of seconds while the code shows: has the phone approved it yet? */
+export async function pollLink(): Promise<{ status: 'pending' | 'expired' | 'linked'; next?: string }> {
+  const jar = await cookies();
+  const [code, secret] = (jar.get(LINK_COOKIE)?.value ?? '').split('.');
+  if (!code || !secret) return { status: 'expired' };
+  try {
+    const r = await api<TokenPair | { status: 'pending' }>('POST', '/v1/auth/link/collect', { body: { code, secret } });
+    if ('status' in r) return { status: 'pending' };
+    await storeTokens(r);
+    jar.delete(LINK_COOKIE);
+    return { status: 'linked', next: '/account' };
+  } catch (e) {
+    if (e instanceof ApiError && e.status < 500) {
+      jar.delete(LINK_COOKIE);
+      return { status: 'expired' };
+    }
+    return { status: 'pending' }; // the server was briefly unreachable: keep waiting
+  }
 }
 
 /** Adds or changes the optional email (receipts, banking and payouts). */

@@ -25,7 +25,8 @@ interface Pending {
 const RULES = {
   createIp: { name: 'link:create:ip', limit: 30, windowSeconds: 900 },
   lookupUser: { name: 'link:lookup:user', limit: 20, windowSeconds: 900 },
-  collect: { name: 'link:collect', limit: 120, windowSeconds: 300 },
+  // A waiting computer asks every few seconds; allow a few tabs behind one address.
+  collect: { name: 'link:collect', limit: 400, windowSeconds: 300 },
 };
 
 // Approve only a link still waiting, keeping its expiry. Returns 1 if this call approved it.

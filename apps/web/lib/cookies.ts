@@ -3,6 +3,8 @@ export const REFRESH_COOKIE = 'nexa_rt';
 export const MFA_COOKIE = 'nexa_mfa';
 /** Holds the API's sign-up token while a new phone user picks a name. */
 export const PHONE_SIGNUP_COOKIE = 'nexa_phone_signup';
+/** The secret that lets this browser collect the session once a phone approves its link code. */
+export const LINK_COOKIE = 'nexa_link';
 
 const secure = process.env.NODE_ENV === 'production';
 

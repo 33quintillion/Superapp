@@ -30,6 +30,10 @@ export async function api<T = unknown>(
   // not this server. The API only honours it when TRUST_PROXY is configured.
   const clientIp = await forwardedFor();
   if (clientIp) reqHeaders['x-forwarded-for'] = clientIp;
+  // The browser's own name, so the device list (and a phone approving a link) says
+  // "Chrome on Windows" rather than this server.
+  const agent = await browserAgent();
+  if (agent) reqHeaders['user-agent'] = agent;
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
@@ -59,6 +63,14 @@ export interface TokenPair {
 async function forwardedFor(): Promise<string | null> {
   try {
     return clientAddress((await headers()).get('x-forwarded-for'));
+  } catch {
+    return null; // outside a request scope
+  }
+}
+
+async function browserAgent(): Promise<string | null> {
+  try {
+    return (await headers()).get('user-agent')?.slice(0, 300) ?? null;
   } catch {
     return null; // outside a request scope
   }

@@ -267,6 +267,49 @@
   color: var(--color-danger);
 }
 
+/* The QR code: a white square whatever the theme, so phones can read it. */
+.qrFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 264px;
+  aspect-ratio: 1;
+  margin: var(--space-sm) auto 0;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.qr {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.qrWait {
+  color: #5a6372;
+}
+.qrReload {
+  width: 100%;
+  height: 100%;
+  padding: var(--space-xl);
+  border: 0;
+  background: #fff;
+  color: #3b5bdb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.typedCode {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+}
+.switch {
+  margin-top: var(--space-xl);
+  text-align: left;
+}
+
 /* Older email accounts: folded away under one quiet line. */
 .email {
   margin-top: 28px;

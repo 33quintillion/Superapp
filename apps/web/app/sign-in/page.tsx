@@ -2,10 +2,10 @@ import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
 import { skipIfSignedIn } from '@/lib/signed-in';
 import { signIn } from '../actions';
-import { AuthShell, PHONE_STEPS } from '../auth-shell';
+import { AuthPage, AuthShell } from '../auth-shell';
 import styles from '../auth.module.css';
 import { ActionForm } from '../form-ui';
-import { PhoneSignIn } from '../phone-sign-in';
+import { SignInChoice } from '../sign-in-choice';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,13 +47,17 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     );
   }
   return (
-    <AuthShell steps={PHONE_STEPS}>
-      {notice && <p className="muted">{notice}</p>}
-      <PhoneSignIn config={phone} />
-      <details className={styles.email}>
-        <summary>Signed up with email before? Sign in with email</summary>
-        <EmailSignIn />
-      </details>
-    </AuthShell>
+    <AuthPage>
+      <SignInChoice
+        phone={phone}
+        notice={notice}
+        footer={
+          <details className={styles.email}>
+            <summary>Signed up with email before? Sign in with email</summary>
+            <EmailSignIn />
+          </details>
+        }
+      />
+    </AuthPage>
   );
 }
