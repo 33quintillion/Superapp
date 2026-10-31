@@ -413,6 +413,7 @@ void main() {
     expect(find.text('ADAPQ-R2345'), findsOneWidget);
     await expectAccessible(tester);
 
+    await tester.ensureVisible(find.byKey(const Key('type-contact-code')));
     await tester.tap(find.byKey(const Key('type-contact-code')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('typed-contact-code')), 'benpqr-2345');
@@ -426,6 +427,8 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('reset-code')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reset-code')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-reset')));
