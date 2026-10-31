@@ -1,6 +1,6 @@
-# Nexa super app
+# SuperApp super app
 
-Nexa is a working codename for a messaging, social, services and payments app for Android, iOS and the web. Its brand, interface and code are all original. Run a trademark search before using the name in public.
+SuperApp is a working codename for a messaging, social, services and payments app for Android, iOS and the web. Its brand, interface and code are all original. Run a trademark search before using the name in public.
 
 **Status: Stages 1 to 3 are in place: foundation, accounts, and chats with media. Stage 4 push notifications work in browsers; iPhone and Android need Apple and Firebase credentials ([`docs/push.md`](docs/push.md)). Stage 5 adds group chats, follows, a feed with posts and stories, and communities with moderation. Stage 6 adds one-to-one voice and video calls over WebRTC; real networks need a TURN provider ([`docs/calls.md`](docs/calls.md)).** Chats are **not end-to-end encrypted** yet (blocked on a licence review, see ADR 0004). Stage 7 adds businesses with orders and bookings, the admin dashboard and the integration catalogue. Stage 8 adds card payments, refunds and business plans through Stripe, tested against a local stand-in; taking real money needs a Stripe account and legal review ([`docs/payments.md`](docs/payments.md)). The mini-app runtime is not built yet. [`docs/feature-checklist.md`](docs/feature-checklist.md) shows what is implemented, what is tested, and what is blocked.
 

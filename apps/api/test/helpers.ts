@@ -13,6 +13,8 @@ export const TEST_ENV = {
   JWT_ACCESS_SECRET: 'test-only-secret-test-only-secret-0123456789',
   DATA_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   MAIL_TRANSPORT: 'memory',
+  // Most tests sign up with email for brevity; phone sign-up has its own tests.
+  EMAIL_SIGNUP: 'true',
   LOG_LEVEL: 'error',
   S3_ENDPOINT: process.env.TEST_S3_ENDPOINT ?? 'http://localhost:9000',
   S3_BUCKET: 'nexa-test',
@@ -22,6 +24,9 @@ export const TEST_ENV = {
   // Push tests drive the worker by hand; the rest don't need it polling.
   PUSH_WORKER_ENABLED: 'false',
   STORY_SWEEP_INTERVAL_SECONDS: '0',
+  RETENTION_SWEEP_INTERVAL_SECONDS: '0',
+  // Test passwords such as "correct horse battery staple" are famous leaks; auth.e2e turns it on against a stand-in.
+  PASSWORD_BREACH_CHECK: 'off',
 };
 
 export function testConfig(overrides: Record<string, string> = {}): AppConfig {

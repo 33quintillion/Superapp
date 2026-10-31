@@ -18,7 +18,7 @@ const KIND_LABEL: Record<string, string> = { image: 'Photo', video: 'Video', aud
 
 interface JobRow {
   id: string;
-  kind: 'message' | 'test';
+  kind: 'message' | 'test' | 'clear';
   attempts: number;
   age_seconds: number;
   user_id: string;
@@ -38,6 +38,7 @@ interface JobRow {
   time_zone: string | null;
   message_id: string | null;
   conversation_id: string | null;
+  clear_seq: string | null;
   conversation_kind: string | null;
   conversation_title: string | null;
   seq: string | null;
@@ -182,7 +183,7 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
     if (!job.session_live) return 'signed out';
     if (job.device_disabled) return 'device disabled';
     if (!job.user_active) return 'account not active';
-    if (job.kind === 'test') return null;
+    if (job.kind === 'test' || job.kind === 'clear') return null;
     if (job.push_enabled === false) return 'push turned off';
     if (!job.message_id || job.deleted) return 'message deleted';
     if (!job.is_member) return 'left conversation';
@@ -197,18 +198,22 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
     const silent = inQuietHours(job.quiet_start, job.quiet_end, job.time_zone ?? 'UTC');
     const ttlSeconds = Math.max(60, this.config.PUSH_TTL_SECONDS - job.age_seconds);
     if (job.kind === 'test') {
-      return { title: 'Nexa', body: 'Notifications are working on this device.', threadId: 'test', silent, badge, data: { type: 'test' }, ttlSeconds };
+      return { title: 'SuperApp', body: 'Notifications are working on this device.', threadId: 'test', silent, badge, data: { type: 'test' }, ttlSeconds };
+    }
+    if (job.kind === 'clear') {
+      const data = { type: 'clear', conversationId: job.conversation_id!, seq: String(job.clear_seq) };
+      return { title: '', body: '', threadId: job.conversation_id!, silent: true, badge, data, ttlSeconds, clear: true };
     }
     const sender = job.sender_name || 'Deleted account';
     if (job.message_kind === 'system' && job.system_event?.type === 'call') {
       // Missed calls: always say what it was, so the person knows to call back.
       const data = { type: 'missed_call', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
       const what = job.system_event.media === 'video' ? 'Missed video call' : 'Missed voice call';
-      return { title: job.preview === 'none' ? 'Nexa' : sender, body: job.preview === 'none' ? 'Missed call' : what, threadId: job.conversation_id!, silent, badge, data, ttlSeconds };
+      return { title: job.preview === 'none' ? 'SuperApp' : sender, body: job.preview === 'none' ? 'Missed call' : what, threadId: job.conversation_id!, silent, badge, data, ttlSeconds };
     }
     const data = { type: 'message', conversationId: job.conversation_id!, messageId: job.message_id!, seq: String(job.seq) };
     const group = job.conversation_kind === 'group';
-    let title = 'Nexa';
+    let title = 'SuperApp';
     let body = 'New message';
     if (job.preview === 'full' || job.preview === null) {
       const label = KIND_LABEL[job.message_kind ?? ''];
@@ -263,7 +268,7 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
               (s.revoked_at IS NULL AND s.expires_at > now()) AS session_live,
               u.state = 'active' AS user_active,
               ns.push_enabled, ns.preview, ns.quiet_start, ns.quiet_end, ns.time_zone,
-              m.id AS message_id, m.conversation_id, c.kind AS conversation_kind, c.title AS conversation_title,
+              m.id AS message_id, c.id AS conversation_id, j.clear_seq, c.kind AS conversation_kind, c.title AS conversation_title,
               m.seq, m.kind AS message_kind, m.body, m.system_event, m.deleted_at IS NOT NULL AS deleted,
               sender.display_name AS sender_name,
               cm.user_id IS NOT NULL AS is_member, cm.last_read_seq,
@@ -277,9 +282,9 @@ export class PushWorker implements OnApplicationBootstrap, OnModuleDestroy {
          JOIN users u ON u.id = j.user_id
          LEFT JOIN notification_settings ns ON ns.user_id = j.user_id
          LEFT JOIN messages m ON m.id = j.message_id
-         LEFT JOIN conversations c ON c.id = m.conversation_id
+         LEFT JOIN conversations c ON c.id = COALESCE(m.conversation_id, j.conversation_id)
          LEFT JOIN users sender ON sender.id = m.sender_id
-         LEFT JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = j.user_id
+         LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = j.user_id
         WHERE j.id = ANY($1::bigint[])`,
       [ids],
     );

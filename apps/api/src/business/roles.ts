@@ -24,6 +24,9 @@ export const PERMISSIONS = {
   'bookings.view': ALL,
   'bookings.manage': ALL,
   'orders.refund': MANAGERS,
+  'bookings.refund': MANAGERS,
+  // Answering a customer's bank about a disputed payment.
+  'disputes.respond': MANAGERS,
   'payments.view': MANAGERS,
   // The payout account and the plan are the owner's: they decide where money goes and what is paid for.
   'payments.manage': ['owner'],

@@ -1,17 +1,23 @@
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { authed, requireAccessToken } from '@/lib/session';
-import { resendVerification, revokeSession, signOut } from '../actions';
+import { removeEmail, resendVerification, revokeSession, setEmail, signOut } from '../actions';
+import { ActionForm } from '../form-ui';
+import { SignOutForm } from './sign-out-button';
+import { FindPeople } from './find-people';
 import { NotificationSettings } from './notifications';
+import { ProfilePhoto } from './profile-photo';
 import { SocialSettings } from './social-settings';
 
 export const dynamic = 'force-dynamic';
 
 interface Me {
-  username: string;
+  username: string | null;
   displayName: string;
-  email: string;
+  avatarMediaId: string | null;
+  email: string | null;
   emailVerified: boolean;
+  phone: string | null;
   mfaEnabled: boolean;
 }
 interface Session {
@@ -27,15 +33,30 @@ export default async function AccountPage() {
   return (
     <main className="wide">
       <h1 data-testid="display-name">{me.displayName}</h1>
+      <ProfilePhoto initial={me.avatarMediaId} name={me.displayName} />
       <div className="card">
-        <div className="row">
-          <span>Username</span>
-          <span>@{me.username}</span>
-        </div>
+        {me.phone && (
+          <div className="row">
+            <span>Phone</span>
+            <span data-testid="phone">{me.phone}</span>
+          </div>
+        )}
+        {me.username && (
+          <div className="row">
+            <span>Username</span>
+            <span>@{me.username}</span>
+          </div>
+        )}
         <div className="row">
           <span>Email</span>
-          <span>
-            {me.email} <span className="pill">{me.emailVerified ? 'Confirmed' : 'Not confirmed'}</span>
+          <span data-testid="email">
+            {me.email ? (
+              <>
+                {me.email} <span className="pill">{me.emailVerified ? 'Confirmed' : 'Not confirmed'}</span>
+              </>
+            ) : (
+              <span className="muted">Not added</span>
+            )}
           </span>
         </div>
         <div className="row">
@@ -43,7 +64,7 @@ export default async function AccountPage() {
           <span className="pill">{me.mfaEnabled ? 'On' : 'Off'}</span>
         </div>
       </div>
-      {!me.emailVerified && (
+      {me.email && !me.emailVerified && (
         <form action={resendVerification} style={{ marginTop: 'var(--space-md)' }}>
           <button className="btn quiet" type="submit">
             Resend confirmation email
@@ -51,12 +72,38 @@ export default async function AccountPage() {
         </form>
       )}
 
-      <p>
-        <a href={`/u/${me.username}`}>View your profile</a>
-      </p>
+      {me.phone && (
+        <>
+          <h2>{me.email ? 'Change your email' : 'Add an email'}</h2>
+          <p className="muted">For receipts and banking. You’ll need a confirmed email to receive payouts for a business. You sign in with your phone number either way.</p>
+          <ActionForm
+            action={setEmail}
+            submit={me.email ? 'Change email' : 'Add email'}
+            pending="Saving…"
+            fields={[{ name: 'email', label: 'Email', type: 'email', autoComplete: 'email' }]}
+            success={<p>Check your inbox for a link to confirm it.</p>}
+          />
+          {me.email && (
+            <form action={removeEmail} style={{ marginTop: 'var(--space-sm)' }}>
+              <button className="btn quiet" type="submit">
+                Remove email
+              </button>
+            </form>
+          )}
+        </>
+      )}
+
+      {me.username && (
+        <p>
+          <a href={`/u/${me.username}`}>View your profile</a>
+        </p>
+      )}
 
       <h2>Privacy</h2>
       <SocialSettings />
+
+      <h2>Find people you know</h2>
+      <FindPeople />
 
       <h2>Notifications</h2>
       <NotificationSettings />
@@ -92,11 +139,7 @@ export default async function AccountPage() {
         ))}
       </div>
 
-      <form action={signOut} style={{ marginTop: 'var(--space-xl)' }}>
-        <button className="btn quiet" type="submit">
-          Sign out of this device
-        </button>
-      </form>
+      <SignOutForm action={signOut} />
     </main>
   );
 }

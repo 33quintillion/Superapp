@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { api, ApiError, TokenPair } from '@/lib/api';
-import { cookieOpts, MFA_COOKIE } from '@/lib/cookies';
+import { cookieOpts, LINK_COOKIE, MFA_COOKIE, PHONE_SIGNUP_COOKIE } from '@/lib/cookies';
 import { authed, clearTokens, requireAccessToken, storeTokens } from '@/lib/session';
 
 export interface FormState {
@@ -74,6 +74,98 @@ export async function register(_: FormState, f: FormData): Promise<FormState> {
   });
   if (res.error) return res;
   redirect('/account');
+}
+
+type PhoneOutcome = TokenPair | { mfaRequired: true; mfaToken: string } | { signupRequired: true; signupToken: string; phone: string };
+
+/**
+ * Called from the phone sign-in form once Firebase has checked the code. The API verifies
+ * the ID token; we keep the resulting tokens (or the next step's token) in httpOnly cookies.
+ */
+export async function phoneSignIn(idToken: string): Promise<{ next?: string; error?: string }> {
+  try {
+    const r = await api<PhoneOutcome>('POST', '/v1/auth/phone', { body: { idToken, deviceName: 'Web browser' } });
+    const jar = await cookies();
+    if ('signupRequired' in r) {
+      jar.set(PHONE_SIGNUP_COOKIE, r.signupToken, cookieOpts(15 * 60));
+      return { next: '/sign-in/name' };
+    }
+    if ('mfaRequired' in r) {
+      jar.set(MFA_COOKIE, r.mfaToken, cookieOpts(300));
+      return { next: '/sign-in/mfa' };
+    }
+    await storeTokens(r);
+    return { next: '/account' };
+  } catch (e) {
+    if (e instanceof ApiError) return { error: e.message };
+    throw e;
+  }
+}
+
+/** A new phone user's name (and optional username), which creates the account. */
+export async function completePhoneSignUp(_: FormState, f: FormData): Promise<FormState> {
+  const jar = await cookies();
+  const signupToken = jar.get(PHONE_SIGNUP_COOKIE)?.value;
+  if (!signupToken) return { error: 'Your sign-up expired. Please enter your number again.' };
+  const username = field(f, 'username').trim().toLowerCase();
+  const res = await attempt(f, async () => {
+    await storeTokens(
+      await api<TokenPair>('POST', '/v1/auth/phone/complete', {
+        body: { signupToken, displayName: field(f, 'displayName'), ...(username ? { username } : {}), deviceName: 'Web browser' },
+      }),
+    );
+    jar.delete(PHONE_SIGNUP_COOKIE);
+  });
+  if (res.error) return res;
+  redirect('/account');
+}
+
+/**
+ * Asks for a code to link this browser from the phone app. The code is shown (as a QR code
+ * and as text); the secret that collects the session stays in an httpOnly cookie.
+ */
+export async function startLink(): Promise<{ code?: string; expiresIn?: number; error?: string; retry?: boolean }> {
+  try {
+    const r = await api<{ code: string; secret: string; expiresIn: number }>('POST', '/v1/auth/link', { body: { deviceName: 'Web browser' } });
+    (await cookies()).set(LINK_COOKIE, `${r.code}.${r.secret}`, cookieOpts(r.expiresIn + 10));
+    return { code: r.code, expiresIn: r.expiresIn };
+  } catch (e) {
+    // A server that is waking up or briefly down is worth asking again; anything else isn't.
+    if (e instanceof ApiError) return { error: e.message, retry: e.status >= 500 };
+    return { error: 'Couldn’t make a code.', retry: true };
+  }
+}
+
+/** Asked every couple of seconds while the code shows: has the phone approved it yet? */
+export async function pollLink(): Promise<{ status: 'pending' | 'expired' | 'linked'; next?: string }> {
+  const jar = await cookies();
+  const [code, secret] = (jar.get(LINK_COOKIE)?.value ?? '').split('.');
+  if (!code || !secret) return { status: 'expired' };
+  try {
+    const r = await api<TokenPair | { status: 'pending' }>('POST', '/v1/auth/link/collect', { body: { code, secret } });
+    if ('status' in r) return { status: 'pending' };
+    await storeTokens(r);
+    jar.delete(LINK_COOKIE);
+    return { status: 'linked', next: '/account' };
+  } catch (e) {
+    if (e instanceof ApiError && e.status < 500) {
+      jar.delete(LINK_COOKIE);
+      return { status: 'expired' };
+    }
+    return { status: 'pending' }; // the server was briefly unreachable: keep waiting
+  }
+}
+
+/** Adds or changes the optional email (receipts, banking and payouts). */
+export async function setEmail(_: FormState, f: FormData): Promise<FormState> {
+  const res = await attempt(f, () => authed('PUT', '/v1/me/email', { email: field(f, 'email') }));
+  if (!res.error) revalidatePath('/account');
+  return res;
+}
+
+export async function removeEmail() {
+  await authed('DELETE', '/v1/me/email');
+  revalidatePath('/account');
 }
 
 export async function forgotPassword(_: FormState, f: FormData): Promise<FormState> {

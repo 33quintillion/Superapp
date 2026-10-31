@@ -1,14 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { cookies } from 'next/headers';
-import { ACCESS_COOKIE, REFRESH_COOKIE } from '@/lib/cookies';
+import { ACCESS_COOKIE } from '@/lib/cookies';
 import './globals.css';
 
-export const metadata: Metadata = { title: 'Nexa', description: 'Messaging, social and services in one place.' };
+export const metadata: Metadata = { title: 'SuperApp', description: 'Messaging, social and services in one place.' };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const jar = await cookies();
-  const signedIn = !!(jar.get(ACCESS_COOKIE) || jar.get(REFRESH_COOKIE));
+  // The middleware has already swapped an expired access cookie for a fresh one when it
+  // could. If it couldn't (the session ended, or the server didn't answer), the person sees
+  // the sign-in screen, so the menu stays hidden too: the two always agree.
+  const signedIn = !!jar.get(ACCESS_COOKIE);
   return (
     <html lang="en">
       <body>
@@ -17,7 +20,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </a>
         <header className="top">
           <Link href="/" className="brand">
-            Nexa
+            SuperApp
           </Link>
           {signedIn && (
             <nav className="top-nav">

@@ -30,6 +30,23 @@ const schema = z.object({
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
   REDIS_URL: z.url(),
 
+  /**
+   * Email and password sign-up. Off by default: people sign up with their phone number
+   * (Firebase codes). Existing email accounts can still sign in. Tests turn it on.
+   */
+  EMAIL_SIGNUP: z.stringbool().default(false),
+  /** Firebase project whose phone sign-in codes this API accepts. Unset turns phone sign-in off. */
+  FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]{4,40}$/, 'FIREBASE_PROJECT_ID is the project ID, e.g. superapp-1a2b3').optional(),
+  /** Overrides Google's signing keys for Firebase ID tokens. Tests only; refused in staging and production. */
+  FIREBASE_JWKS_URL: z.url().optional(),
+  /** Country codes phone sign-in is open to, comma-separated (+91 India). Limits SMS fraud to where the app runs. */
+  PHONE_COUNTRY_CODES: z
+    .string()
+    .default('+91')
+    .transform(list)
+    .refine((l) => l.length > 0 && l.every((c) => /^\+[1-9][0-9]{0,3}$/.test(c)), 'PHONE_COUNTRY_CODES is a list like +91,+1'),
+  /** A phone code proves who someone is for this long after they typed it. */
+  PHONE_CODE_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   JWT_ISSUER: z.string().default('nexa-api'),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
@@ -40,12 +57,27 @@ const schema = z.object({
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'DATA_ENCRYPTION_KEY must be 32 bytes, base64-encoded'),
 
   /** "smtp" for real delivery (Mailpit locally, a provider in staging/prod); "memory" only in tests. */
-  MAIL_TRANSPORT: z.enum(['smtp', 'memory']).default('smtp'),
+  MAIL_TRANSPORT: z.enum(['smtp', 'brevo', 'memory']).default('smtp'),
+  /** brevo: Brevo's HTTPS API (api.brevo.com), for hosts that block outbound SMTP such as Render's free plan. */
+  BREVO_API_KEY: z.string().optional(),
+  /** Overrides https://api.brevo.com. Tests only; refused in staging and production. */
+  BREVO_API_BASE: z.url().optional(),
+  /** Gives up on a provider that does not answer, so a request that sends mail never hangs. */
+  MAIL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
   SMTP_URL: z.string().optional(),
-  MAIL_FROM: z.string().default('Nexa <no-reply@localhost>'),
+  /** Sign-in for the SMTP server, kept apart from SMTP_URL so each can be pasted as is (no URL encoding). */
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  MAIL_FROM: z.string().default('SuperApp <no-reply@localhost>'),
   PUBLIC_WEB_URL: z.url().default('http://localhost:3001'),
 
   RATE_LIMIT_DISABLED: z.stringbool().default(false),
+
+  /** "hibp" refuses new passwords found in Have I Been Pwned's Pwned Passwords (free, no key; only a 5-character hash prefix is sent). */
+  PASSWORD_BREACH_CHECK: z.enum(['hibp', 'off']).default('hibp'),
+  PASSWORD_BREACH_API_URL: z.url().default('https://api.pwnedpasswords.com'),
+  /** Past this the password is allowed: an outage must not block sign-ups. */
+  PASSWORD_BREACH_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2000),
 
   /** S3-compatible object storage for media (MinIO locally, any S3 provider in staging/prod). */
   S3_ENDPOINT: z.url().optional(),
@@ -58,6 +90,8 @@ const schema = z.object({
   S3_FORCE_PATH_STYLE: z.stringbool().default(true),
   /** Creates the bucket at startup. For local development and tests only. */
   S3_AUTO_CREATE_BUCKET: z.stringbool().default(false),
+  /** Sets the bucket's CORS rule to CORS_ORIGINS at startup, for providers configured only over S3 (e.g. Neon). */
+  S3_MANAGE_CORS: z.stringbool().default(false),
 
   /** How often an open WebSocket re-checks that its session is still valid. */
   WS_SESSION_RECHECK_SECONDS: z.coerce.number().int().positive().default(30),
@@ -65,6 +99,9 @@ const schema = z.object({
 
   /** How often expired stories (and their files) are deleted. 0 turns the sweep off on this instance. */
   STORY_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(300),
+
+  /** How often old sessions, spent links and abandoned uploads are deleted (docs/security-privacy.md). 0 turns it off on this instance. */
+  RETENTION_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(3600),
 
   /** Runs the push delivery loop in this process. Turn off on instances that should only serve requests. */
   PUSH_WORKER_ENABLED: z.stringbool().default(true),
@@ -162,6 +199,14 @@ const schema = z.object({
   PAYMENTS_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
 });
 
+/** "Name <a@b.c>" or "a@b.c" → its parts; null when it is neither. */
+export function parseMailbox(v: string): { name?: string; email: string } | null {
+  const m = /^\s*(?:"?([^"<]*?)"?\s*<([^<>\s]+@[^<>\s]+)>|([^<>\s]+@[^<>\s]+))\s*$/.exec(v);
+  if (!m) return null;
+  const name = m[1]?.trim();
+  return { ...(name ? { name } : {}), email: (m[2] ?? m[3]) as string };
+}
+
 function list(v: string) {
   return v
     .split(',')
@@ -184,6 +229,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.MAIL_TRANSPORT === 'smtp' && !cfg.SMTP_URL) {
     throw new Error('SMTP_URL is required when MAIL_TRANSPORT=smtp');
+  }
+  if (cfg.MAIL_TRANSPORT === 'brevo' && !cfg.BREVO_API_KEY) {
+    throw new Error('MAIL_TRANSPORT=brevo needs BREVO_API_KEY (Brevo → SMTP & API → API keys)');
+  }
+  if (cfg.MAIL_TRANSPORT === 'brevo' && !parseMailbox(cfg.MAIL_FROM)) {
+    throw new Error('MAIL_FROM must be an address such as "SuperApp <no-reply@example.com>"');
+  }
+  if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
+    throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');
+  }
+  if (cfg.SMTP_URL && cfg.SMTP_USER) {
+    let url: URL;
+    try {
+      url = new URL(cfg.SMTP_URL);
+    } catch {
+      throw new Error('SMTP_URL must be a URL such as smtp://smtp.example.com:587');
+    }
+    if (url.username || url.password) throw new Error('Put the SMTP sign-in in SMTP_USER and SMTP_PASS, or in SMTP_URL, not both');
   }
   if (cfg.RATE_LIMIT_DISABLED && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
     throw new Error('RATE_LIMIT_DISABLED cannot be set in staging or production');
@@ -236,6 +299,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ['TWILIO_API_BASE', cfg.TWILIO_API_BASE],
     ['CLOUDFLARE_TURN_API_BASE', cfg.CLOUDFLARE_TURN_API_BASE],
     ['STRIPE_API_BASE', cfg.STRIPE_API_BASE],
+    ['BREVO_API_BASE', cfg.BREVO_API_BASE],
+    ['FIREBASE_JWKS_URL', cfg.FIREBASE_JWKS_URL],
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }

@@ -46,6 +46,62 @@ describe('profile and privacy', () => {
   });
 });
 
+describe('finding people you know', () => {
+  const match = (token: string, body: unknown) => req(ctx.app, 'POST', '/v1/contacts/match', { token, body });
+  let n = 0;
+  /** A person with a confirmed email and phone number, findable by them or not. */
+  async function person(findable: { email?: boolean; phone?: boolean }) {
+    const p = await register();
+    n += 1;
+    const phone = `+4479${String(process.pid).slice(-4).padStart(4, '0')}${String(n).padStart(4, '0')}`;
+    await pool.query('UPDATE users SET email_verified_at = now(), phone_e164 = $2, phone_verified_at = now() WHERE id = $1', [p.id, phone]);
+    await req(ctx.app, 'PATCH', '/v1/me/privacy', { token: p.token, body: { discoverableByEmail: !!findable.email, discoverableByPhone: !!findable.phone } });
+    return { ...p, email: p.u.email.toLowerCase(), phone };
+  }
+
+  it('finds only people who chose to be found that way', async () => {
+    const me = await register();
+    const byEmail = await person({ email: true });
+    const byPhone = await person({ phone: true });
+    const hidden = await person({});
+    const r = await match(me.token, {
+      emails: [byEmail.email.toUpperCase(), byPhone.email, hidden.email, 'not an email'],
+      // Written the way address books do.
+      phones: [byPhone.phone.replace(/^(\+44)(\d{4})/, '$1 ($2) '), byEmail.phone, hidden.phone, '0800 123'],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.matches).toHaveLength(2);
+    expect(r.body.matches).toEqual(
+      expect.arrayContaining([
+        { matched: byEmail.email, user: { id: byEmail.id, username: byEmail.u.username, displayName: expect.any(String), avatarMediaId: null } },
+        { matched: byPhone.phone, user: expect.objectContaining({ id: byPhone.id }) },
+      ]),
+    );
+    // Nothing else about them, and never the other way of reaching them.
+    expect(JSON.stringify(r.body)).not.toContain(byEmail.phone);
+    expect(JSON.stringify(r.body)).not.toContain(byPhone.email);
+  });
+
+  it('skips unconfirmed addresses, blocked people, and yourself', async () => {
+    const me = await person({ email: true });
+    const unconfirmed = await person({ email: true });
+    await pool.query('UPDATE users SET email_verified_at = NULL WHERE id = $1', [unconfirmed.id]);
+    const blocker = await person({ email: true });
+    await req(ctx.app, 'POST', '/v1/blocks', { token: blocker.token, body: { userId: me.id } });
+    const r = await match(me.token, { emails: [me.email, unconfirmed.email, blocker.email] });
+    expect(r.body.matches).toEqual([]);
+  });
+
+  it('limits the size and number of lookups', async () => {
+    const me = await register();
+    const many = Array.from({ length: 1001 }, (_, i) => `x${i}@example.test`);
+    expect((await match(me.token, { emails: many })).status).toBe(400);
+    expect((await match(me.token, { emails: many.slice(0, 600), phones: Array(401).fill('+447900000000') })).status).toBe(400);
+    for (let i = 0; i < 10; i++) expect((await match(me.token, { emails: [] })).status).toBe(200);
+    expect((await match(me.token, { emails: [] })).status).toBe(429);
+  });
+});
+
 describe('blocking and reporting', () => {
   it('a block hides both users from each other and can be undone', async () => {
     const a = await register();

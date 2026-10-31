@@ -1,16 +1,19 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { APP_CONFIG, AppConfig } from '../config/config';
 import { AuditService } from '../common/audit.service';
-import { Errors } from '../common/errors';
+import { AppError, Errors } from '../common/errors';
 import { RateLimitService } from '../common/rate-limit.service';
 import { SecretBox } from '../crypto/secret-box';
 import { hashToken, randomToken } from '../crypto/tokens';
 import { generateTotpSecret, otpauthUri, verifyTotp } from '../crypto/totp';
 import { DatabaseService, Queryable } from '../database/database.service';
 import { MailService } from '../mail/mail.service';
+import { RedisService } from '../redis/redis.service';
 import type { ClientInfo } from './auth.guard';
+import { BreachedPasswordsService } from './breached-passwords.service';
 import { hashPassword, verifyPassword } from './password';
+import { PhoneTokenService } from './phone-token.service';
 import { TokenService } from './token.service';
 
 export interface TokenPair {
@@ -22,6 +25,16 @@ export interface TokenPair {
 
 export type LoginResult = TokenPair | { mfaRequired: true; mfaToken: string };
 
+/** A verified number with no account yet: the app asks for a name, then calls phone/complete. */
+export type PhoneSignInResult = LoginResult | { signupRequired: true; signupToken: string; phone: string };
+
+/** What proves it's really the account holder before something drastic (delete, turn off two-step). */
+export interface IdentityProof {
+  password?: string;
+  /** A fresh Firebase ID token for the account's own number, for accounts without a password. */
+  phoneIdToken?: string;
+}
+
 const RULES = {
   registerIp: { name: 'register:ip', limit: 10, windowSeconds: 3600 },
   loginIp: { name: 'login:ip', limit: 30, windowSeconds: 900 },
@@ -30,6 +43,8 @@ const RULES = {
   forgotIp: { name: 'forgot:ip', limit: 10, windowSeconds: 3600 },
   forgotAccount: { name: 'forgot:acct', limit: 3, windowSeconds: 3600 },
   resendVerify: { name: 'verify:resend', limit: 3, windowSeconds: 3600 },
+  phoneIp: { name: 'phone:ip', limit: 30, windowSeconds: 900 },
+  emailSet: { name: 'email:set', limit: 5, windowSeconds: 3600 },
   refreshIp: { name: 'refresh:ip', limit: 120, windowSeconds: 900 },
   // Per account, across every challenge token, so asking for new tokens doesn't buy more guesses.
   totpAccount: { name: 'totp:acct', limit: 10, windowSeconds: 900 },
@@ -45,6 +60,7 @@ export const PASSWORD_CONFIRM_RULE = { name: 'password:confirm', limit: 10, wind
 const VERIFY_TTL_H = 48;
 const RESET_TTL_MIN = 30;
 const MFA_CHALLENGE_TTL_MIN = 5;
+const PHONE_SIGNUP_TTL_S = 15 * 60;
 
 @Injectable()
 export class AuthService {
@@ -56,6 +72,9 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly limits: RateLimitService,
     private readonly audit: AuditService,
+    private readonly breached: BreachedPasswordsService,
+    private readonly phone: PhoneTokenService,
+    private readonly redis: RedisService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {
     this.box = new SecretBox(config.DATA_ENCRYPTION_KEY);
@@ -65,7 +84,11 @@ export class AuthService {
     input: { email: string; password: string; username: string; displayName: string; deviceName?: string },
     client: ClientInfo,
   ): Promise<TokenPair> {
+    if (!this.config.EMAIL_SIGNUP) {
+      throw new AppError(HttpStatus.FORBIDDEN, 'email_signup_closed', 'Sign up with your phone number instead');
+    }
     await this.limits.consume(RULES.registerIp, client.ip ?? 'unknown');
+    await this.breached.assertNotBreached(input.password);
     const passwordHash = await hashPassword(input.password);
     const { userId, pair } = await this.db.tx(async (tx) => {
       const taken = await this.db.one<{ email: string | null; username: string | null }>(
@@ -96,6 +119,131 @@ export class AuthService {
     return pair;
   }
 
+  // --- Phone sign-in (Firebase codes) ---
+
+  /**
+   * Signs in with a verified phone number. An existing account gets a session (or the two-step
+   * challenge); a new number gets a short-lived sign-up token so the app can ask for a name.
+   */
+  async phoneSignIn(input: { idToken: string; deviceName?: string }, client: ClientInfo): Promise<PhoneSignInResult> {
+    await this.limits.consume(RULES.phoneIp, client.ip ?? 'unknown');
+    const phone = await this.phone.verify(input.idToken);
+    const user = await this.db.one<{ id: string; state: string; mfa_enabled_at: Date | null }>(
+      `SELECT id, state, mfa_enabled_at FROM users WHERE phone_e164 = $1 AND state <> 'deleted'`,
+      [phone],
+    );
+    if (!user) {
+      const signupToken = randomToken();
+      await this.redis.client.set(`phone-signup:${hashToken(signupToken)}`, phone, 'EX', PHONE_SIGNUP_TTL_S);
+      return { signupRequired: true, signupToken, phone };
+    }
+    if (user.state === 'suspended') throw Errors.accountSuspended();
+    await this.db.query('UPDATE users SET phone_verified_at = now(), updated_at = now() WHERE id = $1', [user.id]);
+    if (user.mfa_enabled_at) {
+      const mfaToken = await this.issueOneTimeToken(user.id, 'mfa_challenge', `${MFA_CHALLENGE_TTL_MIN} minutes`);
+      return { mfaRequired: true, mfaToken };
+    }
+    return this.completeLogin(user.id, user.state, input.deviceName, client);
+  }
+
+  /** Creates the account for a number verified by phoneSignIn. Usernames are optional. */
+  async phoneSignUp(input: { signupToken: string; displayName: string; username?: string; deviceName?: string }, client: ClientInfo): Promise<TokenPair> {
+    await this.limits.consume(RULES.registerIp, client.ip ?? 'unknown');
+    const key = `phone-signup:${hashToken(input.signupToken)}`;
+    const phone = await this.redis.client.get(key);
+    if (!phone) throw Errors.invalidToken();
+    const pair = await this.db
+      .tx(async (tx) => {
+        const taken = await this.db.one<{ phone_e164: string | null; username: string | null }>(
+          `SELECT phone_e164, username FROM users WHERE phone_e164 = $1 OR ($2::text IS NOT NULL AND username = $2) LIMIT 1`,
+          [phone, input.username ?? null],
+          tx,
+        );
+        if (taken?.phone_e164 === phone) throw Errors.conflict('phone_taken', 'This number already has an account. Sign in instead.');
+        if (taken) throw Errors.conflict('username_taken', 'That username is taken');
+        const user = await this.db.one<{ id: string }>(
+          `INSERT INTO users (phone_e164, phone_verified_at, username, display_name) VALUES ($1, now(), $2, $3) RETURNING id`,
+          [phone, input.username ?? null, input.displayName],
+          tx,
+        );
+        const userId = user!.id;
+        await this.db.query('INSERT INTO privacy_settings (user_id) VALUES ($1)', [userId], tx);
+        await this.audit.record({ actorId: userId, action: 'auth.register', ip: client.ip, metadata: { method: 'phone' } }, tx);
+        return this.createSession(tx, userId, input.deviceName, client);
+      })
+      .catch((err) => {
+        if ((err as { code?: string }).code === '23505') throw Errors.conflict('account_exists', 'That number or username is already in use');
+        throw err;
+      });
+    await this.redis.client.del(key);
+    return pair;
+  }
+
+  /**
+   * Confirms it's the account holder: their password, or for accounts without one, a fresh
+   * code sent to their own number. Limited per account so a stolen session can't guess.
+   */
+  async confirmIdentity(userId: string, proof: IdentityProof) {
+    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
+    const u = await this.db.one<{ password_hash: string | null; phone_e164: string | null }>('SELECT password_hash, phone_e164 FROM users WHERE id = $1', [userId]);
+    if (u?.password_hash) {
+      if (!(await verifyPassword(u.password_hash, proof.password ?? ''))) throw Errors.invalidCredentials();
+      return;
+    }
+    if (!u?.phone_e164 || !proof.phoneIdToken) throw new AppError(HttpStatus.UNAUTHORIZED, 'phone_confirmation_required', 'Confirm with a code sent to your phone');
+    if ((await this.phone.verify(proof.phoneIdToken)) !== u.phone_e164) throw Errors.invalidToken();
+  }
+
+  /** A session for a computer the person linked from their signed-in phone (LinkService). */
+  async openLinkedSession(userId: string, deviceName: string, client: ClientInfo): Promise<TokenPair> {
+    const u = await this.db.one<{ state: string }>('SELECT state FROM users WHERE id = $1', [userId]);
+    if (u?.state === 'suspended') throw Errors.accountSuspended();
+    if (u?.state !== 'active') throw Errors.invalidToken();
+    return this.db.tx(async (tx) => {
+      await this.audit.record({ actorId: userId, action: 'auth.device_linked', ip: client.ip, metadata: { deviceName } }, tx);
+      return this.createSession(tx, userId, deviceName, client);
+    });
+  }
+
+  // --- Optional email (for receipts, banking and payouts) ---
+
+  /** Adds or changes the account's email and sends a confirmation link. Not a way to sign in for phone accounts. */
+  async setEmail(userId: string, email: string) {
+    await this.limits.consume(RULES.emailSet, userId);
+    const u = await this.db.one<{ email: string | null; email_verified_at: Date | null; password_hash: string | null }>(
+      'SELECT email, email_verified_at, password_hash FROM users WHERE id = $1',
+      [userId],
+    );
+    if (u?.email === email) {
+      if (!u.email_verified_at) await this.sendVerification(userId, email);
+      return { email, verified: Boolean(u.email_verified_at) };
+    }
+    await this.db
+      .tx(async (tx) => {
+        await this.db.query('UPDATE users SET email = $2, email_verified_at = NULL, updated_at = now() WHERE id = $1', [userId, email], tx);
+        // Links sent to the old address must not confirm the new one.
+        await this.db.query(`UPDATE one_time_tokens SET used_at = now() WHERE user_id = $1 AND purpose = 'verify_email' AND used_at IS NULL`, [userId], tx);
+        await this.audit.record({ actorId: userId, action: 'account.email_changed' }, tx);
+      })
+      .catch((err) => {
+        if ((err as { code?: string }).code === '23505') throw Errors.conflict('email_taken', 'That email is used by another account');
+        throw err;
+      });
+    await this.sendVerification(userId, email);
+    return { email, verified: false };
+  }
+
+  async removeEmail(userId: string) {
+    const u = await this.db.one<{ email: string | null; phone_e164: string | null }>('SELECT email, phone_e164 FROM users WHERE id = $1', [userId]);
+    if (!u?.email) return;
+    if (!u.phone_e164) throw Errors.conflict('email_is_login', 'This email is how you sign in, so it cannot be removed');
+    await this.db.tx(async (tx) => {
+      await this.db.query('UPDATE users SET email = NULL, email_verified_at = NULL, updated_at = now() WHERE id = $1', [userId], tx);
+      await this.db.query(`UPDATE one_time_tokens SET used_at = now() WHERE user_id = $1 AND purpose = 'verify_email' AND used_at IS NULL`, [userId], tx);
+      await this.audit.record({ actorId: userId, action: 'account.email_removed' }, tx);
+    });
+  }
+
   async resendVerification(userId: string) {
     await this.limits.consume(RULES.resendVerify, userId);
     const u = await this.db.one<{ email: string; email_verified_at: Date | null }>(
@@ -106,7 +254,7 @@ export class AuthService {
     await this.sendVerification(userId, u.email);
   }
 
-  private async sendVerification(userId: string, email: string) {
+  async sendVerification(userId: string, email: string) {
     const token = await this.issueOneTimeToken(userId, 'verify_email', `${VERIFY_TTL_H} hours`);
     await this.mail.send({
       to: email,
@@ -259,6 +407,7 @@ export class AuthService {
   }
 
   async resetPassword(token: string, newPassword: string, client: ClientInfo) {
+    await this.breached.assertNotBreached(newPassword);
     const passwordHash = await hashPassword(newPassword);
     await this.db.tx(async (tx) => {
       const userId = await this.consumeOneTimeToken(tx, token, 'reset_password');
@@ -274,6 +423,7 @@ export class AuthService {
     await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
     const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
     if (!(await verifyPassword(u?.password_hash ?? null, current))) throw Errors.invalidCredentials();
+    await this.breached.assertNotBreached(next);
     const passwordHash = await hashPassword(next);
     await this.db.tx(async (tx) => {
       await this.db.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [userId, passwordHash], tx);
@@ -289,11 +439,14 @@ export class AuthService {
   // --- MFA (TOTP) ---
 
   async beginMfaSetup(userId: string) {
-    const u = await this.db.one<{ email: string; mfa_enabled_at: Date | null }>('SELECT email, mfa_enabled_at FROM users WHERE id = $1', [userId]);
+    const u = await this.db.one<{ email: string | null; phone_e164: string | null; username: string | null; mfa_enabled_at: Date | null }>(
+      'SELECT email, phone_e164, username, mfa_enabled_at FROM users WHERE id = $1',
+      [userId],
+    );
     if (u!.mfa_enabled_at) throw Errors.conflict('mfa_already_enabled', 'Two-step verification is already on');
     const secret = generateTotpSecret();
     await this.db.query('UPDATE users SET mfa_pending_secret_enc = $2 WHERE id = $1', [userId, this.box.seal(secret, userId)]);
-    return { secret, otpauthUri: otpauthUri(secret, u!.email, 'Nexa') };
+    return { secret, otpauthUri: otpauthUri(secret, u!.email ?? u!.phone_e164 ?? u!.username ?? 'account', 'SuperApp') };
   }
 
   async confirmMfaSetup(userId: string, code: string) {
@@ -309,11 +462,10 @@ export class AuthService {
     await this.audit.record({ actorId: userId, action: 'auth.mfa_enabled' });
   }
 
-  async disableMfa(userId: string, password: string, code: string) {
-    const u = await this.db.one<{ password_hash: string | null; mfa_enabled_at: Date | null }>('SELECT password_hash, mfa_enabled_at FROM users WHERE id = $1', [userId]);
+  async disableMfa(userId: string, proof: IdentityProof, code: string) {
+    const u = await this.db.one<{ mfa_enabled_at: Date | null }>('SELECT mfa_enabled_at FROM users WHERE id = $1', [userId]);
     if (!u?.mfa_enabled_at) throw Errors.conflict('mfa_not_enabled', 'Two-step verification is not on');
-    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
-    if (!(await verifyPassword(u.password_hash, password))) throw Errors.invalidCredentials();
+    await this.confirmIdentity(userId, proof);
     await this.checkTotp(userId, code);
     await this.db.query('UPDATE users SET mfa_totp_secret_enc = NULL, mfa_enabled_at = NULL, mfa_last_counter = NULL WHERE id = $1', [userId]);
     await this.audit.record({ actorId: userId, action: 'auth.mfa_disabled' });

@@ -26,6 +26,30 @@ export function RemoteMedia({ id, kind, alt }: { id: string; kind: 'image' | 'vi
   return kind === 'image' ? <img className="post-media" src={url} alt={alt} data-testid="post-image" /> : <video className="post-media" src={url} controls preload="metadata" />;
 }
 
+/** A profile photo, or the first letter of the name when there isn't one. */
+export function Avatar({ mediaId, name, size = 64 }: { mediaId: string | null; name: string; size?: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setUrl(null);
+    if (!mediaId) return;
+    const hit = urlCache.get(mediaId);
+    if (hit && hit.until > Date.now()) return setUrl(hit.url);
+    chatApi<{ url: string; expiresIn: number }>('GET', `media/${mediaId}`)
+      .then((r) => {
+        urlCache.set(mediaId, { url: r.url, until: Date.now() + (r.expiresIn - 30) * 1000 });
+        setUrl(r.url);
+      })
+      .catch(() => setUrl(null));
+  }, [mediaId]);
+  const style = { width: size, height: size, fontSize: size / 2.4 };
+  if (url) return <img className="avatar" style={style} src={url} alt={`Profile photo of ${name}`} data-testid="avatar-image" />;
+  return (
+    <span className="avatar" style={style} aria-hidden="true">
+      {[...name.trim()][0]?.toUpperCase() ?? '?'}
+    </span>
+  );
+}
+
 export function PostComposer({ communityId, onPosted, placeholder = 'What’s on your mind?' }: { communityId?: string; onPosted: (p: Post) => void; placeholder?: string }) {
   const [body, setBody] = useState('');
   const [audience, setAudience] = useState<Audience>('public');

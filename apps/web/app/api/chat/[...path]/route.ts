@@ -34,6 +34,11 @@ const ALLOWED: [string, RegExp][] = [
   ['PUT', /^push\/devices\/current$/],
   ['DELETE', /^push\/devices\/current$/],
   ['POST', /^push\/devices\/current\/test$/],
+  // Finding people you know.
+  ['POST', /^contacts\/match$/],
+  // Profile photo.
+  ['PUT', /^me\/avatar$/],
+  ['DELETE', /^me\/avatar$/],
   ['GET', /^me\/notifications$/],
   ['PATCH', /^me\/notifications$/],
   // Groups.
@@ -113,13 +118,14 @@ const ALLOWED: [string, RegExp][] = [
   ['POST', new RegExp(`^admin/integrations/${ID}/state$`)],
   ['DELETE', new RegExp(`^admin/staff/${ID}$`)],
   // Payments, payouts and plans. Provider webhooks go straight to the API, never through here.
-  ['GET', new RegExp(`^businesses/${ID}/(payments|payments/account|subscription)$`)],
-  ['POST', new RegExp(`^businesses/${ID}/(payments/account|subscription|subscription/resume|billing-portal)$`)],
+  ['GET', new RegExp(`^businesses/${ID}/(payments|payments/account|payouts|disputes|subscription)$`)],
+  ['POST', new RegExp(`^businesses/${ID}/(payments/account|subscription|subscription/resume|subscription/preview|subscription/change|billing-portal)$`)],
   ['DELETE', new RegExp(`^businesses/${ID}/subscription$`)],
-  ['POST', new RegExp(`^orders/${ID}/(checkout|refunds)$`)],
-  ['GET', new RegExp(`^orders/${ID}/payment$`)],
+  ['POST', new RegExp(`^(orders|bookings)/${ID}/(checkout|refunds)$`)],
+  ['GET', new RegExp(`^(orders|bookings)/${ID}/payment$`)],
+  ['POST', new RegExp(`^disputes/${ID}/response$`)],
   ['GET', /^(me\/payments|plans)$/],
-  ['GET', /^admin\/(payments|ledger|plans)$/],
+  ['GET', /^admin\/(payments|ledger|plans|disputes|reconciliation)$/],
   ['POST', /^admin\/plans$/],
   ['POST', new RegExp(`^admin/plans/${ID}/state$`)],
 ];

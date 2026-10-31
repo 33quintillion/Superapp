@@ -9,14 +9,19 @@ import { IntegrationsController } from './integrations/integrations.controller';
 import { LedgerService } from './payments/ledger';
 import { PaymentsController } from './payments/payments.controller';
 import { PaymentsService } from './payments/payments.service';
+import { DisputesService } from './payments/disputes.service';
+import { ReconciliationService } from './payments/reconciliation.service';
 import { SubscriptionsService } from './payments/subscriptions.service';
 import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
 import { IceService } from './calls/ice.service';
-import { AuthController, SessionsController } from './auth/auth.controller';
+import { AuthController, EmailController, LinkController, SessionsController } from './auth/auth.controller';
+import { LinkService } from './auth/link.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { BreachedPasswordsService } from './auth/breached-passwords.service';
+import { PhoneTokenService } from './auth/phone-token.service';
 import { TokenService } from './auth/token.service';
 import { AuditService } from './common/audit.service';
 import { RateLimitService } from './common/rate-limit.service';
@@ -37,6 +42,7 @@ import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
 import { PushController } from './push/push.controller';
 import { PushProviders } from './push/push.providers';
+import { RetentionService } from './retention/retention.service';
 import { PushService } from './push/push.service';
 import { PushWorker } from './push/push.worker';
 import { CommunitiesService } from './social/communities.service';
@@ -57,6 +63,8 @@ export class AppModule {
       controllers: [
         HealthController,
         AuthController,
+        EmailController,
+        LinkController,
         SessionsController,
         UsersController,
         SafetyController,
@@ -82,6 +90,9 @@ export class AppModule {
         TokenService,
         AuthGuard,
         AuthService,
+        BreachedPasswordsService,
+        PhoneTokenService,
+        LinkService,
         UsersService,
         SafetyService,
         StorageService,
@@ -102,10 +113,13 @@ export class AppModule {
         LedgerService,
         PaymentsService,
         SubscriptionsService,
+        DisputesService,
+        ReconciliationService,
         OrdersService,
         BookingsService,
         IntegrationsService,
         AdminService,
+        RetentionService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

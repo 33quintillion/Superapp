@@ -70,6 +70,8 @@ let handles = 0;
 async function shop(currency = 'GBP') {
   handles += 1;
   const [owner, manager, staff, customer] = [await user(), await user(), await user(), await user()];
+  // Payouts need a confirmed email; that flow has its own test in auth.e2e.
+  await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [owner.id]);
   const b = (
     await call('POST', '/v1/businesses', owner, { handle: `pay-${process.pid % 10000}-${handles}`, name: `Bakery ${handles}`, category: 'food', timeZone: 'UTC', currency })
   ).body;
@@ -132,6 +134,15 @@ const stock = async (s: { b: { id: string }; owner: TestUser }, itemId: string) 
   (await call('GET', `/v1/businesses/${s.b.id}/items?all=true`, s.owner)).body.items.find((i: { id: string }) => i.id === itemId).stock;
 
 describe('payout accounts', () => {
+  it('needs the owner to have a confirmed email first', async () => {
+    const s = await shop();
+    await pool.query('UPDATE users SET email_verified_at = NULL WHERE id = $1', [s.owner.id]);
+    const r = await call('POST', `/v1/businesses/${s.b.id}/payments/account`, s.owner, { country: 'GB' });
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('email_required');
+    expect(stripe.requests.filter((q) => q.path === '/v1/accounts' && q.params.metadata?.business_id === s.b.id)).toHaveLength(0);
+  });
+
   it('lets only the owner set up payouts, and turns on online payment once the provider says so', async () => {
     const s = await shop();
     expect((await call('GET', `/v1/businesses/${s.b.handle}`, s.customer)).body.payments).toEqual({ online: false, inPerson: true });

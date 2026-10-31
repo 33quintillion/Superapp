@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { parse, usernameSchema } from '../common/zod';
+import { emailSchema, parse, usernameSchema } from '../common/zod';
+import { IdentityProofBody } from '../auth/auth.controller';
 import { Auth, AuthGuard } from '../auth/auth.guard';
 import type { AccessClaims } from '../auth/token.service';
-import { UsersService } from './users.service';
+import { CONTACTS_MAX, UsersService } from './users.service';
 
 const ProfilePatch = z
   .object({
@@ -29,7 +30,26 @@ const PrivacyPatch = z
   .partial()
   .strict();
 
-const PasswordConfirm = z.object({ password: z.string().min(1).max(256) });
+const AvatarPut = z.object({ mediaId: z.string().uuid() }).strict();
+
+/**
+ * Entries that aren't a valid email address or an E.164 phone number (after removing spaces,
+ * dashes, dots and brackets) are skipped rather than refused: address books are messy.
+ */
+const phoneEntry = z.string().max(40).transform((p) => p.replace(/[\s\-().]/g, ''));
+const ContactsMatch = z
+  .object({ emails: z.array(z.string().max(254)).max(CONTACTS_MAX).default([]), phones: z.array(phoneEntry).max(CONTACTS_MAX).default([]) })
+  .strict()
+  .refine((b) => b.emails.length + b.phones.length <= CONTACTS_MAX, `At most ${CONTACTS_MAX} entries at a time`)
+  .transform((b) => ({
+    emails: b.emails.flatMap((e) => {
+      const r = emailSchema.safeParse(e);
+      return r.success ? [r.data] : [];
+    }),
+    phones: b.phones.filter((p) => /^\+[1-9][0-9]{6,14}$/.test(p)),
+  }));
+
+
 
 @Controller('v1')
 @UseGuards(AuthGuard)
@@ -44,6 +64,16 @@ export class UsersController {
   @Patch('me')
   update(@Auth() a: AccessClaims, @Body() body: unknown) {
     return this.users.updateProfile(a.userId, parse(ProfilePatch, body));
+  }
+
+  @Put('me/avatar')
+  setAvatar(@Auth() a: AccessClaims, @Body() body: unknown) {
+    return this.users.setAvatar(a.userId, parse(AvatarPut, body).mediaId);
+  }
+
+  @Delete('me/avatar')
+  removeAvatar(@Auth() a: AccessClaims) {
+    return this.users.setAvatar(a.userId, null);
   }
 
   @Get('me/privacy')
@@ -64,13 +94,19 @@ export class UsersController {
   @Post('me/deactivate')
   @HttpCode(204)
   async deactivate(@Auth() a: AccessClaims, @Body() body: unknown) {
-    await this.users.deactivate(a.userId, parse(PasswordConfirm, body).password);
+    await this.users.deactivate(a.userId, parse(IdentityProofBody, body));
   }
 
   @Delete('me')
   @HttpCode(204)
   async remove(@Auth() a: AccessClaims, @Body() body: unknown) {
-    await this.users.deleteAccount(a.userId, parse(PasswordConfirm, body).password);
+    await this.users.deleteAccount(a.userId, parse(IdentityProofBody, body));
+  }
+
+  @Post('contacts/match')
+  @HttpCode(200)
+  matchContacts(@Auth() a: AccessClaims, @Body() body: unknown) {
+    return this.users.matchContacts(a.userId, parse(ContactsMatch, body));
   }
 
   @Get('users/:username')

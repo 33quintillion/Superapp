@@ -1,0 +1,359 @@
+/*
+ * Sign-in, sign-up and the steps after them: one calm card on a softly tinted page, steps on
+ * the left and the form on the right (the QR code joins it there later). Indigo and marigold.
+ */
+.page {
+  --tint: #eceffb;
+  --marigold: #f4b23e;
+  --marigold-ink: #9a6a10;
+  min-height: calc(100vh - 57px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px var(--space-lg) 40px;
+  background: var(--tint);
+}
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme='light'])) .page {
+    --tint: #0b0e14;
+    --marigold-ink: var(--marigold);
+  }
+}
+:global(:root[data-theme='dark']) .page {
+  --tint: #0b0e14;
+  --marigold-ink: var(--marigold);
+}
+
+.card {
+  width: 100%;
+  max-width: 940px;
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 56px;
+  padding: 52px 56px;
+  border-radius: 28px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+}
+/* Grid columns shrink to the card, not to their widest line. */
+.intro,
+.side {
+  min-width: 0;
+}
+
+.greeting {
+  margin: 0 0 var(--space-sm);
+  height: 1.5em;
+  overflow: hidden;
+  font-size: 30px;
+  line-height: 1.5;
+  font-weight: 700;
+  color: var(--marigold-ink);
+}
+/* Each greeting rolls up into the line and out of it, always at full colour (no fading,
+   so it is never too faint to read). */
+.word {
+  display: inline-block;
+  animation: greet 2800ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes greet {
+  0% { transform: translateY(105%); }
+  12%, 86% { transform: none; }
+  100% { transform: translateY(-105%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .word { animation: none; }
+}
+
+.heading {
+  margin: 0 0 var(--space-xl);
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* The steps really are a sequence, so they're numbered. */
+.steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 14px;
+  align-items: baseline;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.steps li::before {
+  content: counter(step);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.title {
+  margin: 0 0 var(--space-xs);
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.lede {
+  margin: 0 0 var(--space-lg);
+  color: var(--color-text-muted);
+}
+
+/* Phone number: a fixed country chip joined to the number field. */
+.phoneRow {
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  transition: border-color 120ms;
+}
+.phoneRow:focus-within {
+  border-color: var(--color-primary);
+}
+.country {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-right: 1.5px solid var(--color-border);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.countryCode {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.phoneInput {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 16px 14px;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.phoneInput:focus-visible {
+  outline: none;
+}
+
+/* The code: six boxes drawn behind one real input, so SMS autofill and paste just work. */
+.code {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+.box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 5 / 6;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 120ms, transform 120ms;
+}
+.box.filled {
+  border-color: var(--color-text-muted);
+}
+.box.active {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 -3px 0 var(--marigold);
+}
+.codeInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  border: 0;
+  font-size: 16px;
+  caret-color: transparent;
+  cursor: text;
+}
+.code:focus-within .box.active {
+  transform: translateY(-2px);
+}
+.code:focus-within {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+
+.sentTo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: baseline;
+  margin: 0 0 var(--space-lg);
+  color: var(--color-text-muted);
+}
+.sentTo strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.primary {
+  width: 100%;
+  margin-top: var(--space-xl);
+  padding: 15px var(--space-lg);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary[disabled] {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.after {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+}
+.countdown {
+  font-variant-numeric: tabular-nums;
+}
+.fine {
+  margin: var(--space-md) 0 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+}
+.error {
+  margin: var(--space-md) 0 0;
+  color: var(--color-danger);
+}
+
+/* The QR code: a white square whatever the theme, so phones can read it. */
+.qrFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 264px;
+  aspect-ratio: 1;
+  margin: var(--space-sm) auto 0;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.qr {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.qrWait {
+  padding: var(--space-lg);
+  text-align: center;
+  color: #5a6372;
+}
+.qrReload {
+  width: 100%;
+  height: 100%;
+  padding: var(--space-xl);
+  border: 0;
+  background: #fff;
+  color: #3b5bdb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.typedCode {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+}
+.switch {
+  margin-top: var(--space-xl);
+  text-align: left;
+}
+
+/* Older email accounts: folded away under one quiet line. */
+.email {
+  margin-top: 28px;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border);
+}
+.email summary {
+  cursor: pointer;
+  color: var(--color-primary);
+}
+.email[open] summary {
+  margin-bottom: var(--space-lg);
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  max-width: 940px;
+  margin: var(--space-xl) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+@media (max-width: 860px) {
+  .page {
+    padding: 24px var(--space-lg) 32px;
+  }
+  .card {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 32px 24px;
+    border-radius: 22px;
+  }
+  .greeting {
+    font-size: 26px;
+  }
+  .heading {
+    font-size: 26px;
+    margin-bottom: var(--space-lg);
+  }
+  .steps li {
+    font-size: 15px;
+  }
+}

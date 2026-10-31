@@ -16,6 +16,7 @@ import {
   uploadMedia,
 } from '@/lib/chat-client';
 import { CallManager, CallView } from '@/lib/call-session';
+import { loadOutbox, OutboxEntry, saveOutbox } from '@/lib/outbox-store';
 import { CallHistory, CallScreen, describeCall } from './call-ui';
 
 interface Me {
@@ -275,19 +276,19 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
     rt.current?.frame({ type: 'receipt', conversationId: activeId, kind: 'read', seq: lastFromOthers.seq });
   }, [activeId, lastFromOthers?.seq, myRead, conn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = useCallback(
-    async (cid: string, content: { kind: Message['kind']; body?: string; mediaId?: string; replyToId?: string; media?: Media | null }) => {
-      const clientId = newClientId();
+  /** Shows a message as sending and hands it to the connection, which re-sends it after each reconnect. */
+  const deliver = useCallback(
+    async (e: OutboxEntry) => {
       const local: Message = {
-        id: `local-${clientId}`,
-        conversationId: cid,
+        id: `local-${e.clientId}`,
+        conversationId: e.conversationId,
         seq: 0,
         changeSeq: 0,
         senderId: me.id,
-        clientId,
-        kind: content.kind,
-        body: content.body ?? '',
-        media: content.media ?? null,
+        clientId: e.clientId,
+        kind: e.kind,
+        body: e.body,
+        media: e.media ?? null,
         replyTo: null,
         forwarded: false,
         mentions: [],
@@ -296,20 +297,49 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
         editedAt: null,
         deletedAt: null,
         pinnedAt: null,
-        createdAt: new Date().toISOString(),
+        createdAt: e.createdAt,
         pending: 'sending',
       };
-      upsert(cid, [local]);
+      upsert(e.conversationId, [local]);
       try {
-        const ack = await rt.current!.send(cid, { clientId, kind: content.kind, body: content.body ?? '', mediaId: content.mediaId, replyToId: content.replyToId });
-        upsert(cid, [ack.message]);
-      } catch (e) {
-        upsert(cid, [{ ...local, pending: 'failed' }]);
-        setError(e instanceof Error ? e.message : 'Not sent');
+        const ack = await rt.current!.send(e.conversationId, { clientId: e.clientId, kind: e.kind, body: e.body, mediaId: e.mediaId, replyToId: e.replyToId });
+        upsert(e.conversationId, [ack.message]);
+      } catch (err) {
+        upsert(e.conversationId, [{ ...local, pending: 'failed' }]);
+        setError(err instanceof Error ? err.message : 'Not sent');
       }
+      saveOutbox(me.id, loadOutbox(me.id).filter((x) => x.clientId !== e.clientId));
     },
     [me.id, upsert],
   );
+
+  const send = useCallback(
+    async (cid: string, content: { kind: Message['kind']; body?: string; mediaId?: string; replyToId?: string; media?: Media | null }) => {
+      const e: OutboxEntry = {
+        conversationId: cid,
+        clientId: newClientId(),
+        kind: content.kind,
+        body: content.body ?? '',
+        mediaId: content.mediaId,
+        replyToId: content.replyToId,
+        media: content.media ?? null,
+        createdAt: new Date().toISOString(),
+      };
+      // Saved first, so closing the tab before the server answers doesn't lose it.
+      saveOutbox(me.id, [...loadOutbox(me.id), e]);
+      await deliver(e);
+    },
+    [me.id, deliver],
+  );
+
+  // Messages left unsent when this browser last closed go out again with their original ids,
+  // once per connection client.
+  const resentFor = useRef<RealtimeClient | null>(null);
+  useEffect(() => {
+    if (!rt.current || resentFor.current === rt.current) return;
+    resentFor.current = rt.current;
+    for (const e of loadOutbox(me.id)) void deliver(e);
+  }, [deliver, me.id]);
 
   const act = useCallback(
     async (fn: () => Promise<Message | unknown>) => {

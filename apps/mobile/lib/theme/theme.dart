@@ -9,7 +9,11 @@ ThemeData nexaTheme(Brightness brightness) {
     primary: p.primary,
     onPrimary: p.onPrimary,
     secondary: p.accent,
-    onSecondary: p.onPrimary,
+    // Dark text on the green accent in both modes: white on it is only 3.1:1.
+    onSecondary: brightness == Brightness.dark ? p.onPrimary : p.text,
+    // Selected segments and tonal buttons; left to Material they come out green with white text.
+    secondaryContainer: p.surfaceMuted,
+    onSecondaryContainer: p.text,
     error: p.danger,
     onError: p.onPrimary,
     surface: p.surface,

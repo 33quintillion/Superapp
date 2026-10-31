@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
 import type { Profile } from '@/lib/social-client';
-import { PostList } from '../../social/social-ui';
+import { Avatar, PostList } from '../../social/social-ui';
 
 const FOLLOW_LABEL = { none: 'Follow', pending: 'Requested', active: 'Following' } as const;
 
@@ -17,6 +17,7 @@ export function ProfileView({ me, initial }: { me: string; initial: Profile }) {
   return (
     <main className="wide social">
       <div className="card profile">
+        <Avatar mediaId={p.avatarMediaId} name={p.displayName} size={96} />
         <h1 data-testid="profile-name">{p.displayName}</h1>
         <p className="muted">
           @{p.username} {p.privateAccount && <span className="pill">Private</span>} {p.relationship?.followsYou && <span className="pill">Follows you</span>}

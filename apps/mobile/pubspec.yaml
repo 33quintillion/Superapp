@@ -9,9 +9,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  firebase_auth: ^6.0.0
+  firebase_core: ^4.0.0
+  flutter_contacts: ^2.6.0
   flutter_secure_storage: ^11.2.0
   flutter_webrtc: ^1.6.3
   http: ^1.6.0
+  image_picker: ^1.2.4
+  mobile_scanner: ^7.0.0
+  record: ^7.1.2
   url_launcher: ^6.3.3
   web_socket_channel: ^3.0.3
 

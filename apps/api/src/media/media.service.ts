@@ -116,7 +116,9 @@ export class MediaService {
 
   /**
    * A short-lived download URL, for the owner, a chat member who can see a message carrying
-   * it, or anyone who can see a post or story carrying it (same rules as the feed).
+   * it, or anyone who can see a post or story carrying it (same rules as the feed). A
+   * profile photo can be seen by anyone signed in who isn't blocked either way, like the
+   * person's name.
    */
   async download(userId: string, mediaId: string) {
     const m = await this.db.one<MediaRow>(
@@ -126,7 +128,9 @@ export class MediaService {
            SELECT 1 FROM messages msg JOIN conversation_members cm ON cm.conversation_id = msg.conversation_id
             WHERE msg.media_id = m.id AND msg.deleted_at IS NULL AND cm.user_id = $2 AND msg.seq > cm.visible_from_seq)
          OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id AND can_view_post($2, pm.post_id))
-         OR EXISTS (SELECT 1 FROM stories s WHERE s.media_id = m.id AND can_view_story($2, s.id)))`,
+         OR EXISTS (SELECT 1 FROM stories s WHERE s.media_id = m.id AND can_view_story($2, s.id))
+         OR EXISTS (SELECT 1 FROM users au WHERE au.avatar_media_id = m.id AND au.state = 'active'
+              AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = au.id AND b.blocked_id = $2) OR (b.blocker_id = $2 AND b.blocked_id = au.id))))`,
       [mediaId, userId],
     );
     // 404 rather than 403 so ids cannot be probed.
@@ -146,13 +150,14 @@ export class MediaService {
     return m;
   }
 
-  /** Deletes the stored object once no remaining message, post or story uses it. */
+  /** Deletes the stored object once no remaining message, post, story or profile uses it. */
   async releaseIfUnused(mediaId: string) {
     const m = await this.db.one<{ object_key: string }>(
       `UPDATE media SET state = 'deleted' WHERE id = $1 AND state IN ('ready', 'pending')
          AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id = $1)
          AND NOT EXISTS (SELECT 1 FROM post_media WHERE media_id = $1)
-         AND NOT EXISTS (SELECT 1 FROM stories WHERE media_id = $1) RETURNING object_key`,
+         AND NOT EXISTS (SELECT 1 FROM stories WHERE media_id = $1)
+         AND NOT EXISTS (SELECT 1 FROM users WHERE avatar_media_id = $1) RETURNING object_key`,
       [mediaId],
     );
     if (m) await this.storage.delete(m.object_key);

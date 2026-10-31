@@ -1,3 +1,5 @@
+import { DatabaseService } from '../src/database/database.service';
+import { StorageService } from '../src/storage/storage.service';
 import { clientId, registerUser, req, startApp, TestContext, TestUser } from './helpers';
 
 let ctx: TestContext;
@@ -137,5 +139,64 @@ describe('media uploads', () => {
     await call('DELETE', `/v1/messages/${m2.id}`, a);
     // The forwarded copy still references the file, so it is kept for c.
     expect((await call('GET', `/v1/media/${shared}`, c)).status).toBe(200);
+  });
+});
+
+describe('profile photos', () => {
+  /** Whether the file is still in storage. */
+  async function stored(mediaId: string) {
+    const m = await ctx.app.get(DatabaseService).one<{ object_key: string }>('SELECT object_key FROM media WHERE id = $1', [mediaId]);
+    return !!(await ctx.app.get(StorageService).head(m!.object_key));
+  }
+
+  it('sets, shows and replaces a profile photo, deleting the old file', async () => {
+    const [a, b, c] = [await user(), await user(), await user()];
+    const first = await uploadReady(a, { kind: 'image', contentType: 'image/png' }, PNG);
+    const set = await call('PUT', '/v1/me/avatar', a, { mediaId: first });
+    expect(set.status).toBe(200);
+    expect(set.body.avatarMediaId).toBe(first);
+    expect((await call('GET', `/v1/users/${a.username}`, b)).body.avatarMediaId).toBe(first);
+    // Anyone signed in can see it, as with the person's name; it also shows in chats.
+    const got = await call('GET', `/v1/media/${first}`, b);
+    expect(got.status).toBe(200);
+    expect(Buffer.from(await (await fetch(got.body.url)).arrayBuffer()).equals(PNG)).toBe(true);
+    const conv = await direct(b, a);
+    const members = (await call('GET', `/v1/conversations/${conv}`, b)).body.members;
+    expect(members.find((m: { userId: string }) => m.userId === a.id).avatarMediaId).toBe(first);
+
+    // Blocking hides it.
+    await call('POST', '/v1/blocks', a, { userId: c.id });
+    expect((await call('GET', `/v1/media/${first}`, c)).status).toBe(404);
+
+    // A new photo replaces it, and the old file goes.
+    const second = await uploadReady(a, { kind: 'image', contentType: 'image/png' }, PNG);
+    expect((await call('PUT', '/v1/me/avatar', a, { mediaId: second })).body.avatarMediaId).toBe(second);
+    expect(await stored(first)).toBe(false);
+    expect(await stored(second)).toBe(true);
+    expect((await call('GET', `/v1/media/${first}`, a)).status).toBe(404);
+
+    const removed = await call('DELETE', '/v1/me/avatar', a);
+    expect(removed.body.avatarMediaId).toBeNull();
+    expect((await call('GET', `/v1/media/${second}`, b)).status).toBe(404);
+  });
+
+  it('only accepts your own finished image', async () => {
+    const [a, b] = [await user(), await user()];
+    const pdf = await uploadReady(a, { kind: 'file', contentType: 'application/pdf', fileName: 'cv.pdf' }, PDF);
+    expect((await call('PUT', '/v1/me/avatar', a, { mediaId: pdf })).status).toBe(400);
+    const pending = await upload(a, { kind: 'image', contentType: 'image/png' }, PNG);
+    expect((await call('PUT', '/v1/me/avatar', a, { mediaId: pending })).status).toBe(409);
+    const theirs = await uploadReady(b, { kind: 'image', contentType: 'image/png' }, PNG);
+    expect((await call('PUT', '/v1/me/avatar', a, { mediaId: theirs })).status).toBe(404);
+    expect((await call('PUT', '/v1/me/avatar', a, { mediaId: 'nope' })).status).toBe(400);
+  });
+
+  it('is removed with the account', async () => {
+    const [a, b] = [await user(), await user()];
+    const photo = await uploadReady(a, { kind: 'image', contentType: 'image/png' }, PNG);
+    await call('PUT', '/v1/me/avatar', a, { mediaId: photo });
+    expect((await req(ctx.app, 'DELETE', '/v1/me', { token: a.token, body: { password: a.password } })).status).toBe(204);
+    expect((await call('GET', `/v1/media/${photo}`, b)).status).toBe(404);
+    expect(await stored(photo)).toBe(false);
   });
 });

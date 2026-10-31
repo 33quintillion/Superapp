@@ -4,13 +4,16 @@ import 'package:flutter/foundation.dart';
 
 import '../auth/auth_controller.dart';
 import '../calls/call_controller.dart';
+import '../media/media.dart';
 import 'chat_models.dart';
+import 'outbox_store.dart';
 import 'realtime.dart';
 
 /// Chat state for the signed-in user: the conversation list, loaded histories, and the
 /// live connection. Every change comes from an API response or a server event.
 class ChatController extends ChangeNotifier {
-  ChatController({required this.auth, required String wsBase, SocketFactory? connect}) {
+  ChatController({required this.auth, required String wsBase, SocketFactory? connect, OutboxStore? outbox}) : outbox = outbox ?? MemoryOutboxStore() {
+    auth.addListener(_onAuth);
     rt = RealtimeConnection(
       wsBase: wsBase,
       connect: connect,
@@ -22,6 +25,12 @@ class ChatController extends ChangeNotifier {
 
   final AuthController auth;
   late final RealtimeConnection rt;
+
+  /// Messages not yet stored by the server, kept so they survive the app being closed.
+  final OutboxStore outbox;
+  final List<OutboxEntry> _unsent = [];
+  Future<void> _saving = Future.value();
+  String? _outboxOwner;
   /// Voice and video calls, when the app has set them up.
   CallController? calls;
 
@@ -42,9 +51,38 @@ class ChatController extends ChangeNotifier {
   bool isTyping(String cid, String userId) => (_typingUntil['$cid:$userId']?.isAfter(DateTime.now())) ?? false;
 
   Future<void> start() async {
+    // Messages left unsent when the app last closed go out again with their original ids,
+    // so the server stores each once even if it got one just before the app closed.
+    _outboxOwner = me;
+    final saved = await outbox.load(me).catchError((Object _) => <OutboxEntry>[]);
+    for (final e in saved) {
+      if (_unsent.any((u) => u.clientId == e.clientId)) continue;
+      _unsent.add(e);
+      unawaited(_deliver(e));
+    }
     await refreshList();
     rt.start();
   }
+
+  /// Unsent messages are private: they don't stay on the phone after signing out.
+  void _onAuth() {
+    final owner = _outboxOwner;
+    if (owner != null && auth.status == AuthStatus.signedOut) {
+      _outboxOwner = null;
+      _unsent.clear();
+      _persist(owner);
+    }
+  }
+
+  void _persist([String? userId]) {
+    final owner = userId ?? _outboxOwner;
+    if (owner == null) return;
+    final snapshot = [..._unsent];
+    _saving = _saving.then((_) => outbox.save(owner, snapshot)).catchError((Object _) {});
+  }
+
+  /// Waits for outbox writes in flight (tests, and before the app is suspended).
+  Future<void> flushOutbox() => _saving;
 
   Future<void> refreshList() async {
     final r = await auth.authed('GET', '/v1/conversations');
@@ -157,34 +195,66 @@ class ChatController extends ChangeNotifier {
     await _send(cid, {'kind': 'text', 'body': body});
   }
 
+  /// Uploads a photo or voice note, then sends it like any other message. The upload itself
+  /// isn't kept across restarts; once it is done the message is.
+  Future<void> sendMedia(String cid, LocalMedia file, {required String kind, String caption = ''}) async {
+    final media = await uploadMedia(auth, file, kind: kind);
+    await _send(cid, {'kind': kind, 'body': caption.trim(), 'media': media});
+  }
+
   Future<void> retry(ChatMessage m) async {
     _messages[m.conversationId]?.removeWhere((x) => x.id == m.id);
-    await _send(m.conversationId, {'kind': m.kind, 'body': m.body ?? ''});
+    final media = m.media;
+    await _send(m.conversationId, {
+      'kind': m.kind,
+      'body': m.body ?? '',
+      if (media != null)
+        'media': {'id': media.id, 'kind': media.kind, 'contentType': media.contentType, 'byteSize': media.byteSize, 'fileName': media.fileName, 'durationMs': media.durationMs},
+    });
   }
 
   Future<void> _send(String cid, Map<String, dynamic> content) async {
-    final clientId = newClientId();
+    final e = OutboxEntry(
+      conversationId: cid,
+      clientId: newClientId(),
+      kind: content['kind'] as String,
+      body: content['body'] as String?,
+      createdAt: DateTime.now(),
+      media: content['media'] as Map<String, dynamic>?,
+    );
+    _unsent.add(e);
+    _persist();
+    await _deliver(e);
+  }
+
+  /// Shows the message as sending and hands it to the connection, which re-sends it after
+  /// each reconnect until the server stores or refuses it.
+  Future<void> _deliver(OutboxEntry e) async {
+    final cid = e.conversationId;
     final local = ChatMessage(
-      id: 'local-$clientId',
+      id: 'local-${e.clientId}',
       conversationId: cid,
       seq: 0,
       changeSeq: 0,
       senderId: me,
-      clientId: clientId,
-      kind: content['kind'] as String,
-      body: content['body'] as String?,
-      createdAt: DateTime.now(),
+      clientId: e.clientId,
+      kind: e.kind,
+      body: e.body,
+      media: e.media == null ? null : ChatMedia.fromJson(e.media!),
+      createdAt: e.createdAt,
       pending: Pending.sending,
     );
     _upsert(cid, [local]);
     notifyListeners();
     try {
-      final ack = await rt.send(cid, {'clientId': clientId, ...content});
+      final ack = await rt.send(cid, {'clientId': e.clientId, 'kind': e.kind, if (e.body != null) 'body': e.body, if (e.media != null) 'mediaId': e.media!['id']});
       _upsert(cid, [ChatMessage.fromJson(ack['message'] as Map<String, dynamic>)]);
-    } on SendRejected catch (e) {
-      lastError = e.message;
+    } on SendRejected catch (err) {
+      lastError = err.message;
       _upsert(cid, [local.withPending(Pending.failed)]);
     }
+    _unsent.removeWhere((u) => u.clientId == e.clientId);
+    _persist();
     notifyListeners();
   }
 
@@ -331,6 +401,7 @@ class ChatController extends ChangeNotifier {
 
   @override
   void dispose() {
+    auth.removeListener(_onAuth);
     rt.dispose();
     super.dispose();
   }

@@ -10,6 +10,8 @@ Each business has one owner, any number of managers and staff. The table lives i
 | See the back office, staff list, orders and bookings | ✓ | ✓ | ✓ |
 | Accept, prepare and hand over orders; cancel bookings; record who came | ✓ | ✓ | ✓ |
 | Edit the profile, opening hours, catalogue and services | ✓ | ✓ | |
+| See payments, payouts and disputes; refund orders and deposits; answer disputes | ✓ | ✓ | |
+| Set up payouts; choose, change and cancel the plan | ✓ | | |
 | Invite and remove staff | ✓ | ✓ (staff only) | |
 | Invite, promote and remove managers | ✓ | | |
 | Hand over ownership (to a manager), close the business | ✓ | | |
@@ -34,11 +36,20 @@ Each business has one owner, any number of managers and staff. The table lives i
 - Each service has a length and a capacity (how many people at once). Free start times are steps of the service's length from each opening, ending by closing time, in the future and up to 90 days ahead.
 - Booking locks the service while it counts who is already booked, so a slot can't be overbooked when people book at the same moment (`business.e2e › never overbooks`).
 - A booking can be cancelled by the customer or the business before it starts. After the start, staff record `completed` or `no_show`.
+- A service can ask for a **deposit**, paid by card when booking (up to the full price; needs payouts set up). The booking holds its place as `pending_payment` until the deposit is paid, and is given back if the checkout runs out. The deposit is refunded if the business cancels, or if the customer cancels at least `freeCancelHours` (default 24) before the start; after that, and for a no-show, the business keeps it. Managers can still refund some or all of it. Details in [`payments.md`](payments.md#booking-deposits).
+
+## Managing a business from the phone app
+"Businesses you run" (the shop icon on the Businesses screen) lists the businesses you own or work at. Each has tabs, shown only when your role allows them:
+- **Orders**: open and finished orders, with the next step (accept, decline, ready, collected, cancel) and a refund for card payments (managers and owners).
+- **Bookings**: yesterday to 30 days ahead. Came or no-show once a booking has started, cancel before it does (with a warning when a paid deposit will be refunded), and refunding deposits.
+- **Catalogue** (managers and owners): add an item, mark it sold out or back on sale, remove it.
+- **Money** (managers and owners): payout status, recent payouts, disputes (with a reply to the bank), totals and recent card payments. The owner can also set up payouts, choose or switch plan after seeing the cost, cancel or keep the plan, and open the card and invoices page.
+
+Customers also pay booking deposits from the app, and get a warning before a late cancel keeps their deposit.
 
 ## Not built yet
-- Online payment for bookings. Orders can be paid online ([`payments.md`](payments.md)).
 - Delivery (only pickup), table service, tips, taxes and receipts.
 - Photos on items and businesses: waiting for the media-scanning provider, like all public media.
 - Business verification checks. The "Verified" badge is set by an admin by hand.
-- Managing a business from the phone app. The Flutter app can find businesses, order, book and see your orders; the back office is on the web.
+- Editing bookable services, opening hours, staff and the business profile from the phone app. The phone app's back office covers orders, bookings, the item catalogue and money (see below); the rest is on the web.
 - Staff notifications for new orders outside the open back office (push for businesses).

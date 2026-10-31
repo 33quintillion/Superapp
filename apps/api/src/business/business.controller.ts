@@ -102,9 +102,19 @@ const ServiceFields = {
   priceMinor: money,
   capacity: z.number().int().min(1).max(100),
   active: z.boolean(),
+  depositMinor: money,
+  freeCancelHours: z.number().int().min(0).max(168),
 };
 const CreateService = z
-  .object({ ...ServiceFields, description: ServiceFields.description.default(''), priceMinor: money.default(0), capacity: ServiceFields.capacity.default(1), active: ServiceFields.active.default(true) })
+  .object({
+    ...ServiceFields,
+    description: ServiceFields.description.default(''),
+    priceMinor: money.default(0),
+    capacity: ServiceFields.capacity.default(1),
+    active: ServiceFields.active.default(true),
+    depositMinor: money.default(0),
+    freeCancelHours: ServiceFields.freeCancelHours.default(24),
+  })
   .strict();
 const ServicePatch = z.object(ServiceFields).partial().strict();
 const SlotsQuery = z.object({ date: z.iso.date() });

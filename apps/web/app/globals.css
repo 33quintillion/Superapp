@@ -155,6 +155,8 @@ textarea.story-text { height: 40%; }
 .swatch.on { border-color: #fff; }
 .community-row { text-decoration: none; color: inherit; }
 .profile h1 { margin: 0; }
+.avatar { display: inline-grid; place-items: center; border-radius: 50%; object-fit: cover; background: var(--color-surface-muted); color: var(--color-text); font-weight: 600; flex: none; }
+.photo-editor { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; }
 
 /* Calls */
 .calls-toggle { margin: 0 var(--space-lg) var(--space-md); }

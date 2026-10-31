@@ -9,7 +9,12 @@ import 'package:nexa/api/api_client.dart';
 import 'package:nexa/auth/auth_controller.dart';
 import 'package:nexa/auth/session_store.dart';
 import 'package:nexa/chat/realtime.dart';
+import 'package:nexa/contacts/contacts_book.dart';
 import 'package:nexa/main.dart';
+import 'package:nexa/media/media.dart';
+
+import 'a11y_helpers.dart';
+import 'media_fakes.dart';
 
 // As in chat_test, only the HTTP and socket boundary is faked: the controllers and screens
 // are the real code, and every request they make is checked against what the API expects.
@@ -23,10 +28,13 @@ class FakeApi {
   final bodies = <String, Map<String, dynamic>>{};
   final sockets = <FakeSocket>[];
   final handlers = <String, http.Response Function(http.Request)>{};
+  final media = FakeMedia();
 
   late final http.Client client = MockClient((req) async {
     final key = '${req.method} ${req.url.path}';
     calls.add('$key${req.url.hasQuery ? '?${req.url.query}' : ''}');
+    final m = media.handle(req);
+    if (m != null) return m;
     if (req.body.isNotEmpty) bodies[key] = jsonDecode(req.body) as Map<String, dynamic>;
     if (req.url.path == '/v1/auth/refresh') {
       return json(200, {'accessToken': 'a1', 'refreshToken': 'r1', 'sessionId': 's', 'expiresIn': 900});
@@ -290,6 +298,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.bodies['PUT /v1/posts/p1/like'], {'liked': true});
     expect(find.descendant(of: find.byKey(const Key('like-p1')), matching: find.text('3')), findsOneWidget);
+    await expectAccessible(tester);
 
     await tester.tap(find.byKey(const Key('comments-p1')));
     await tester.pumpAndSettle();
@@ -321,6 +330,85 @@ void main() {
     expect(find.text('hello followers'), findsOneWidget);
     expect(find.byKey(const Key('delete-p2')), findsOneWidget); // your own post: delete, not report
 
+    await closeApp(tester);
+  });
+
+  testWidgets('photos: a post with several photos (one removed, no re-upload on retry), a photo story, and both shown', (tester) async {
+    final api = FakeApi();
+    final devices = FakeDevices()
+      ..photos.add([
+        LocalMedia(bytes: jpeg, fileName: 'a.jpg', contentType: 'image/jpeg'),
+        LocalMedia(bytes: png, fileName: 'b.png', contentType: 'image/png'),
+        LocalMedia(bytes: jpeg, fileName: 'c.jpg', contentType: 'image/jpeg'),
+      ])
+      ..photos.add([LocalMedia(bytes: jpeg, fileName: 'story.jpg', contentType: 'image/jpeg')]);
+    MediaDevices.instance = devices;
+    addTearDown(() => MediaDevices.instance = PlatformMediaDevices());
+    final posts = <Map<String, dynamic>>[];
+    final stories = <Map<String, dynamic>>[];
+    var postAttempts = 0;
+    api.on('GET /v1/conversations', (_) => json(200, {'conversations': <Object>[], 'nextCursor': null}));
+    api.on('GET /v1/stories', (_) => json(200, {
+          'groups': [
+            if (stories.isNotEmpty) {'author': user('me', 'Ada'), 'allViewed': true, 'stories': stories},
+          ],
+        }));
+    api.on('GET /v1/feed', (_) => json(200, {'posts': posts, 'nextCursor': null}));
+    api.on('POST /v1/posts', (req) {
+      postAttempts += 1;
+      if (postAttempts == 1) return json(503, {'error': {'code': 'unavailable', 'message': 'Try again'}});
+      final b = jsonDecode(req.body) as Map<String, dynamic>;
+      final p = {
+        'id': 'p9', 'author': user('me', 'Ada'), 'community': null, 'audience': b['audience'], 'body': b['body'], //
+        'media': [for (final id in b['mediaIds'] as List) api.media.created[id]],
+        'likeCount': 0, 'commentCount': 0, 'liked': false, 'createdAt': '2026-10-26T09:00:00.000Z', 'editedAt': null, 'removed': null, 'shared': null,
+      };
+      posts.insert(0, p);
+      return json(201, {'post': p, 'duplicate': false});
+    });
+    api.on('POST /v1/stories', (req) {
+      final b = jsonDecode(req.body) as Map<String, dynamic>;
+      stories.add({
+        'id': 's9', 'author': user('me', 'Ada'), 'kind': b['kind'], 'body': '', 'background': '#3D5AFE', 'audience': 'followers', //
+        'media': api.media.created[b['mediaId']], 'createdAt': '2026-10-26T09:00:00.000Z', 'expiresAt': '2026-10-27T09:00:00.000Z', 'viewed': true, 'viewCount': 0,
+      });
+      return json(201, stories.last);
+    });
+
+    await openApp(tester, api);
+    await tester.tap(find.byKey(const Key('open-feed')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('compose-post')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-photos')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add more photos (3 of 10)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('remove-photo-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add more photos (2 of 10)'), findsOneWidget);
+
+    // A post with photos and no text is allowed. The first attempt fails after the uploads.
+    await tester.tap(find.byKey(const Key('publish-post')));
+    await tester.pumpAndSettle();
+    expect(find.text('Try again'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('publish-post')));
+    await tester.pumpAndSettle();
+    expect(api.calls.where((c) => c == 'POST /v1/media/uploads'), hasLength(2));
+    expect(api.bodies['POST /v1/posts'], containsPair('mediaIds', ['md1', 'md2']));
+    expect(api.media.stored.keys, ['md1', 'md2']);
+    // The new post shows both photos.
+    expect(find.byKey(const Key('photos-p9')), findsOneWidget);
+    expect(api.calls, containsAll(['GET /v1/media/md1', 'GET /v1/media/md2']));
+
+    await tester.tap(find.byTooltip('Add to your story'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-story')));
+    await tester.pumpAndSettle();
+    expect(api.bodies['POST /v1/stories'], {'kind': 'image', 'mediaId': 'md3'});
+    await tester.tap(find.byKey(const Key('story-me')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('story-photo-s9')), findsOneWidget);
+    expect(api.calls, contains('GET /v1/media/md3'));
     await closeApp(tester);
   });
 
@@ -371,4 +459,115 @@ void main() {
 
     await closeApp(tester);
   });
+
+  testWidgets('sets, shows and removes the profile photo from the home screen', (tester) async {
+    final api = FakeApi();
+    String? avatar;
+    Map<String, dynamic> me() => {'id': 'me', 'username': 'ada', 'displayName': 'Ada', 'email': 'ada@example.test', 'emailVerified': true, 'avatarMediaId': avatar};
+    api.on('PUT /v1/me/avatar', (req) {
+      avatar = (jsonDecode(req.body) as Map)['mediaId'] as String;
+      return json(200, me());
+    });
+    api.on('DELETE /v1/me/avatar', (_) {
+      avatar = null;
+      return json(200, me());
+    });
+    final devices = FakeDevices()..photos.add([LocalMedia(bytes: png, fileName: 'me.png', contentType: 'image/png')]);
+    MediaDevices.instance = devices;
+    addTearDown(() => MediaDevices.instance = PlatformMediaDevices());
+
+    await openApp(tester, api);
+    expect(find.byKey(const Key('photo-remove')), findsNothing);
+    await tester.tap(find.byKey(const Key('edit-photo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-remove')), findsNothing);
+    await tester.tap(find.byKey(const Key('photo-choose')));
+    await tester.pumpAndSettle();
+
+    // Uploaded as an image, checked by the API, then made the photo, and shown.
+    expect(api.media.created['md1']!['kind'], 'image');
+    expect(api.media.stored['md1'], png);
+    expect(api.bodies['PUT /v1/me/avatar'], {'mediaId': 'md1'});
+    expect(api.calls, contains('GET /v1/media/md1'));
+    expect(find.byKey(const Key('avatar-md1')), findsOneWidget);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('edit-photo')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-remove')));
+    await tester.pumpAndSettle();
+    expect(api.calls, contains('DELETE /v1/me/avatar'));
+    expect(find.byKey(const Key('avatar-md1')), findsNothing);
+    expect(find.text('A'), findsOneWidget);
+
+    await closeApp(tester);
+  });
+
+  testWidgets('find people you know: opt in to being found, check contacts only when asked, follow', (tester) async {
+    final api = FakeApi();
+    var findable = false;
+    api.on('GET /v1/me/privacy', (_) => json(200, {'discoverableByEmail': findable}));
+    api.on('PATCH /v1/me/privacy', (req) {
+      findable = (jsonDecode(req.body) as Map)['discoverableByEmail'] as bool;
+      return json(200, {'discoverableByEmail': findable});
+    });
+    api.on('POST /v1/contacts/match', (_) => json(200, {
+          'matches': [
+            {'matched': 'bo@example.test', 'user': {'id': 'u-bo', 'username': 'bo', 'displayName': 'Bo', 'avatarMediaId': null}},
+          ],
+        }));
+    api.on('POST /v1/users/u-bo/follow', (_) => json(200, {'following': 'active', 'followsYou': false}));
+    final book = _FakeBook();
+    ContactsBook.instance = book;
+    addTearDown(() => ContactsBook.instance = PlatformContactsBook());
+
+    await openApp(tester, api);
+    await tester.tap(find.byKey(const Key('open-find-people')));
+    await tester.pumpAndSettle();
+    // Opening the screen doesn't touch the address book.
+    expect(book.reads, 0);
+    expect(api.calls.where((c) => c.contains('contacts')), isEmpty);
+    await expectAccessible(tester);
+
+    await tester.tap(find.byKey(const Key('findable-by-email')));
+    await tester.pumpAndSettle();
+    expect(api.bodies['PATCH /v1/me/privacy'], {'discoverableByEmail': true});
+
+    // Permission refused: explained, nothing sent.
+    book.allowed = false;
+    await tester.tap(find.byKey(const Key('check-contacts')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('contacts-note')), findsOneWidget);
+    expect(api.calls.where((c) => c.contains('contacts/match')), isEmpty);
+
+    book.allowed = true;
+    await tester.tap(find.byKey(const Key('check-contacts')));
+    await tester.pumpAndSettle();
+    // Addresses lower-cased and de-duplicated across contacts.
+    expect(api.bodies['POST /v1/contacts/match'], {
+      'emails': ['bo@example.test', 'cy@example.test'],
+      'phones': ['+447700900123', '07700 900456'],
+    });
+    expect(find.text('@bo · bo@example.test'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('follow-u-bo')));
+    await tester.pumpAndSettle();
+    expect(api.calls, contains('POST /v1/users/u-bo/follow'));
+    expect(find.text('Following'), findsOneWidget);
+
+    await closeApp(tester);
+  });
+}
+
+class _FakeBook implements ContactsBook {
+  bool allowed = true;
+  int reads = 0;
+  @override
+  Future<List<AddressBookEntry>?> read() async {
+    reads += 1;
+    if (!allowed) return null;
+    return const [
+      AddressBookEntry(name: 'Bo', emails: ['Bo@Example.test '], phones: ['+447700900123']),
+      AddressBookEntry(name: 'Cy', emails: ['cy@example.test', 'bo@example.test'], phones: ['07700 900456']),
+    ];
+  }
 }

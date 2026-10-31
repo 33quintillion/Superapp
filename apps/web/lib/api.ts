@@ -3,7 +3,7 @@ import { headers } from 'next/headers';
 import { clientAddress } from './client-address';
 
 /**
- * Server-side calls to the Nexa API. The browser never talks to the API directly and
+ * Server-side calls to the SuperApp API. The browser never talks to the API directly and
  * never sees access or refresh tokens: they live in httpOnly cookies set by this app.
  */
 const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';
@@ -30,6 +30,10 @@ export async function api<T = unknown>(
   // not this server. The API only honours it when TRUST_PROXY is configured.
   const clientIp = await forwardedFor();
   if (clientIp) reqHeaders['x-forwarded-for'] = clientIp;
+  // The browser's own name, so the device list (and a phone approving a link) says
+  // "Chrome on Windows" rather than this server.
+  const agent = await browserAgent();
+  if (agent) reqHeaders['user-agent'] = agent;
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
@@ -42,7 +46,14 @@ export async function api<T = unknown>(
     throw new ApiError(503, 'api_unreachable', 'The service is unavailable right now. Please try again shortly.');
   }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : undefined;
+  let data: { error?: { code?: string; message?: string } } | undefined;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    // Not the API answering: on the free hosting plan this is the "starting up" page shown
+    // while the API wakes from sleep, or a proxy error. Either way, worth trying again.
+    throw new ApiError(res.ok ? 502 : Math.max(res.status, 500), 'api_unreachable', 'SuperApp is starting up. Try again in a moment.');
+  }
   if (!res.ok) {
     throw new ApiError(res.status, data?.error?.code ?? 'http_error', data?.error?.message ?? 'Request failed');
   }
@@ -59,6 +70,14 @@ export interface TokenPair {
 async function forwardedFor(): Promise<string | null> {
   try {
     return clientAddress((await headers()).get('x-forwarded-for'));
+  } catch {
+    return null; // outside a request scope
+  }
+}
+
+async function browserAgent(): Promise<string | null> {
+  try {
+    return (await headers()).get('user-agent')?.slice(0, 300) ?? null;
   } catch {
     return null; // outside a request scope
   }

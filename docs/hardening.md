@@ -54,7 +54,7 @@ Method: read every controller and the services behind them for authentication, a
 | Independent penetration test | Needs an outside firm and a staging environment (Stage 10). |
 | Sign-up says when an email is already registered | A deliberate trade-off for a clear sign-up form; limited by the per-IP sign-up limit. Revisit with CAPTCHA or device attestation (`risks.md` #6). |
 | `style-src 'unsafe-inline'` in the CSP | React writes `style` attributes (progress bars, video tiles). Inline styles can't run script; moving them to classes is cleanup, not a fix. |
-| Retired refresh tokens and used one-time tokens are never deleted | Not a security hole, but the tables grow. A cleanup job belongs with the Stage 10 retention work. |
+| ~~Retired refresh tokens and used one-time tokens are never deleted~~ | Fixed: the retention sweep deletes ended sessions (with their retired tokens) after 90 days and spent one-time tokens after 7. |
 | Secret manager and key rotation | Stage 10 (`security-privacy.md`). |
 | Breached-password check, CAPTCHA on sign-up | Already tracked in `risks.md` #6. |
 | NestJS 12 | Would remove the Fastify override; a major upgrade, so separate. |

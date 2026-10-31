@@ -5,8 +5,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { AuditService } from '../common/audit.service';
 import { Errors } from '../common/errors';
 import { DatabaseService } from '../database/database.service';
-import { verifyPassword } from '../auth/password';
-import { PASSWORD_CONFIRM_RULE } from '../auth/auth.service';
+import { AuthService, IdentityProof } from '../auth/auth.service';
 import { RateLimitService } from '../common/rate-limit.service';
 import { MediaService } from '../media/media.service';
 import { GroupsService } from '../messaging/groups.service';
@@ -25,7 +24,7 @@ interface UserRow {
   display_name: string;
   bio: string;
   status_text: string;
-  avatar_object_key: string | null;
+  avatar_media_id: string | null;
   locale: string;
   mfa_enabled_at: Date | null;
   created_at: Date;
@@ -53,6 +52,10 @@ const PRIVACY_COLUMNS: Record<keyof PrivacySettings, string> = {
   whoCanAddToGroups: 'who_can_add_to_groups',
 };
 
+/** Contact matching: generous for real address books, too small to test lists of addresses. */
+export const CONTACTS_RULE = { name: 'contacts:match', limit: 10, windowSeconds: 86400 };
+export const CONTACTS_MAX = 1000;
+
 const PROFILE_COLUMNS = { displayName: 'display_name', bio: 'bio', statusText: 'status_text', locale: 'locale' } as const;
 
 @Injectable()
@@ -71,6 +74,7 @@ export class UsersService {
     private readonly integrations: IntegrationsService,
     private readonly payments: PaymentsService,
     private readonly limits: RateLimitService,
+    private readonly auth: AuthService,
   ) {}
 
   async me(userId: string) {
@@ -85,6 +89,7 @@ export class UsersService {
       displayName: u.display_name,
       bio: u.bio,
       statusText: u.status_text,
+      avatarMediaId: u.avatar_media_id,
       locale: u.locale,
       mfaEnabled: !!u.mfa_enabled_at,
       createdAt: u.created_at,
@@ -97,6 +102,26 @@ export class UsersService {
       const sets = entries.map(([k], i) => `${PROFILE_COLUMNS[k]} = $${i + 2}`).join(', ');
       await this.db.query(`UPDATE users SET ${sets}, updated_at = now() WHERE id = $1`, [userId, ...entries.map(([, v]) => v)]);
     }
+    return this.me(userId);
+  }
+
+  /**
+   * Sets the profile photo to an image the person uploaded (POST /v1/media/uploads with
+   * kind "image", then complete), or removes it with null. The old photo's file is deleted
+   * once nothing else uses it.
+   */
+  async setAvatar(userId: string, mediaId: string | null) {
+    if (mediaId) {
+      const m = await this.media.requireAttachable(userId, mediaId);
+      if (m.kind !== 'image') throw Errors.validation([{ path: 'mediaId', message: 'A profile photo must be an image' }]);
+    }
+    const old = await this.db.one<{ old: string | null }>(
+      `UPDATE users u SET avatar_media_id = $2, updated_at = now() FROM (SELECT avatar_media_id AS old FROM users WHERE id = $1) o
+        WHERE u.id = $1 RETURNING o.old`,
+      [userId, mediaId],
+    );
+    if (old?.old && old.old !== mediaId) await this.media.releaseIfUnused(old.old).catch(() => undefined);
+    await this.audit.record({ actorId: userId, action: mediaId ? 'profile.photo_set' : 'profile.photo_removed' });
     return this.me(userId);
   }
 
@@ -122,8 +147,8 @@ export class UsersService {
    * block in either direction, so the response does not reveal that the account exists.
    */
   async publicProfile(viewerId: string, username: string) {
-    const u = await this.db.one<{ id: string; username: string; display_name: string; bio: string; status_text: string }>(
-      `SELECT u.id, u.username, u.display_name, u.bio, u.status_text FROM users u
+    const u = await this.db.one<{ id: string; username: string; display_name: string; bio: string; status_text: string; avatar_media_id: string | null }>(
+      `SELECT u.id, u.username, u.display_name, u.bio, u.status_text, u.avatar_media_id FROM users u
          JOIN privacy_settings p ON p.user_id = u.id
         WHERE u.username = $1 AND u.state = 'active'
           AND (p.discoverable_by_username OR u.id = $2)
@@ -142,11 +167,43 @@ export class UsersService {
       displayName: u.display_name,
       bio: u.bio,
       statusText: u.status_text,
+      avatarMediaId: u.avatar_media_id,
       privateAccount: privacy?.private_account ?? false,
       followerCount: counts.followers,
       followingCount: counts.following,
       // null on your own profile.
       relationship,
+    };
+  }
+
+  /**
+   * "Find people you know": which of these email addresses and phone numbers belong to
+   * people who chose to be found that way (off by default), with a confirmed address or
+   * number, and who aren't blocked either way. Nothing sent here is stored or logged; the
+   * daily limit keeps it from being used to test lists of addresses.
+   */
+  async matchContacts(userId: string, input: { emails: string[]; phones: string[] }) {
+    await this.limits.consume(CONTACTS_RULE, userId);
+    const emails = [...new Set(input.emails)];
+    const phones = [...new Set(input.phones)];
+    const { rows } = await this.db.query<{ id: string; username: string; display_name: string; avatar_media_id: string | null; email: string | null; phone_e164: string | null }>(
+      `SELECT u.id, u.username, u.display_name, u.avatar_media_id,
+              CASE WHEN p.discoverable_by_email AND u.email = ANY($2::text[]) THEN u.email END AS email,
+              CASE WHEN p.discoverable_by_phone AND u.phone_e164 = ANY($3::text[]) THEN u.phone_e164 END AS phone_e164
+         FROM users u JOIN privacy_settings p ON p.user_id = u.id
+        WHERE u.state = 'active' AND u.id <> $1
+          AND ((p.discoverable_by_email AND u.email_verified_at IS NOT NULL AND u.email = ANY($2::text[]))
+            OR (p.discoverable_by_phone AND u.phone_verified_at IS NOT NULL AND u.phone_e164 = ANY($3::text[])))
+          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = u.id AND b.blocked_id = $1) OR (b.blocker_id = $1 AND b.blocked_id = u.id))
+        ORDER BY u.display_name, u.id`,
+      [userId, emails, phones],
+    );
+    return {
+      matches: rows.map((r) => ({
+        // Which of the entries sent matched, so the app can show it next to the contact.
+        matched: r.email ?? r.phone_e164,
+        user: { id: r.id, username: r.username, displayName: r.display_name, avatarMediaId: r.avatar_media_id },
+      })),
     };
   }
 
@@ -219,8 +276,8 @@ export class UsersService {
     };
   }
 
-  async deactivate(userId: string, password: string) {
-    await this.confirmPassword(userId, password);
+  async deactivate(userId: string, proof: IdentityProof) {
+    await this.auth.confirmIdentity(userId, proof);
     await this.db.tx(async (tx) => {
       await this.db.query(`UPDATE users SET state = 'deactivated', updated_at = now() WHERE id = $1`, [userId], tx);
       await this.db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'deactivated' WHERE user_id = $1 AND revoked_at IS NULL`, [userId], tx);
@@ -235,8 +292,8 @@ export class UsersService {
    * user filed are kept for safety review with the reporter detached. Messages they sent
    * are wiped for everyone and their files deleted. See docs/security-privacy.md.
    */
-  async deleteAccount(userId: string, password: string) {
-    await this.confirmPassword(userId, password);
+  async deleteAccount(userId: string, proof: IdentityProof) {
+    await this.auth.confirmIdentity(userId, proof);
     const { mediaIds, groupNotices, closedBusinesses } = await this.db.tx(async (tx) => {
       const sentMedia = await this.messaging.scrubUser(userId, tx);
       const groupNotices = await this.groups.leaveAll(userId, tx);
@@ -250,7 +307,7 @@ export class UsersService {
       await this.db.query(
         `UPDATE users SET state = 'deleted', deleted_at = now(), updated_at = now(),
            email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL, username = NULL,
-           password_hash = NULL, display_name = '', bio = '', status_text = '', avatar_object_key = NULL,
+           password_hash = NULL, display_name = '', bio = '', status_text = '', avatar_media_id = NULL,
            mfa_totp_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL, mfa_last_counter = NULL
          WHERE id = $1`,
         [userId],
@@ -268,16 +325,11 @@ export class UsersService {
       return { mediaIds: [...new Set([...sentMedia, ...postMedia, ...storyMedia, ...owned.rows.map((r) => r.id)])], groupNotices, closedBusinesses };
     });
     for (const id of closedBusinesses) await this.businesses.afterClose(id);
-    // Their own paid orders that were cancelled are refunded to their card.
+    // Their own paid orders that were cancelled, and deposits still due back, are refunded to their card.
     await this.payments.settleClosedOrders().catch(() => undefined);
+    await this.payments.settleBookings().catch(() => undefined);
     await this.groups.announceAll(groupNotices).catch(() => undefined);
     // Stored files go once nothing references them (a forwarded copy keeps its own reference).
     for (const id of mediaIds) await this.media.releaseIfUnused(id).catch(() => undefined);
-  }
-
-  private async confirmPassword(userId: string, password: string) {
-    await this.limits.consume(PASSWORD_CONFIRM_RULE, userId);
-    const u = await this.db.one<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [userId]);
-    if (!(await verifyPassword(u?.password_hash ?? null, password))) throw Errors.invalidCredentials();
   }
 }
