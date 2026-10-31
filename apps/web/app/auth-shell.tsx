@@ -3,10 +3,10 @@ import { Greeting } from './greeting';
 
 /** Faint chat bubbles behind the greeting: position, size, and whether it's "your" bubble. */
 const BUBBLES: [string, string, string, string, boolean][] = [
-  ['8%', '10%', '46%', '54px', false],
-  ['20%', '34%', '38%', '54px', true],
-  ['32%', '6%', '52%', '78px', false],
-  ['47%', '40%', '30%', '54px', true],
+  ['9%', '9%', '42%', '46px', false],
+  ['17%', '46%', '36%', '46px', true],
+  ['25%', '58%', '24%', '46px', true],
+  ['35%', '9%', '50%', '64px', false],
 ];
 
 /**

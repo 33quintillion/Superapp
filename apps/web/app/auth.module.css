@@ -32,11 +32,13 @@
 }
 .bubble {
   position: absolute;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 20px 20px 20px 6px;
+  background: rgba(255, 255, 255, 0.045);
 }
+/* Your own messages sit on the right with the tail on the other side, as in a chat. */
 .bubble.mine {
-  background: rgba(244, 178, 62, 0.14);
+  border-radius: 20px 20px 6px 20px;
+  background: rgba(244, 178, 62, 0.11);
 }
 
 .greeting {
@@ -263,6 +265,9 @@
   }
   .greeting {
     font-size: 52px;
+  }
+  .bubbles {
+    display: none;
   }
   .pitch {
     font-size: 17px;
