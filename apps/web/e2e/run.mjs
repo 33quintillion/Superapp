@@ -301,6 +301,11 @@ async function notificationsFlow(ana, ben, step) {
   }
   step('service worker shows the notification and reports the message delivered');
 
+  // The test browser drops notifications after a few seconds, and the poll above can take
+  // longer, so show it again just before checking what a clear does to it.
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(payload) });
+  await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).some((n) => n.title === 'Ana'));
+
   // Ben reads the chat on another device: the API sends a clear, and the notification goes.
   const clear = { title: '', body: '', tag: conv.id, silent: true, badge: 0, data: { type: 'clear', conversationId: conv.id, seq: String(conv.lastMessage.seq - 1) } };
   await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
