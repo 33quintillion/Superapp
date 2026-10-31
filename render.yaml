@@ -41,14 +41,11 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      # Render's free plan blocks outbound SMTP, so mail goes through Brevo's HTTPS API.
       - key: MAIL_TRANSPORT
-        value: smtp
-      # Brevo's SMTP relay. Its SMTP login and key go in the two boxes below, as shown in Brevo.
-      - key: SMTP_URL
-        value: smtp://smtp-relay.brevo.com:587
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
+        value: brevo
+      # Brevo → SMTP & API → API keys. Render's outbound ranges must be authorized IPs in Brevo.
+      - key: BREVO_API_KEY
         sync: false
       - key: MAIL_FROM
         sync: false

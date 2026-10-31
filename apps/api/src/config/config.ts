@@ -40,7 +40,13 @@ const schema = z.object({
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'DATA_ENCRYPTION_KEY must be 32 bytes, base64-encoded'),
 
   /** "smtp" for real delivery (Mailpit locally, a provider in staging/prod); "memory" only in tests. */
-  MAIL_TRANSPORT: z.enum(['smtp', 'memory']).default('smtp'),
+  MAIL_TRANSPORT: z.enum(['smtp', 'brevo', 'memory']).default('smtp'),
+  /** brevo: Brevo's HTTPS API (api.brevo.com), for hosts that block outbound SMTP such as Render's free plan. */
+  BREVO_API_KEY: z.string().optional(),
+  /** Overrides https://api.brevo.com. Tests only; refused in staging and production. */
+  BREVO_API_BASE: z.url().optional(),
+  /** Gives up on a provider that does not answer, so a request that sends mail never hangs. */
+  MAIL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(15_000),
   SMTP_URL: z.string().optional(),
   /** Sign-in for the SMTP server, kept apart from SMTP_URL so each can be pasted as is (no URL encoding). */
   SMTP_USER: z.string().optional(),
@@ -176,6 +182,14 @@ const schema = z.object({
   PAYMENTS_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
 });
 
+/** "Name <a@b.c>" or "a@b.c" → its parts; null when it is neither. */
+export function parseMailbox(v: string): { name?: string; email: string } | null {
+  const m = /^\s*(?:"?([^"<]*?)"?\s*<([^<>\s]+@[^<>\s]+)>|([^<>\s]+@[^<>\s]+))\s*$/.exec(v);
+  if (!m) return null;
+  const name = m[1]?.trim();
+  return { ...(name ? { name } : {}), email: (m[2] ?? m[3]) as string };
+}
+
 function list(v: string) {
   return v
     .split(',')
@@ -198,6 +212,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.MAIL_TRANSPORT === 'smtp' && !cfg.SMTP_URL) {
     throw new Error('SMTP_URL is required when MAIL_TRANSPORT=smtp');
+  }
+  if (cfg.MAIL_TRANSPORT === 'brevo' && !cfg.BREVO_API_KEY) {
+    throw new Error('MAIL_TRANSPORT=brevo needs BREVO_API_KEY (Brevo → SMTP & API → API keys)');
+  }
+  if (cfg.MAIL_TRANSPORT === 'brevo' && !parseMailbox(cfg.MAIL_FROM)) {
+    throw new Error('MAIL_FROM must be an address such as "Nexa <no-reply@example.com>"');
   }
   if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
     throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');
@@ -262,6 +282,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ['TWILIO_API_BASE', cfg.TWILIO_API_BASE],
     ['CLOUDFLARE_TURN_API_BASE', cfg.CLOUDFLARE_TURN_API_BASE],
     ['STRIPE_API_BASE', cfg.STRIPE_API_BASE],
+    ['BREVO_API_BASE', cfg.BREVO_API_BASE],
   ] as const) {
     if (url && deployed) throw new Error(`${name} is for tests only; it cannot be set in staging or production`);
   }

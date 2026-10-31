@@ -13,7 +13,8 @@ A private test site on free plans, set up by `render.yaml` at the repository roo
 
 - `DATABASE_URL`: Neon's **direct** connection string (connection pooling off). Migrations hold a session-level advisory lock, which a transaction-mode pooler would break.
 - `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`: a Neon credential with `storage:read` and `storage:write` on the `production` branch.
-- `SMTP_USER` and `SMTP_PASS`: Brevo's SMTP login and key (Brevo → SMTP & API → SMTP), pasted as shown. `SMTP_URL` is Brevo's relay. `MAIL_FROM`: a sender address verified in Brevo.
+- `BREVO_API_KEY`: a Brevo API key (Brevo → SMTP & API → API keys). Render's free plan blocks outbound SMTP (ports 25, 465 and 587), so staging sets `MAIL_TRANSPORT=brevo` and sends through Brevo's HTTPS API. With Brevo's IP blocking on, Render's Singapore outbound ranges (`74.220.52.0/24`, `74.220.60.0/24`, under the service's Connect → Outbound) must be authorized IPs. `MAIL_FROM`: a sender address verified in Brevo.
+- `SMTP_USER` and `SMTP_PASS` (SMTP login and key, pasted as shown) are for hosts that allow SMTP.
 - `PUBLIC_WEB_URL` and `CORS_ORIGINS`: the web service's address. `API_INTERNAL_URL` and `API_PUBLIC_WS_URL`: the API's address (`https://` and `wss://`).
 
 `JWT_ACCESS_SECRET` (64 hex characters) and `DATA_ENCRYPTION_KEY` (32 random bytes, base64) are set in Render. The dashboard's Generate button makes only 16 bytes, too short for the encryption key, so make them with `openssl rand -hex 32` and `openssl rand -base64 32` (a Blueprint's `generateValue` is long enough). Never change `DATA_ENCRYPTION_KEY` afterwards: it encrypts stored secrets such as two-step codes.

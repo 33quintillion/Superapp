@@ -2,7 +2,9 @@ import { can, canManageRole, PERMISSIONS, permissionsOf } from '../src/business/
 import { SecretBox } from '../src/crypto/secret-box';
 import { base32Decode, base32Encode, hotp, totp, verifyTotp } from '../src/crypto/totp';
 import { hashToken, randomToken } from '../src/crypto/tokens';
-import { loadConfig } from '../src/config/config';
+import { createServer, IncomingMessage, Server } from 'node:http';
+import { AddressInfo } from 'node:net';
+import { loadConfig, parseMailbox } from '../src/config/config';
 import { matchesSignature } from '../src/media/media-types';
 import { parseForm } from '../src/dev/stripe-sandbox';
 import { paymentStatus } from '../src/payments/payments.service';
@@ -317,5 +319,72 @@ describe('SMTP sign-in kept apart from the URL', () => {
     const options = (new MailService(cfg) as any).transport.transporter.options;
     expect(options.auth).toEqual({ user: 'u', pass: 'p' });
     expect(Number(options.port)).toBe(2525);
+  });
+});
+
+describe('email through Brevo\'s HTTPS API', () => {
+  const brevo = { MAIL_TRANSPORT: 'brevo', BREVO_API_KEY: 'xkeysib-test', MAIL_FROM: 'Nexa <hello@example.com>' };
+  let server: Server;
+  let base: string;
+  const seen: { headers: IncomingMessage['headers']; body: any }[] = [];
+  let status = 201;
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        seen.push({ headers: req.headers, body: { path: req.url, method: req.method, json: JSON.parse(raw || '{}') } });
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(status < 300 ? '{"messageId":"<1@brevo>"}' : '{"code":"unauthorized","message":"unrecognised IP address"}');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(() => new Promise<void>((r) => server.close(() => r())));
+
+  it('posts the sender, recipient, subject and text with the key in the api-key header', async () => {
+    status = 201;
+    const mail = new MailService(loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', BREVO_API_BASE: base } as NodeJS.ProcessEnv));
+    await mail.send({ to: 'someone@example.org', subject: 'Confirm', text: 'Link: https://x/y' });
+    const last = seen.at(-1)!;
+    expect(last.body.method).toBe('POST');
+    expect(last.body.path).toBe('/v3/smtp/email');
+    expect(last.headers['api-key']).toBe('xkeysib-test');
+    expect(last.body.json).toEqual({
+      sender: { name: 'Nexa', email: 'hello@example.com' },
+      to: [{ email: 'someone@example.org' }],
+      subject: 'Confirm',
+      textContent: 'Link: https://x/y',
+    });
+    expect(mail.sent).toEqual([]);
+  });
+
+  it('fails loudly with Brevo\'s reason when refused', async () => {
+    status = 401;
+    const mail = new MailService(loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', BREVO_API_BASE: base } as NodeJS.ProcessEnv));
+    await expect(mail.send({ to: 'a@example.org', subject: 's', text: 't' })).rejects.toThrow(/401.*unrecognised IP/);
+  });
+
+  it('needs a key and a usable sender, and keeps the test-only base URL out of deployments', () => {
+    expect(() => loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', BREVO_API_KEY: undefined } as unknown as NodeJS.ProcessEnv)).toThrow(/BREVO_API_KEY/);
+    expect(() => loadConfig({ ...TEST_ENV, ...brevo, NODE_ENV: 'development', MAIL_FROM: 'Nexa' } as NodeJS.ProcessEnv)).toThrow(/MAIL_FROM/);
+    const deployed = { NODE_ENV: 'staging', STUN_URLS: 'stun:stun.example.test:3478', S3_AUTO_CREATE_BUCKET: 'false' };
+    expect(loadConfig({ ...TEST_ENV, ...brevo, ...deployed } as NodeJS.ProcessEnv).MAIL_TRANSPORT).toBe('brevo');
+    expect(() => loadConfig({ ...TEST_ENV, ...brevo, ...deployed, BREVO_API_BASE: base } as NodeJS.ProcessEnv)).toThrow(/BREVO_API_BASE is for tests only/);
+  });
+
+  it('reads plain and named sender addresses', () => {
+    expect(parseMailbox('a@b.co')).toEqual({ email: 'a@b.co' });
+    expect(parseMailbox('"Hotel New Janpath" <desk@x.in>')).toEqual({ name: 'Hotel New Janpath', email: 'desk@x.in' });
+    expect(parseMailbox('no address')).toBeNull();
+  });
+
+  it('gives SMTP a time limit so a blocked port cannot hang a request', () => {
+    const cfg = loadConfig({ ...TEST_ENV, MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://smtp.example.com:587', NODE_ENV: 'development', MAIL_TIMEOUT_MS: '5000' } as NodeJS.ProcessEnv);
+    const options = (new MailService(cfg) as any).transport.transporter.options;
+    expect(options.connectionTimeout).toBe(5000);
+    expect(options.socketTimeout).toBe(5000);
   });
 });
