@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
+import { skipIfSignedIn } from '@/lib/signed-in';
 import { register } from '../actions';
 import { AuthShell } from '../auth-shell';
 import styles from '../auth.module.css';
@@ -24,7 +25,8 @@ function EmailSignUp() {
   );
 }
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  await skipIfSignedIn();
   const phone = phoneConfig();
   const email = emailSignupOpen();
   if (!phone) {

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { emailSignupOpen, phoneConfig } from '@/lib/phone-config';
+import { skipIfSignedIn } from '@/lib/signed-in';
 import { signIn } from '../actions';
 import { AuthShell } from '../auth-shell';
 import styles from '../auth.module.css';
@@ -35,6 +36,7 @@ function EmailSignIn() {
 
 export default async function SignInPage({ searchParams }: { searchParams: Promise<{ expired?: string }> }) {
   const { expired } = await searchParams;
+  await skipIfSignedIn(expired);
   const phone = phoneConfig();
   const notice = expired ? 'Your session ended. Please sign in again.' : undefined;
   if (!phone) {

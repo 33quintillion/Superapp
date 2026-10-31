@@ -1,18 +1,9 @@
-import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { ACCESS_COOKIE } from '@/lib/cookies';
+import { ACCESS_COOKIE, REFRESH_COOKIE } from '@/lib/cookies';
 
+/** No public front page yet: signed-in people go to their chats, everyone else to sign-in. */
 export default async function Home() {
-  if ((await cookies()).get(ACCESS_COOKIE)) redirect('/account');
-  return (
-    <main className="stack">
-      <h1>Messaging, social and services in one place.</h1>
-      <p className="muted">This early build supports accounts, one-to-one and group chats with photos, files and voice notes, a feed, stories and communities, and businesses you can order from and book with (paid in person for now). Chats are not end-to-end encrypted yet.</p>
-      <Link className="btn" href="/register" style={{ textAlign: 'center', textDecoration: 'none' }}>
-        Create an account
-      </Link>
-      <Link href="/sign-in">I already have an account</Link>
-    </main>
-  );
+  const jar = await cookies();
+  redirect(jar.get(ACCESS_COOKIE) || jar.get(REFRESH_COOKIE) ? '/chats' : '/sign-in');
 }
