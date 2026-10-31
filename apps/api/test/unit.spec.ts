@@ -7,6 +7,7 @@ import { matchesSignature } from '../src/media/media-types';
 import { parseForm } from '../src/dev/stripe-sandbox';
 import { paymentStatus } from '../src/payments/payments.service';
 import { formEncode, ProviderError, SignatureError, signStripePayload, verifyStripeSignature } from '../src/payments/stripe';
+import { createTransport } from 'nodemailer';
 import { StorageService } from '../src/storage/storage.service';
 import { TEST_ENV } from './helpers';
 
@@ -290,5 +291,28 @@ describe('bucket CORS on a provisioned bucket', () => {
   it('is allowed when deployed, unlike auto-creating buckets', () => {
     const deployed = { NODE_ENV: 'staging', MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://mail', STUN_URLS: 'stun:stun.example.test:3478', S3_AUTO_CREATE_BUCKET: 'false' };
     expect(loadConfig({ ...TEST_ENV, ...deployed, S3_MANAGE_CORS: 'true' } as NodeJS.ProcessEnv).S3_MANAGE_CORS).toBe(true);
+  });
+});
+
+describe('SMTP sign-in kept apart from the URL', () => {
+  const smtp = { MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://smtp-relay.example.com:587' };
+
+  it('hands nodemailer the login and key exactly as pasted, even with @ and :', () => {
+    const cfg = loadConfig({ ...TEST_ENV, ...smtp, NODE_ENV: 'development', SMTP_USER: '9a1b2c@smtp-brevo.com', SMTP_PASS: 'xsmtpsib-k:ey/+=%' } as NodeJS.ProcessEnv);
+    const transport = createTransport(cfg.SMTP_URL) as any;
+    expect(transport.transporter.options.auth).toEqual({ user: '9a1b2c@smtp-brevo.com', pass: 'xsmtpsib-k:ey/+=%' });
+    expect(transport.transporter.options.host).toBe('smtp-relay.example.com');
+    expect(Number(transport.transporter.options.port)).toBe(587);
+  });
+
+  it('needs both halves, and only one place for them', () => {
+    expect(() => loadConfig({ ...TEST_ENV, ...smtp, NODE_ENV: 'development', SMTP_USER: 'u' } as NodeJS.ProcessEnv)).toThrow(/SMTP_USER and SMTP_PASS/);
+    expect(() =>
+      loadConfig({ ...TEST_ENV, MAIL_TRANSPORT: 'smtp', SMTP_URL: 'smtp://a:b@host:587', NODE_ENV: 'development', SMTP_USER: 'u', SMTP_PASS: 'p' } as NodeJS.ProcessEnv),
+    ).toThrow(/not both/);
+  });
+
+  it('leaves a URL without them unchanged', () => {
+    expect(loadConfig({ ...TEST_ENV, ...smtp, NODE_ENV: 'development' } as NodeJS.ProcessEnv).SMTP_URL).toBe(smtp.SMTP_URL);
   });
 });

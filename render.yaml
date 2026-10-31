@@ -43,7 +43,12 @@ services:
         sync: false
       - key: MAIL_TRANSPORT
         value: smtp
+      # Brevo's SMTP relay. Its SMTP login and key go in the two boxes below, as shown in Brevo.
       - key: SMTP_URL
+        value: smtp://smtp-relay.brevo.com:587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
         sync: false
       - key: MAIL_FROM
         sync: false

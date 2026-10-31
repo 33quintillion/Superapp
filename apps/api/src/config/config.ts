@@ -42,6 +42,9 @@ const schema = z.object({
   /** "smtp" for real delivery (Mailpit locally, a provider in staging/prod); "memory" only in tests. */
   MAIL_TRANSPORT: z.enum(['smtp', 'memory']).default('smtp'),
   SMTP_URL: z.string().optional(),
+  /** Sign-in for the SMTP server, kept apart from SMTP_URL so each can be pasted as is (no URL encoding). */
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default('Nexa <no-reply@localhost>'),
   PUBLIC_WEB_URL: z.url().default('http://localhost:3001'),
 
@@ -195,6 +198,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (cfg.MAIL_TRANSPORT === 'smtp' && !cfg.SMTP_URL) {
     throw new Error('SMTP_URL is required when MAIL_TRANSPORT=smtp');
+  }
+  if (Boolean(cfg.SMTP_USER) !== Boolean(cfg.SMTP_PASS)) {
+    throw new Error('SMTP_USER and SMTP_PASS go together: set both or neither');
+  }
+  if (cfg.SMTP_URL && cfg.SMTP_USER && cfg.SMTP_PASS) {
+    let url: URL;
+    try {
+      url = new URL(cfg.SMTP_URL);
+    } catch {
+      throw new Error('SMTP_URL must be a URL such as smtp://smtp.example.com:587');
+    }
+    if (url.username || url.password) throw new Error('Put the SMTP sign-in in SMTP_USER and SMTP_PASS, or in SMTP_URL, not both');
+    // URL setters percent-encode, so logins containing @ or : need no escaping by hand.
+    url.username = cfg.SMTP_USER;
+    url.password = cfg.SMTP_PASS;
+    cfg.SMTP_URL = url.toString();
   }
   if (cfg.RATE_LIMIT_DISABLED && (cfg.NODE_ENV === 'production' || cfg.NODE_ENV === 'staging')) {
     throw new Error('RATE_LIMIT_DISABLED cannot be set in staging or production');
