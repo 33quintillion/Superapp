@@ -269,3 +269,4 @@ p.view-once { cursor: default; }
 .mini-block textarea, .mini-block input, .mini-block select { width: 100%; }
 .mini-preview { position: sticky; top: var(--space-lg); }
 @media (max-width: 860px) { .mini-editor { grid-template-columns: 1fr; } }
+.my-qr .new-chat { padding: 0; }
