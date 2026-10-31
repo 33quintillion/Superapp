@@ -1,5 +1,6 @@
 # An installable Android build pointed at the test site, for trying the app on a real phone.
-# Published as the "android-test" pre-release, replacing the previous file each time.
+# Published as the "android-test" pre-release, replacing the previous file each time. 64-bit
+# ARM only, which is every Android phone sold in recent years, to keep the download small.
 # The Firebase values are public by design (they're in every Android and web app); the API
 # checks every sign-in token itself.
 name: Android test build
@@ -42,7 +43,7 @@ jobs:
       - run: flutter pub get
       - name: Build the APK
         run: >
-          flutter build apk --release
+          flutter build apk --release --target-platform android-arm64
           --dart-define=API_BASE_URL=$API_BASE_URL
           --dart-define=FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID
           --dart-define=FIREBASE_SENDER_ID=$FIREBASE_SENDER_ID
