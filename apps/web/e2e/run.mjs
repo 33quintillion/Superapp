@@ -305,7 +305,8 @@ async function notificationsFlow(ana, ben, step) {
   const clear = { title: '', body: '', tag: conv.id, silent: true, badge: 0, data: { type: 'clear', conversationId: conv.id, seq: String(conv.lastMessage.seq - 1) } };
   await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
   await new Promise((r) => setTimeout(r, 500));
-  assert((await ben.page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length)) === 1, 'an older read keeps a newer notification');
+  const kept = await ben.page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).map((n) => ({ title: n.title, tag: n.tag, seq: n.data?.seq })));
+  assert(kept.length === 1, `an older read keeps a newer notification (showing: ${JSON.stringify(kept)})`);
   clear.data.seq = String(conv.lastMessage.seq);
   await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
   await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length === 0);
