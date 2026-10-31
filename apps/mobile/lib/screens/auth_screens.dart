@@ -16,6 +16,7 @@ import '../theme/tokens.g.dart';
 import 'business_screens.dart';
 import 'call_screens.dart';
 import 'chat_screens.dart';
+import 'link_screens.dart';
 import 'social_screens.dart';
 
 /// Shared scaffold for the signed-out forms: one column, max 420 px, scrolls on small screens.
@@ -462,6 +463,14 @@ class _HomeScreenState extends State<HomeScreen> {
             subtitle: const Text('Order for pickup and book appointments'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BusinessesScreen(auth: auth))),
+          ),
+          ListTile(
+            key: const Key('open-link-device'),
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('Linked devices'),
+            subtitle: const Text('Use SuperApp on a computer'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkDeviceScreen(auth: auth))),
           ),
           ListTile(
             key: const Key('open-calls'),

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>SuperApp uses the camera for video calls.</string>
+	<string>SuperApp uses the camera for video calls and to scan the code that links a computer.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Only if you ask: SuperApp checks your contacts' email addresses and phone numbers to find people you know who chose to be found. Nothing is saved.</string>
 	<key>NSMicrophoneUsageDescription</key>

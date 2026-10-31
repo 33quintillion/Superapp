@@ -105,6 +105,14 @@ class AuthController extends ChangeNotifier {
     await _reloadProfile();
   }
 
+  /// What a link code from a computer's screen would link: {deviceName, browser}.
+  Future<Map<String, dynamic>> describeLink(String code) async => (await authed('GET', '/v1/auth/link/${Uri.encodeComponent(code)}'))!;
+
+  /// Signs the computer showing [code] in to this account.
+  Future<void> approveLink(String code) async {
+    await authed('POST', '/v1/auth/link/${Uri.encodeComponent(code)}/approve');
+  }
+
   Future<void> removeEmail() async {
     await authed('DELETE', '/v1/me/email');
     await _reloadProfile();
