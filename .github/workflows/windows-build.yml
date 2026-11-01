@@ -48,6 +48,8 @@ jobs:
         run: |
           Get-ChildItem build/windows/x64/runner/Release
           if (!(Test-Path build/windows/x64/runner/Release/SuperApp.exe)) { throw 'SuperApp.exe missing' }
+          # Linker leftovers aren't needed to run the app.
+          Remove-Item build/windows/x64/runner/Release/*.lib, build/windows/x64/runner/Release/*.exp -ErrorAction SilentlyContinue
           Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath SuperApp-Windows.zip
       - uses: actions/upload-artifact@v4
         with:
