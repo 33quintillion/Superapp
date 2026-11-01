@@ -8,6 +8,7 @@ import 'calls/call_engine.dart';
 import 'chat/outbox_store.dart';
 import 'chat/realtime.dart';
 import 'screens/auth_screens.dart';
+import 'screens/desktop_screens.dart';
 import 'theme/theme.dart';
 
 Future<void> main() async {
@@ -39,7 +40,8 @@ class NexaApp extends StatelessWidget {
           listenable: auth,
           builder: (context, _) => switch (auth.status) {
             AuthStatus.unknown => const Scaffold(body: Center(child: CircularProgressIndicator())),
-            AuthStatus.signedOut => auth.phone.available ? PhoneSignInScreen(auth: auth) : SignInScreen(auth: auth),
+            // A computer signs in from the phone by QR code, as WhatsApp for Windows does.
+            AuthStatus.signedOut => isDesktopPlatform ? DesktopLinkScreen(auth: auth) : (auth.phone.available ? PhoneSignInScreen(auth: auth) : SignInScreen(auth: auth)),
             AuthStatus.mfaRequired => MfaScreen(auth: auth),
             AuthStatus.needsName => NameScreen(auth: auth),
             AuthStatus.signedIn => HomeScreen(auth: auth, connectSocket: connectSocket, callEngine: callEngine, outbox: outbox),

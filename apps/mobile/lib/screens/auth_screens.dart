@@ -17,6 +17,7 @@ import 'business_screens.dart';
 import 'call_screens.dart';
 import 'chat_screens.dart';
 import 'link_screens.dart';
+import 'desktop_screens.dart';
 import 'mini_screens.dart';
 import 'qr_screens.dart';
 import 'social_screens.dart';
@@ -391,13 +392,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final auth = widget.auth;
     final p = auth.profile!;
-    return CallOverlayHost(
-      calls: calls,
-      child: Scaffold(
-        appBar: AppBar(title: const Text('SuperApp'), actions: [
-          IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut),
-        ]),
-        body: ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
+    final signOut = IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: auth.signOut);
+    final menu = ListView(padding: const EdgeInsets.all(NexaSpace.lg), children: [
           ListenableBuilder(
             listenable: auth,
             builder: (context, _) {
@@ -497,8 +493,17 @@ class _HomeScreenState extends State<HomeScreen> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MiniProgramsScreen(auth: auth))),
           ),
-        ]),
-      ),
+        ]);
+    // On a computer with room for it: chats side by side, like WhatsApp for Windows.
+    if (isDesktopPlatform && MediaQuery.sizeOf(context).width >= 900) {
+      return CallOverlayHost(
+        calls: calls,
+        child: DesktopShell(auth: auth, chat: chat, settings: Scaffold(appBar: AppBar(title: const Text('More'), actions: [signOut]), body: menu)),
+      );
+    }
+    return CallOverlayHost(
+      calls: calls,
+      child: Scaffold(appBar: AppBar(title: const Text('SuperApp'), actions: [signOut]), body: menu),
     );
   }
 }

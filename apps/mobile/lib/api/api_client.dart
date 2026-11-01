@@ -50,7 +50,13 @@ class ApiClient {
     } on Exception {
       throw ApiException(0, 'network_error', 'Could not reach the server. Check your connection and try again.');
     }
-    final decoded = res.body.isEmpty ? null : jsonDecode(res.body);
+    final Object? decoded;
+    try {
+      decoded = res.body.isEmpty ? null : jsonDecode(res.body);
+    } on FormatException {
+      // Not the API answering: the host's "starting up" page while the server wakes, or a proxy error.
+      throw ApiException(503, 'api_unreachable', 'SuperApp is starting up. Try again in a moment.');
+    }
     if (res.statusCode >= 400) {
       final err = (decoded is Map ? decoded['error'] : null) as Map<String, dynamic>?;
       throw ApiException(res.statusCode, err?['code'] as String? ?? 'http_error', err?['message'] as String? ?? 'Request failed');

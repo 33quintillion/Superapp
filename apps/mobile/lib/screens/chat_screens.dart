@@ -12,8 +12,19 @@ import 'business_screens.dart' show openInBrowser;
 import 'call_screens.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({super.key, required this.chat});
+  const ChatListScreen({super.key, required this.chat, this.onOpen, this.selectedId});
   final ChatController chat;
+  /// On a computer the chat opens beside the list instead of on top of it.
+  final void Function(String conversationId)? onOpen;
+  final String? selectedId;
+
+  Future<void> _go(BuildContext context, String id) async {
+    if (onOpen != null) {
+      onOpen!(id);
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: id)));
+  }
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -45,7 +56,8 @@ class ChatListScreen extends StatelessWidget {
                         title: Text(c.titleFor(chat.me)),
                         subtitle: Text(c.previewFor(chat.me), maxLines: 1, overflow: TextOverflow.ellipsis),
                         trailing: c.unreadCount > 0 ? Badge(label: Text('${c.unreadCount}')) : null,
-                        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: c.id))),
+                        selected: c.id == selectedId,
+                        onTap: () => _go(context, c.id),
                       );
                     },
                   ),
@@ -70,7 +82,7 @@ class ChatListScreen extends StatelessWidget {
     try {
       final id = await chat.openDirectByUsername(username);
       if (!context.mounted) return;
-      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: id)));
+      await _go(context, id);
     } on ApiException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.status == 404 ? 'No one with that username' : e.message)));
@@ -99,7 +111,7 @@ class ChatListScreen extends StatelessWidget {
     try {
       final id = await chat.createGroup(title.text, usernames);
       if (!context.mounted) return;
-      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(chat: chat, conversationId: id)));
+      await _go(context, id);
     } on ApiException catch (e) {
       if (!context.mounted) return;
       final text = e.status == 404 ? 'One of those usernames doesn’t exist' : (e.code == 'cannot_add' ? 'Some of those people don’t allow you to add them to groups' : e.message);

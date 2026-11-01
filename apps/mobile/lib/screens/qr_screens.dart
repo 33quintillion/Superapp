@@ -5,6 +5,7 @@ import '../api/api_client.dart';
 import '../chat/chat_controller.dart';
 import '../theme/tokens.g.dart';
 import 'chat_screens.dart';
+import 'desktop_screens.dart';
 import 'link_screens.dart';
 
 Future<String?> _scanContact(BuildContext context) => scanCode(context, contactCodeFrom, 'Point the camera at someone’s SuperApp QR code.');
@@ -142,6 +143,8 @@ class _MyQrScreenState extends State<MyQrScreen> {
               const SizedBox(height: NexaSpace.sm),
               Text('${code.substring(0, 5)}-${code.substring(5)}', key: const Key('my-code'), textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(letterSpacing: 2)),
               const SizedBox(height: NexaSpace.xl),
+              // Computers have no camera scanner here; typing the code works everywhere.
+              if (!isDesktopPlatform)
               FilledButton.icon(
                 key: const Key('scan-contact'),
                 icon: const Icon(Icons.qr_code_scanner),

@@ -113,6 +113,22 @@ class AuthController extends ChangeNotifier {
     await authed('POST', '/v1/auth/link/${Uri.encodeComponent(code)}/approve');
   }
 
+  /// Signing in a computer the WhatsApp Web way: ask for a code to show as a QR code. The
+  /// phone that scans it approves; only this device holds [secret], so only it can collect.
+  Future<({String code, String secret, int expiresIn})> startDeviceLink() async {
+    final r = (await api.send('POST', '/v1/auth/link', body: {'deviceName': _deviceName()}))!;
+    return (code: r['code'] as String, secret: r['secret'] as String, expiresIn: (r['expiresIn'] as num).toInt());
+  }
+
+  /// Asks whether the phone has approved yet. True once signed in. Throws [ApiException]
+  /// (status 400 or 401) when the code has expired or was used.
+  Future<bool> collectDeviceLink(String code, String secret) async {
+    final r = (await api.send('POST', '/v1/auth/link/collect', body: {'code': code, 'secret': secret}))!;
+    if (r['status'] == 'pending') return false;
+    await _adopt(TokenPair.fromJson(r));
+    return true;
+  }
+
   Future<void> removeEmail() async {
     await authed('DELETE', '/v1/me/email');
     await _reloadProfile();
@@ -206,5 +222,14 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String _deviceName() => kIsWeb ? 'Web browser' : '${defaultTargetPlatform.name} app';
+  String _deviceName() => kIsWeb
+      ? 'Web browser'
+      : switch (defaultTargetPlatform) {
+          TargetPlatform.windows => 'SuperApp for Windows',
+          TargetPlatform.macOS => 'SuperApp for Mac',
+          TargetPlatform.linux => 'SuperApp for Linux',
+          TargetPlatform.iOS => 'iPhone app',
+          TargetPlatform.android => 'Android app',
+          _ => '${defaultTargetPlatform.name} app',
+        };
 }

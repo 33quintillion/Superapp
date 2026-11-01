@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -38,6 +39,7 @@ class Server {
   final starred = <String>{};
   String contactCode = 'ADAPQR2345';
   bool openedMini = false;
+  bool linkApproved = false;
   final miniCard = <String, dynamic>{
     'id': 'mp1',
     'name': 'Janpath Dining',
@@ -124,6 +126,13 @@ class Server {
         return json(200, {'changes': <Object>[], 'nextSince': seq, 'hasMore': false});
       case ('GET', '/v1/messages/starred'):
         return json(200, {'messages': [for (final m in messages) if (starred.contains(m['id'])) m], 'nextCursor': null});
+      case ('POST', '/v1/auth/link'):
+        return json(201, {'code': 'WXYZ2345', 'secret': 'computer-secret-0123456789abcdef', 'expiresIn': 120});
+      case ('POST', '/v1/auth/link/collect'):
+        final b = jsonDecode(req.body) as Map;
+        if (b['code'] != 'WXYZ2345' || b['secret'] != 'computer-secret-0123456789abcdef') return json(401, {'error': {'code': 'invalid_token', 'message': 'expired'}});
+        if (!linkApproved) return json(200, {'status': 'pending', 'expiresIn': 100});
+        return json(200, {'accessToken': 'a1', 'refreshToken': 'r1', 'sessionId': 's', 'expiresIn': 900});
       case ('GET', '/v1/ai/features'):
         return json(200, {'translate': true, 'transcribe': true, 'languages': {'hi': 'Hindi', 'gu': 'Gujarati'}});
       case ('POST', '/v1/messages/m1/translate'):
@@ -532,5 +541,46 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('Windows: signs in by scanning a QR code with the phone, then shows chats side by side', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final server = Server();
+    server.add('ben', 'text', body: 'hello from ben');
+    final auth = AuthController(ApiClient(client: server.client, baseUrl: 'http://api.test'), MemorySessionStore());
+    await auth.restore();
+    await tester.pumpWidget(NexaApp(auth: auth, connectSocket: server.connect));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('desktop-link-qr')), findsOneWidget);
+    expect(find.text('Can’t scan? On your phone, type WXYZ-2345'), findsOneWidget);
+    expect(server.bodies['POST /v1/auth/link'], {'deviceName': 'SuperApp for Windows'});
+    await expectAccessible(tester);
+
+    // Not scanned yet: still waiting.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('desktop-link-qr')), findsOneWidget);
+
+    // The phone approves; the next check signs the computer in.
+    server.linkApproved = true;
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('desktop-rail')), findsOneWidget);
+    expect(find.byKey(const Key('desktop-no-chat')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('conv-ben')));
+    await tester.pumpAndSettle();
+    // The chat opens beside the list, which stays.
+    expect(find.byKey(const Key('composer')), findsOneWidget);
+    expect(find.byKey(const Key('conv-ben')), findsOneWidget);
+    await expectAccessible(tester);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    debugDefaultTargetPlatformOverride = null;
   });
 }
