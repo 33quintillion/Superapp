@@ -44,15 +44,18 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   async onApplicationBootstrap() {
-    if (!this.config.S3_AUTO_CREATE_BUCKET) return;
-    try {
-      await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }));
-    } catch {
-      await this.internal.send(new CreateBucketCommand({ Bucket: this.bucket }));
-      this.logger.log(`Created bucket ${this.bucket}`);
+    if (this.config.S3_AUTO_CREATE_BUCKET) {
+      try {
+        await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }));
+      } catch {
+        await this.internal.send(new CreateBucketCommand({ Bucket: this.bucket }));
+        this.logger.log(`Created bucket ${this.bucket}`);
+      }
+    } else if (!this.config.S3_MANAGE_CORS) {
+      return;
     }
-    // Browsers upload straight to the bucket, so it has to allow the web origins. In
-    // staging and production this is set by infrastructure, like the bucket itself.
+    // Browsers upload straight to the bucket, so it has to allow the web origins. Locally the
+    // bucket is created here too; when deployed, S3_MANAGE_CORS sets the rule on a provisioned bucket.
     const origins = this.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
     if (origins.length === 0) return;
     try {
@@ -117,6 +120,13 @@ export class StorageService implements OnApplicationBootstrap, OnModuleDestroy {
     const r = await this.internal.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, Range: `bytes=0-${bytes - 1}` }));
     const arr = await r.Body!.transformToByteArray();
     return Buffer.from(arr.subarray(0, bytes));
+  }
+
+  /** A whole object, refusing anything larger than maxBytes. */
+  async read(key: string, maxBytes: number): Promise<Buffer> {
+    const r = await this.internal.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (Number(r.ContentLength ?? 0) > maxBytes) throw new Error('object too large');
+    return Buffer.from(await r.Body!.transformToByteArray());
   }
 
   async put(key: string, body: Buffer, contentType: string) {

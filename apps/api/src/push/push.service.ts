@@ -194,6 +194,29 @@ export class PushService {
     return res.rowCount ?? 0;
   }
 
+  /**
+   * After a person reads a chat up to [toSeq], queues a "clear" for each of their devices
+   * that was sent a notification for a message they just read (seq after [fromSeq]), so the
+   * notification disappears there too. Jobs still waiting are dropped by the worker as
+   * already read; the ones counted here are sent, or being sent right now.
+   */
+  async enqueueClear(userId: string, conversationId: string, fromSeq: number, toSeq: number) {
+    if (toSeq <= fromSeq) return 0;
+    const res = await this.db.query(
+      `INSERT INTO push_jobs (device_id, user_id, kind, conversation_id, clear_seq)
+       SELECT j.device_id, $1, 'clear', $2, $4 FROM messages m
+         JOIN push_jobs j ON j.message_id = m.id AND j.user_id = $1
+          AND (j.state = 'sent' OR (j.state = 'pending' AND j.locked_until > now()))
+        WHERE m.conversation_id = $2 AND m.seq > $3 AND m.seq <= $4
+        GROUP BY j.device_id
+       ON CONFLICT (device_id, conversation_id) WHERE kind = 'clear' AND state = 'pending'
+       DO UPDATE SET clear_seq = GREATEST(push_jobs.clear_seq, EXCLUDED.clear_seq)`,
+      [userId, conversationId, fromSeq, toSeq],
+    );
+    if (res.rowCount) this.kick();
+    return res.rowCount ?? 0;
+  }
+
   /** Tells this instance's worker there is new work (call after the transaction commits). */
   kick() {
     for (const w of this.wakers) w();

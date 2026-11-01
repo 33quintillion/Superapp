@@ -21,6 +21,7 @@ export interface FieldDef {
   hint?: string;
   defaultValue?: string;
   hidden?: boolean;
+  optional?: boolean;
 }
 
 /** A progressively enhanced form: works as a plain POST without JavaScript. */
@@ -47,7 +48,7 @@ export function ActionForm({
         ) : (
           <label key={f.name} className="field">
             <span>{f.label}</span>
-            <input name={f.name} type={f.type ?? 'text'} autoComplete={f.autoComplete} defaultValue={state.values?.[f.name] ?? f.defaultValue} required />
+            <input name={f.name} type={f.type ?? 'text'} autoComplete={f.autoComplete} defaultValue={state.values?.[f.name] ?? f.defaultValue} required={!f.optional} />
             {f.hint && <small>{f.hint}</small>}
           </label>
         ),

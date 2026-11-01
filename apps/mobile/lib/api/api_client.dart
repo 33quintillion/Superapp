@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -49,11 +50,31 @@ class ApiClient {
     } on Exception {
       throw ApiException(0, 'network_error', 'Could not reach the server. Check your connection and try again.');
     }
-    final decoded = res.body.isEmpty ? null : jsonDecode(res.body);
+    final Object? decoded;
+    try {
+      decoded = res.body.isEmpty ? null : jsonDecode(res.body);
+    } on FormatException {
+      // Not the API answering: the host's "starting up" page while the server wakes, or a proxy error.
+      throw ApiException(503, 'api_unreachable', 'SuperApp is starting up. Try again in a moment.');
+    }
     if (res.statusCode >= 400) {
       final err = (decoded is Map ? decoded['error'] : null) as Map<String, dynamic>?;
       throw ApiException(res.statusCode, err?['code'] as String? ?? 'http_error', err?['message'] as String? ?? 'Request failed');
     }
     return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  /// Uploads to a presigned storage URL. No access token: the URL itself grants the upload.
+  Future<void> putBytes(Uri url, Uint8List bytes, {Map<String, String> headers = const {}}) async {
+    final req = http.Request('PUT', url)
+      ..headers.addAll(headers)
+      ..bodyBytes = bytes;
+    final http.Response res;
+    try {
+      res = await http.Response.fromStream(await _http.send(req).timeout(const Duration(minutes: 2)));
+    } on Exception {
+      throw ApiException(0, 'network_error', 'The upload didn’t go through. Check your connection and try again.');
+    }
+    if (res.statusCode >= 300) throw ApiException(res.statusCode, 'upload_failed', 'The upload didn’t go through. Try again.');
   }
 }

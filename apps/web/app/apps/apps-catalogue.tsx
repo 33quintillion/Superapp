@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { chatApi } from '@/lib/chat-client';
 import type { Integration } from '@/lib/business-client';
 
-/** Partner integrations reviewed by Nexa. Connecting one grants only the boxes ticked. */
-export function AppsCatalogue({ catalogue: initial, connected: initialConnected }: { catalogue: Integration[]; connected: Integration[] }) {
+/** Partner integrations reviewed by SuperApp. Connecting one grants only the boxes ticked. */
+export function AppsCatalogue({ catalogue: initial, connected: initialConnected, children }: { catalogue: Integration[]; connected: Integration[]; children?: React.ReactNode }) {
   const [catalogue, setCatalogue] = useState(initial);
   const [connected, setConnected] = useState(initialConnected);
   const [open, setOpen] = useState<string | null>(null);
@@ -16,20 +16,21 @@ export function AppsCatalogue({ catalogue: initial, connected: initialConnected 
   };
   return (
     <main className="wide social">
-      <h1>Apps and services</h1>
+      {children}
+      <h2>Apps and services</h2>
       <p className="muted">
-        Services from partners that Nexa has reviewed. They never see your messages or contacts, and you choose what each one can use. Partners can’t use these
+        Services from partners that SuperApp has reviewed. They never see your messages or contacts, and you choose what each one can use. Partners can’t use these
         connections yet; that starts when the first partner goes live.
       </p>
       {err && <p className="error">{err}</p>}
 
-      <h2>Connected</h2>
+      <h3>Connected</h3>
       <div className="card">
         {connected.length === 0 && <p className="muted">Nothing connected.</p>}
         {connected.map((i) => (
           <div className="row" key={i.id} data-testid="connected-app">
             <span>
-              <strong>{i.name}</strong> {!i.grant?.active && <span className="pill">Paused by Nexa</span>}
+              <strong>{i.name}</strong> {!i.grant?.active && <span className="pill">Paused by SuperApp</span>}
               <br />
               <span className="small muted">Can use: {i.grant?.scopes.length ? i.scopes.filter((s) => i.grant!.scopes.includes(s.scope)).map((s) => s.description).join('; ') : 'nothing'}</span>
             </span>
@@ -46,7 +47,7 @@ export function AppsCatalogue({ catalogue: initial, connected: initialConnected 
         ))}
       </div>
 
-      <h2>Available</h2>
+      <h3>Available</h3>
       <div className="card">
         {catalogue.length === 0 && <p className="muted">No partner services yet.</p>}
         {catalogue.map((i) => (

@@ -35,6 +35,7 @@ const env = {
   SMTP_URL: 'smtp://127.0.0.1:2526',
   LOG_LEVEL: 'warn',
   RATE_LIMIT_DISABLED: 'true',
+  PASSWORD_BREACH_CHECK: 'off',
   S3_ENDPOINT: process.env.LOAD_S3_ENDPOINT ?? 'http://127.0.0.1:9000',
   S3_BUCKET: 'nexa-load',
   S3_ACCESS_KEY_ID: process.env.LOAD_S3_ACCESS_KEY_ID ?? 'minioadmin',

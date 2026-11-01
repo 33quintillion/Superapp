@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { decodeCursor, encodeCursor } from '../common/cursor';
@@ -9,7 +10,7 @@ import { PushService } from '../push/push.service';
 import { RealtimeBus } from '../realtime/realtime-bus.service';
 import { SafetyService } from '../safety/safety.service';
 
-export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'voice' | 'file' | 'system';
+export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'voice' | 'file' | 'system' | 'poll' | 'location' | 'contact';
 
 export interface SendInput {
   clientId: string;
@@ -18,7 +19,16 @@ export interface SendInput {
   mediaId?: string;
   replyToId?: string;
   mentions: string[];
+  viewOnce?: boolean;
+  poll?: { options: string[]; multiple: boolean };
+  location?: { lat: number; lng: number; label: string; liveMinutes?: 15 | 60 | 480 };
+  contactUserId?: string;
 }
+
+/** Disappearing-message timers a chat can have, in seconds (24 hours, 7 days, 90 days). */
+export const DISAPPEAR_OPTIONS = [86400, 604800, 7776000] as const;
+/** How long a view-once download link lasts. */
+export const VIEW_ONCE_URL_TTL = 60;
 
 /** Edits are allowed for this long after sending. */
 export const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -26,6 +36,8 @@ export const EDIT_WINDOW_MS = 15 * 60 * 1000;
 export const DELETE_WINDOW_MS = 48 * 3600 * 1000;
 export const MAX_PINS = 10;
 export const MAX_BODY = 4000;
+export const MAX_POLL_QUESTION = 300;
+export const MAX_STARS = 2000;
 
 const cannotMessage = () => new AppError(HttpStatus.FORBIDDEN, 'cannot_message', 'You can’t message this person');
 const systemMessage = () => Errors.conflict('system_message', 'Group updates cannot be changed');
@@ -53,6 +65,12 @@ interface MessageRow {
   media: Record<string, unknown> | null;
   reply_to: Record<string, unknown> | null;
   reactions: { userId: string; emoji: string }[];
+  view_once: boolean;
+  expires_at: Date | null;
+  attachment: Record<string, unknown> | null;
+  poll: { options: string[]; multiple: boolean; votes: { userId: string; option: number }[] } | null;
+  contact: { userId: string; displayName: string; username: string | null } | null;
+  opened_by: string[] | null;
 }
 
 interface MemberRow {
@@ -60,6 +78,7 @@ interface MemberRow {
   username: string | null;
   display_name: string;
   state: string;
+  avatar_media_id: string | null;
   role: string;
   joined_at: Date;
   last_delivered_seq: string;
@@ -71,6 +90,15 @@ interface MemberRow {
 const MESSAGE_SELECT = `
   SELECT m.id, m.conversation_id, m.seq, m.change_seq, m.sender_id, m.client_id, m.kind, m.body, m.forwarded,
          m.mentions, m.edited_at, m.deleted_at, m.pinned_at, m.pinned_by, m.created_at, m.system_event,
+         m.view_once, m.expires_at, m.attachment,
+         CASE WHEN p.message_id IS NULL THEN NULL ELSE json_build_object('options', p.options, 'multiple', p.multiple,
+           'votes', COALESCE((SELECT json_agg(json_build_object('userId', v.user_id, 'option', v.option) ORDER BY v.created_at, v.option)
+                                FROM poll_votes v WHERE v.message_id = m.id), '[]'::json)) END AS poll,
+         CASE WHEN m.kind = 'contact' AND m.attachment IS NOT NULL THEN (
+           SELECT json_build_object('userId', cu.id, 'username', CASE WHEN cu.state = 'deleted' THEN NULL ELSE cu.username END,
+                  'displayName', CASE WHEN cu.state = 'deleted' THEN 'Deleted account' ELSE cu.display_name END)
+             FROM users cu WHERE cu.id = (m.attachment->>'userId')::uuid) END AS contact,
+         CASE WHEN m.view_once THEN COALESCE((SELECT json_agg(o.user_id ORDER BY o.opened_at) FROM view_once_opens o WHERE o.message_id = m.id), '[]'::json) END AS opened_by,
          EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1) AS hidden,
          CASE WHEN md.id IS NULL THEN NULL ELSE json_build_object(
            'id', md.id, 'kind', md.kind, 'contentType', md.content_type, 'byteSize', md.byte_size,
@@ -82,7 +110,8 @@ const MESSAGE_SELECT = `
                      FROM message_reactions x WHERE x.message_id = m.id), '[]'::json) AS reactions
     FROM messages m
     LEFT JOIN media md ON md.id = m.media_id
-    LEFT JOIN messages r ON r.id = m.reply_to_id`;
+    LEFT JOIN messages r ON r.id = m.reply_to_id
+    LEFT JOIN message_polls p ON p.message_id = m.id`;
 
 function messageDto(m: MessageRow) {
   return {
@@ -99,6 +128,12 @@ function messageDto(m: MessageRow) {
     forwarded: m.forwarded,
     mentions: m.mentions,
     system: m.deleted_at ? null : m.system_event,
+    poll: m.deleted_at ? null : m.poll,
+    location: m.deleted_at || m.kind !== 'location' ? null : m.attachment,
+    contact: m.deleted_at ? null : m.contact,
+    viewOnce: m.view_once,
+    openedBy: m.opened_by,
+    expiresAt: m.expires_at,
     reactions: m.reactions,
     editedAt: m.edited_at,
     deletedAt: m.deleted_at,
@@ -192,9 +227,10 @@ export class MessagingService {
       send_policy: GroupPolicy;
       info_policy: GroupPolicy;
       add_policy: GroupPolicy;
+      disappear_seconds: number | null;
     }>(
       `SELECT c.id, c.kind, c.title, c.last_seq, c.last_message_at, c.created_at, cm.muted_until, cm.archived_at, cm.last_read_seq,
-              c.description, c.send_policy, c.info_policy, c.add_policy
+              c.description, c.send_policy, c.info_policy, c.add_policy, c.disappear_seconds
          FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2
         WHERE c.id = $1`,
       [conversationId, userId],
@@ -228,6 +264,7 @@ export class MessagingService {
       unreadCount: Number(unread!.n),
       mutedUntil: c.muted_until,
       archived: !!c.archived_at,
+      disappearSeconds: c.disappear_seconds,
       createdAt: c.created_at,
       peerId: c.kind === 'direct' ? (members.find((m) => m.user_id !== userId)?.user_id ?? null) : null,
       group:
@@ -277,11 +314,29 @@ export class MessagingService {
         await this.validateContent(userId, conversationId, input, members, opts.mediaPreauthorised ?? false, tx);
         const seq = await this.nextSeq(conversationId, tx);
         const row = await this.db.one<{ id: string }>(
-          `INSERT INTO messages (conversation_id, seq, change_seq, sender_id, client_id, kind, body, media_id, reply_to_id, forwarded, mentions)
-           VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [conversationId, seq, userId, input.clientId, input.kind, input.body, input.mediaId ?? null, input.replyToId ?? null, opts.forwarded ?? false, input.mentions],
+          `INSERT INTO messages (conversation_id, seq, change_seq, sender_id, client_id, kind, body, media_id, reply_to_id, forwarded, mentions,
+                                 view_once, attachment, expires_at)
+           VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                   (SELECT now() + make_interval(secs => c.disappear_seconds) FROM conversations c WHERE c.id = $1)) RETURNING id`,
+          [
+            conversationId,
+            seq,
+            userId,
+            input.clientId,
+            input.kind,
+            input.body,
+            input.mediaId ?? null,
+            input.replyToId ?? null,
+            opts.forwarded ?? false,
+            input.mentions,
+            input.viewOnce ?? false,
+            attachmentFor(input),
+          ],
           tx,
         );
+        if (input.kind === 'poll') {
+          await this.db.query('INSERT INTO message_polls (message_id, options, multiple) VALUES ($1, $2, $3)', [row!.id, input.poll!.options, input.poll!.multiple], tx);
+        }
         await this.db.query('UPDATE conversations SET last_message_at = now() WHERE id = $1', [conversationId], tx);
         // The sender has, by definition, seen their own message on this device.
         await this.db.query(
@@ -362,6 +417,7 @@ export class MessagingService {
       if (m.kind === 'system') throw systemMessage();
       if (m.sender_id !== userId) throw Errors.forbidden('Only the sender can edit a message');
       if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
+      if (m.kind === 'poll' || m.kind === 'location' || m.kind === 'contact') throw Errors.conflict('not_editable', 'This message can’t be edited');
       if (Date.now() - m.created_at.getTime() > EDIT_WINDOW_MS) throw Errors.conflict('edit_window_passed', 'Messages can only be edited for 15 minutes');
       if (m.kind === 'text' && !body.trim()) throw Errors.validation([{ path: 'body', message: 'A text message cannot be empty' }]);
       await this.db.query('UPDATE messages SET body = $2, edited_at = now(), change_seq = $3 WHERE id = $1', [m.id, body, seq], tx);
@@ -377,7 +433,7 @@ export class MessagingService {
       if (Date.now() - m.created_at.getTime() > DELETE_WINDOW_MS) throw Errors.conflict('delete_window_passed', 'Messages can only be deleted for everyone for 48 hours');
       released.mediaId = m.media_id;
       await this.db.query(
-        `UPDATE messages SET body = '', media_id = NULL, mentions = '{}', pinned_at = NULL, pinned_by = NULL, deleted_at = now(), change_seq = $2
+        `UPDATE messages SET body = '', media_id = NULL, attachment = NULL, mentions = '{}', pinned_at = NULL, pinned_by = NULL, deleted_at = now(), change_seq = $2
           WHERE id = $1`,
         [m.id, seq],
         tx,
@@ -399,7 +455,7 @@ export class MessagingService {
       .tx(async (tx) => {
         const seq = await this.nextSeq(m.conversation_id, tx);
         const r = await this.db.query(
-          `UPDATE messages SET body = '', media_id = NULL, mentions = '{}', pinned_at = NULL, pinned_by = NULL, deleted_at = now(), change_seq = $2
+          `UPDATE messages SET body = '', media_id = NULL, attachment = NULL, mentions = '{}', pinned_at = NULL, pinned_by = NULL, deleted_at = now(), change_seq = $2
             WHERE id = $1 AND deleted_at IS NULL`,
           [messageId, seq],
           tx,
@@ -481,17 +537,201 @@ export class MessagingService {
     return rows.map(messageDto);
   }
 
+  // ---------------------------------------------------------------- polls, stars, timers, view once, live location
+
+  /** Replaces this person's votes on a poll; an empty list takes their vote back. */
+  async vote(userId: string, messageId: string, options: number[]) {
+    await this.limits.consume({ name: 'poll:vote', limit: 300, windowSeconds: 3600 }, userId);
+    return this.mutate(userId, messageId, async (m, tx, seq) => {
+      if (m.kind !== 'poll') throw Errors.conflict('not_a_poll', 'This message is not a poll');
+      if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
+      await this.assertNotBlocked(userId, m.conversation_id, tx);
+      const p = (await this.db.one<{ options: string[]; multiple: boolean }>('SELECT options, multiple FROM message_polls WHERE message_id = $1', [m.id], tx))!;
+      const chosen = [...new Set(options)].sort((a, b) => a - b);
+      if (chosen.some((o) => o >= p.options.length)) throw Errors.validation([{ path: 'options', message: 'That option isn’t in this poll' }]);
+      if (!p.multiple && chosen.length > 1) throw Errors.validation([{ path: 'options', message: 'This poll allows one answer' }]);
+      const { rows } = await this.db.query<{ option: number }>('SELECT option FROM poll_votes WHERE message_id = $1 AND user_id = $2 ORDER BY option', [m.id, userId], tx);
+      if (rows.map((r) => r.option).join(',') === chosen.join(',')) return; // no change
+      await this.db.query('DELETE FROM poll_votes WHERE message_id = $1 AND user_id = $2', [m.id, userId], tx);
+      if (chosen.length) {
+        await this.db.query('INSERT INTO poll_votes (message_id, user_id, option) SELECT $1, $2, unnest($3::smallint[])', [m.id, userId, chosen], tx);
+      }
+      await this.db.query('UPDATE messages SET change_seq = $2 WHERE id = $1', [m.id, seq], tx);
+    });
+  }
+
+  /** Stars are private: nobody else is told. */
+  async star(userId: string, messageId: string, starred: boolean) {
+    const m = await this.requireVisibleMessage(userId, messageId);
+    if (m.kind === 'system') throw systemMessage();
+    if (starred) {
+      if (m.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
+      const n = await this.db.one<{ n: string }>('SELECT count(*) AS n FROM message_stars WHERE user_id = $1', [userId]);
+      if (Number(n!.n) >= MAX_STARS) throw Errors.conflict('too_many_stars', `You can star up to ${MAX_STARS} messages`);
+      await this.db.query('INSERT INTO message_stars (user_id, message_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, m.id]);
+    } else {
+      await this.db.query('DELETE FROM message_stars WHERE user_id = $1 AND message_id = $2', [userId, m.id]);
+    }
+    await this.bus.publish([userId], { type: 'message.starred', data: { id: m.id, conversationId: m.conversation_id, starred } });
+    return { messageId: m.id, starred };
+  }
+
+  /** Starred messages, newest star first, from every chat or one. Deleted and expired ones drop out. */
+  async starred(userId: string, opts: { conversationId?: string; limit: number; cursor?: string }) {
+    const params: unknown[] = [userId, opts.limit + 1];
+    let extra = '';
+    if (opts.conversationId) {
+      params.push(opts.conversationId);
+      extra += ` AND m.conversation_id = $${params.length}`;
+    }
+    if (opts.cursor) {
+      const [ts, id] = decodeCursor(opts.cursor);
+      params.push(ts, id);
+      extra += ` AND (s.created_at, m.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    }
+    const { rows } = await this.db.query<MessageRow & { starred_at: Date }>(
+      `${MESSAGE_SELECT.replace('SELECT m.id,', 'SELECT s.created_at AS starred_at, m.id,')}
+         JOIN message_stars s ON s.message_id = m.id AND s.user_id = $1
+         JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1
+        WHERE m.deleted_at IS NULL AND m.seq > cm.visible_from_seq
+          AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = $1) ${extra}
+        ORDER BY s.created_at DESC, m.id DESC LIMIT $2`,
+      params,
+    );
+    const page = rows.slice(0, opts.limit);
+    const last = page[page.length - 1];
+    return {
+      messages: page.map((r) => ({ ...messageDto(r), starredAt: r.starred_at })),
+      nextCursor: rows.length > opts.limit && last ? encodeCursor(last.starred_at, last.id) : null,
+    };
+  }
+
+  /**
+   * Disappearing messages: from now on, new messages in this chat vanish for everyone after
+   * the chosen time. Anyone in a direct chat can change it; in a group, whoever may edit the
+   * group's info. Everyone sees a notice, as in WhatsApp.
+   */
+  async setDisappearing(userId: string, conversationId: string, seconds: number | null) {
+    await this.limits.consume({ name: 'chat:disappearing', limit: 30, windowSeconds: 3600 }, userId);
+    const noticeId = await this.db.tx(async (tx) => {
+      const c = await this.db.one<{ kind: string; info_policy: GroupPolicy; disappear_seconds: number | null }>(
+        'SELECT kind, info_policy, disappear_seconds FROM conversations WHERE id = $1 FOR UPDATE',
+        [conversationId],
+        tx,
+      );
+      const me = c ? await this.db.one<{ role: string }>('SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2', [conversationId, userId], tx) : null;
+      if (!c || !me) throw Errors.notFound('Conversation');
+      if (c.kind === 'group' && c.info_policy === 'admins' && me.role === 'member') {
+        throw new AppError(HttpStatus.FORBIDDEN, 'admins_only', 'Only admins can change this in this group');
+      }
+      if (c.kind === 'direct') await this.assertNotBlocked(userId, conversationId, tx);
+      if (c.disappear_seconds === seconds) return null;
+      await this.db.query('UPDATE conversations SET disappear_seconds = $2 WHERE id = $1', [conversationId, seconds], tx);
+      return this.insertSystem(tx, conversationId, userId, { type: 'disappearing_changed', seconds });
+    });
+    if (noticeId) {
+      await this.publishToMembers(conversationId, { type: 'message.created', data: (await this.loadOne(NO_VIEWER, noticeId))! });
+      await this.publishToMembers(conversationId, { type: 'conversation.changed', data: { id: conversationId } });
+    }
+    return this.getConversation(userId, conversationId);
+  }
+
+  /**
+   * Opens a view-once photo or video: a short download link, given once per person. The
+   * sender is told it was opened. Other ways to download it are closed to everyone but the sender.
+   */
+  async openViewOnce(userId: string, messageId: string) {
+    const m = await this.requireVisibleMessage(userId, messageId);
+    if (!m.view_once) throw Errors.conflict('not_view_once', 'This message isn’t view once');
+    if (m.deleted_at || !m.media_id) throw Errors.conflict('message_deleted', 'This message was deleted');
+    if (m.sender_id === userId) throw Errors.conflict('own_view_once', 'You can’t open a view-once message you sent');
+    const opened = await this.db.tx(async (tx) => {
+      const ins = await this.db.query('INSERT INTO view_once_opens (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [m.id, userId], tx);
+      if (!ins.rowCount) return false;
+      const seq = await this.nextSeq(m.conversation_id, tx);
+      await this.db.query('UPDATE messages SET change_seq = $2 WHERE id = $1', [m.id, seq], tx);
+      return true;
+    });
+    if (!opened) throw Errors.conflict('already_opened', 'You’ve already opened this');
+    const out = await this.media.viewOnceUrl(m.media_id, VIEW_ONCE_URL_TTL);
+    await this.publishToMembers(m.conversation_id, { type: 'message.updated', data: (await this.loadOne(NO_VIEWER, m.id))! });
+    return out;
+  }
+
+  /** The sender's phone reports where they are while a live location is on. */
+  async updateLiveLocation(userId: string, messageId: string, lat: number, lng: number) {
+    await this.limits.consume({ name: 'location:live', limit: 120, windowSeconds: 600 }, userId);
+    return this.mutate(userId, messageId, async (m, tx, seq) => {
+      this.assertLive(userId, m);
+      await this.db.query(
+        `UPDATE messages SET attachment = attachment || jsonb_build_object('lat', $3::float8, 'lng', $4::float8, 'updatedAt', now()), change_seq = $2
+          WHERE id = $1`,
+        [m.id, seq, lat, lng],
+        tx,
+      );
+    });
+  }
+
+  async stopLiveLocation(userId: string, messageId: string) {
+    return this.mutate(userId, messageId, async (m, tx, seq) => {
+      this.assertLive(userId, m);
+      await this.db.query(`UPDATE messages SET attachment = attachment || jsonb_build_object('liveUntil', now()), change_seq = $2 WHERE id = $1`, [m.id, seq], tx);
+    });
+  }
+
+  private assertLive(userId: string, m: { kind: MessageKind; sender_id: string; deleted_at: Date | null; attachment: Record<string, unknown> | null }) {
+    if (m.kind !== 'location' || m.deleted_at) throw Errors.conflict('not_live', 'This isn’t a live location');
+    if (m.sender_id !== userId) throw Errors.forbidden('Only the person sharing can change their live location');
+    const until = (m.attachment as { liveUntil?: string | null } | null)?.liveUntil;
+    if (!until || new Date(until).getTime() <= Date.now()) throw Errors.conflict('live_ended', 'Live location has ended');
+  }
+
+  /** Removes disappearing messages whose time is up, for everyone. Returns how many. */
+  async sweepExpired(limit = 500) {
+    const { rows } = await this.db.query<{ id: string }>(
+      `SELECT id FROM messages WHERE expires_at <= now() AND deleted_at IS NULL ORDER BY expires_at LIMIT $1`,
+      [limit],
+    );
+    let n = 0;
+    for (const r of rows) if (await this.removeByModerator(r.id)) n++;
+    return n;
+  }
+
+  /** A notice in the chat's history ("Ada turned on disappearing messages"). */
+  async insertSystem(tx: Queryable, conversationId: string, actorId: string, event: Record<string, unknown>) {
+    const seq = await this.nextSeq(conversationId, tx);
+    const row = await this.db.one<{ id: string }>(
+      `INSERT INTO messages (conversation_id, seq, change_seq, sender_id, client_id, kind, system_event)
+       VALUES ($1, $2, $2, $3, $4, 'system', $5) RETURNING id`,
+      [conversationId, seq, actorId, `sys_${randomBytes(12).toString('hex')}`, JSON.stringify(event)],
+      tx,
+    );
+    await this.db.query('UPDATE conversations SET last_message_at = now() WHERE id = $1', [conversationId], tx);
+    return row!.id;
+  }
+
   /** Copies a message the user can see into other chats, marked as forwarded. */
   async forward(userId: string, messageId: string, conversationIds: string[], clientId: string) {
     const src = await this.requireVisibleMessage(userId, messageId);
     if (src.kind === 'system') throw systemMessage();
     if (src.deleted_at) throw Errors.conflict('message_deleted', 'This message was deleted');
+    if (src.view_once || src.kind === 'poll') throw Errors.conflict('not_forwardable', 'This message can’t be forwarded');
+    const a = (src.attachment ?? {}) as { lat?: number; lng?: number; label?: string; userId?: string };
     const results = [];
     for (const conversationId of conversationIds) {
       const r = await this.send(
         userId,
         conversationId,
-        { clientId, kind: src.kind, body: src.body, mediaId: src.media_id ?? undefined, mentions: [] },
+        {
+          clientId,
+          kind: src.kind,
+          body: src.body,
+          mediaId: src.media_id ?? undefined,
+          mentions: [],
+          // A forwarded location is where it was, not a live share.
+          location: src.kind === 'location' ? { lat: a.lat!, lng: a.lng!, label: a.label ?? '' } : undefined,
+          contactUserId: src.kind === 'contact' ? a.userId : undefined,
+        },
         { forwarded: true, mediaPreauthorised: true },
       );
       results.push(r.message);
@@ -534,7 +774,7 @@ export class MessagingService {
    */
   async markReceipt(userId: string, conversationId: string, kind: 'delivered' | 'read', seq: number) {
     await this.requireMember(userId, conversationId);
-    const r = await this.db.one<{ last_delivered_seq: string; last_read_seq: string; changed: boolean }>(
+    const r = await this.db.one<{ last_delivered_seq: string; last_read_seq: string; old_read_seq: string; changed: boolean }>(
       `WITH c AS (SELECT last_seq FROM conversations WHERE id = $1),
             old AS (SELECT last_delivered_seq, last_read_seq FROM conversation_members WHERE conversation_id = $1 AND user_id = $2)
        UPDATE conversation_members cm SET
@@ -542,7 +782,7 @@ export class MessagingService {
          last_read_seq = CASE WHEN $4 THEN GREATEST(cm.last_read_seq, LEAST($3, (SELECT last_seq FROM c))) ELSE cm.last_read_seq END,
          updated_at = now()
        FROM old WHERE cm.conversation_id = $1 AND cm.user_id = $2
-       RETURNING cm.last_delivered_seq, cm.last_read_seq,
+       RETURNING cm.last_delivered_seq, cm.last_read_seq, old.last_read_seq AS old_read_seq,
          (cm.last_delivered_seq, cm.last_read_seq) IS DISTINCT FROM (old.last_delivered_seq, old.last_read_seq) AS changed`,
       [conversationId, userId, seq, kind === 'read'],
     );
@@ -554,6 +794,8 @@ export class MessagingService {
         const visible = viewer.user_id === userId || (me.show_read_receipts !== false && viewer.show_read_receipts !== false);
         await this.bus.publish([viewer.user_id], { type: 'receipt', data: { ...out, lastReadSeq: visible ? out.lastReadSeq : null } });
       }
+      // Read here: take the notifications for these messages off the person's other devices.
+      await this.push.enqueueClear(userId, conversationId, Number(r!.old_read_seq), out.lastReadSeq);
     }
     return out;
   }
@@ -640,6 +882,7 @@ export class MessagingService {
          UPDATE messages m SET change_seq = (SELECT last_seq FROM c) - (SELECT count(*) FROM s) + s.rn,
            body = CASE WHEN m.sender_id = $2 THEN '' ELSE m.body END,
            media_id = CASE WHEN m.sender_id = $2 THEN NULL ELSE m.media_id END,
+           attachment = CASE WHEN m.sender_id = $2 THEN NULL ELSE m.attachment END,
            mentions = CASE WHEN m.sender_id = $2 THEN '{}' ELSE m.mentions END,
            pinned_at = CASE WHEN m.sender_id = $2 THEN NULL ELSE m.pinned_at END,
            deleted_at = CASE WHEN m.sender_id = $2 THEN now() ELSE m.deleted_at END
@@ -665,7 +908,7 @@ export class MessagingService {
 
   async members(conversationId: string, db?: Queryable) {
     const { rows } = await this.db.query<MemberRow>(
-      `SELECT cm.user_id, u.username, u.display_name, u.state, cm.role, cm.joined_at, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
+      `SELECT cm.user_id, u.username, u.display_name, u.state, u.avatar_media_id, cm.role, cm.joined_at, cm.last_delivered_seq, cm.last_read_seq, p.show_read_receipts
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id LEFT JOIN privacy_settings p ON p.user_id = cm.user_id
         WHERE cm.conversation_id = $1 ORDER BY cm.joined_at, cm.user_id`,
       [conversationId],
@@ -680,6 +923,7 @@ export class MessagingService {
       userId: m.user_id,
       username: m.username,
       displayName: m.state === 'deleted' ? 'Deleted account' : m.display_name,
+      avatarMediaId: m.avatar_media_id,
       role: m.role,
       lastDeliveredSeq: Number(m.last_delivered_seq),
       lastReadSeq: readVisible ? Number(m.last_read_seq) : null,
@@ -752,9 +996,36 @@ export class MessagingService {
   }
 
   private async validateContent(userId: string, conversationId: string, input: SendInput, members: MemberRow[], mediaPreauthorised: boolean, tx: Queryable) {
+    const extras = { poll: !!input.poll, location: !!input.location, contact: !!input.contactUserId };
+    for (const [k, present] of Object.entries(extras)) {
+      if (present && input.kind !== k) throw Errors.validation([{ path: k === 'contact' ? 'contactUserId' : k, message: `Only a ${k} message carries this` }]);
+    }
+    if (input.viewOnce && input.kind !== 'image' && input.kind !== 'video') {
+      throw Errors.validation([{ path: 'viewOnce', message: 'Only photos and videos can be view once' }]);
+    }
+    if (input.kind === 'text' || input.kind === 'poll' || input.kind === 'location' || input.kind === 'contact') {
+      if (input.mediaId) throw Errors.validation([{ path: 'mediaId', message: `A ${input.kind} message cannot carry media` }]);
+    }
     if (input.kind === 'text') {
-      if (input.mediaId) throw Errors.validation([{ path: 'mediaId', message: 'Text messages cannot carry media' }]);
       if (!input.body.trim()) throw Errors.validation([{ path: 'body', message: 'A text message cannot be empty' }]);
+    } else if (input.kind === 'poll') {
+      if (!input.poll) throw Errors.validation([{ path: 'poll', message: 'A poll needs its options' }]);
+      input.body = input.body.trim();
+      if (!input.body || input.body.length > MAX_POLL_QUESTION) {
+        throw Errors.validation([{ path: 'body', message: `Ask a question of 1 to ${MAX_POLL_QUESTION} characters` }]);
+      }
+    } else if (input.kind === 'location') {
+      if (!input.location) throw Errors.validation([{ path: 'location', message: 'A location message needs a place' }]);
+      if (input.body) throw Errors.validation([{ path: 'body', message: 'Put the place name in location.label' }]);
+    } else if (input.kind === 'contact') {
+      if (!input.contactUserId) throw Errors.validation([{ path: 'contactUserId', message: 'Choose whose contact to share' }]);
+      if (input.body) throw Errors.validation([{ path: 'body', message: 'A contact card has no text' }]);
+      const ok = await this.db.one(
+        `SELECT 1 FROM users u WHERE u.id = $2 AND u.state = 'active' AND NOT blocked_either_way($1, u.id)`,
+        [userId, input.contactUserId],
+        tx,
+      );
+      if (!ok) throw Errors.notFound('User');
     } else {
       if (!input.mediaId) throw Errors.validation([{ path: 'mediaId', message: `A ${input.kind} message needs a mediaId` }]);
       const m = mediaPreauthorised
@@ -799,8 +1070,11 @@ export class MessagingService {
       deleted_at: Date | null;
       pinned_at: Date | null;
       created_at: Date;
+      view_once: boolean;
+      attachment: Record<string, unknown> | null;
     }>(
-      `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.media_id, m.deleted_at, m.pinned_at, m.created_at FROM messages m
+      `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.media_id, m.deleted_at, m.pinned_at, m.created_at, m.view_once, m.attachment
+         FROM messages m
          JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $2
         WHERE m.id = $1 AND m.seq > cm.visible_from_seq`,
       [messageId, userId],
@@ -842,6 +1116,17 @@ export class MessagingService {
       event,
     );
   }
+}
+
+/** What a location or contact message stores beside its text. */
+function attachmentFor(input: SendInput): string | null {
+  if (input.kind === 'location' && input.location) {
+    const { lat, lng, label, liveMinutes } = input.location;
+    const liveUntil = liveMinutes ? new Date(Date.now() + liveMinutes * 60_000).toISOString() : null;
+    return JSON.stringify({ lat, lng, label, liveUntil, updatedAt: new Date().toISOString() });
+  }
+  if (input.kind === 'contact' && input.contactUserId) return JSON.stringify({ userId: input.contactUserId });
+  return null;
 }
 
 class NoChange extends Error {

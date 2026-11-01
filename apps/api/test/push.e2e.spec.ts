@@ -208,7 +208,7 @@ describe('delivery', () => {
     await worker.runOnce();
     const [first, second] = inbox(ben.endpoint, ben.sub);
     expect(first).toMatchObject({ title: expect.stringContaining(a.username), body: 'New message' });
-    expect(second).toMatchObject({ title: 'Nexa', body: 'New message' });
+    expect(second).toMatchObject({ title: 'SuperApp', body: 'New message' });
     expect(JSON.stringify([first, second])).not.toMatch(/PIN|secret/);
   });
 
@@ -311,6 +311,66 @@ describe('delivery', () => {
     expect(inbox(me.endpoint, me.sub)).toEqual([expect.objectContaining({ data: { type: 'test' } })]);
     const none = await user();
     expect((await call('POST', '/v1/push/devices/current/test', none)).status).toBe(404);
+  });
+});
+
+describe('clearing notifications after reading elsewhere', () => {
+  it('takes the notification off every device once the chat is read on one of them', async () => {
+    const [a, b] = [await user(), await user()];
+    const conv = await direct(a, b);
+    const browser = await subscribeBrowser(b);
+    const iphone = await signIn(b, 'iPhone');
+    const android = await signIn(b, 'Pixel');
+    const apnsToken = 'ef56'.repeat(16);
+    const fcmToken = `fcm_${b.id.replace(/-/g, '')}`.padEnd(64, 'y');
+    await call('PUT', '/v1/push/devices/current', iphone, { provider: 'apns', token: apnsToken, environment: 'production' });
+    await call('PUT', '/v1/push/devices/current', android, { provider: 'fcm', token: fcmToken });
+    await send(a, conv, 'first');
+    const second = await send(a, conv, 'second');
+    expect(await worker.runOnce()).toMatchObject({ outcomes: { sent: 6 } });
+
+    // Ben reads both on his phone; reading the same thing again changes nothing.
+    await call('POST', `/v1/conversations/${conv}/receipts`, android, { kind: 'read', seq: second.seq });
+    await call('POST', `/v1/conversations/${conv}/receipts`, android, { kind: 'read', seq: second.seq });
+    expect(await worker.runOnce()).toMatchObject({ claimed: 3, outcomes: { sent: 3 } });
+
+    const clear = inbox(browser.endpoint, browser.sub).pop();
+    expect(clear).toEqual({ title: '', body: '', tag: conv, silent: true, badge: 0, data: { type: 'clear', conversationId: conv, seq: String(second.seq) } });
+    const ios = apns.requests.filter((r) => r.path === `/3/device/${apnsToken}`).pop()!;
+    expect(ios.headers['apns-push-type']).toBe('background');
+    expect(ios.headers['apns-priority']).toBe('5');
+    expect(JSON.parse(ios.body.toString())).toEqual({ aps: { 'content-available': 1, badge: 0 }, type: 'clear', conversationId: conv, seq: String(second.seq) });
+    const droid = fcm.requests.map((r) => JSON.parse(r.body.toString()).message).filter((x) => x.token === fcmToken).pop();
+    expect(droid.notification).toBeUndefined();
+    expect(droid.data).toEqual({ type: 'clear', conversationId: conv, seq: String(second.seq) });
+    expect(await worker.runOnce()).toMatchObject({ claimed: 0 });
+  });
+
+  it('merges quick reads into one clear, and sends none for devices that were never notified', async () => {
+    const [a, b] = [await user(), await user()];
+    const conv = await direct(a, b);
+    const ben = await subscribeBrowser(b);
+    const one = await send(a, conv, 'one');
+    await worker.runOnce();
+    const two = await send(a, conv, 'two');
+    await worker.runOnce();
+    await call('POST', `/v1/conversations/${conv}/receipts`, b, { kind: 'read', seq: one.seq });
+    await call('POST', `/v1/conversations/${conv}/receipts`, b, { kind: 'read', seq: two.seq });
+    const clears = await pool.query(`SELECT clear_seq FROM push_jobs WHERE kind = 'clear' AND conversation_id = $1`, [conv]);
+    expect(clears.rows).toEqual([{ clear_seq: String(two.seq) }]);
+    await worker.runOnce();
+    expect(inbox(ben.endpoint, ben.sub).map((n) => n.data.type)).toEqual(['message', 'message', 'clear']);
+
+    // Read before the notification went out: it's dropped, so there is nothing to clear.
+    const three = await send(a, conv, 'three');
+    await call('POST', `/v1/conversations/${conv}/receipts`, b, { kind: 'read', seq: three.seq });
+    await worker.runOnce();
+    expect(inbox(ben.endpoint, ben.sub)).toHaveLength(3);
+    // Only delivered, not read: nothing to clear either.
+    const four = await send(a, conv, 'four');
+    await worker.runOnce();
+    await call('POST', `/v1/conversations/${conv}/receipts`, b, { kind: 'delivered', seq: four.seq });
+    expect(await worker.runOnce()).toMatchObject({ claimed: 0 });
   });
 });
 

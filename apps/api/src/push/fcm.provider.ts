@@ -44,7 +44,9 @@ export class FcmProvider implements PushProvider {
   ) {}
 
   async send(device: PushDevice, message: PushMessage): Promise<PushResult> {
-    const body = {
+    // A clear is data only: the app removes the chat's notifications itself, showing nothing.
+    const clear = { message: { token: device.token, data: message.data, android: { priority: 'NORMAL', ttl: `${message.ttlSeconds}s` } } };
+    const body = message.clear ? clear : {
       message: {
         token: device.token,
         notification: { title: message.title, body: message.body },

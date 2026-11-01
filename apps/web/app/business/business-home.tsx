@@ -108,7 +108,7 @@ export function BusinessHome({ mine }: { mine: Business[] }) {
             <input name="name" required maxLength={80} />
           </label>
           <label className="field">
-            <span>Address on Nexa</span>
+            <span>Address on SuperApp</span>
             <input name="handle" required pattern="[a-z0-9][a-z0-9_\-]{2,39}" placeholder="e.g. corner-bakery" />
             <small>3-40 lowercase letters, numbers, - or _</small>
           </label>

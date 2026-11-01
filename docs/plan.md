@@ -24,7 +24,7 @@ Stage 10 (release) is next, and needs a cloud account and domains. Stage 9 left 
 4. Legal review of libsignal's licence, then device keys and per-device ciphertext envelopes (ADR 0004).
 5. Choose a malware and CSAM scanning provider before media sharing goes public.
 6. Flutter: pick and send photos and files, record voice notes, and attach photos to posts and stories. Profile photos using the media pipeline.
-7. Still open from Stage 2: OpenAPI spec and generated clients, breached-password check, phone verification once an SMS provider is chosen.
+7. Still open from Stage 2: OpenAPI spec and generated clients, phone verification once an SMS provider is chosen.
 8. Calls: VoIP push (PushKit and CallKit on iOS, high-priority FCM on Android) so phones ring when the app is closed; place calls on real Android and iOS devices; group calls with an SFU (LiveKit or mediasoup).
 9. Social: notifications for follows, likes, comments and requests; live feed updates; a dedicated test of the social rate limits. Feed queries were measured and fixed in Stage 9; fan-out on write if people start following thousands of accounts.
 10. Business: a Flutter back office for staff; item photos once media scanning is in place; verification checks; a partner API and agreement for integrations; NCMEC/IWF escalation for child-safety reports; push to staff for new orders.

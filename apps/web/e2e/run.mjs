@@ -54,6 +54,10 @@ const env = {
   STRIPE_API_BASE: `http://127.0.0.1:${STRIPE_PORT}`,
   PAYMENTS_PLATFORM_FEE_BPS: '500',
   PAYMENTS_SWEEP_INTERVAL_SECONDS: '5',
+  // No calls to the real Pwned Passwords service from tests.
+  PASSWORD_BREACH_CHECK: 'off',
+  // The flows below sign up with email; the phone sign-up screens have their own browser test.
+  EMAIL_SIGNUP: 'true',
 };
 
 /** coturn with the TURN REST API shared secret, as in production, on loopback only. */
@@ -99,10 +103,9 @@ async function chatFlow(browser, API, tag, step) {
     assert(r.status === 201, `register ${name}`);
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
-    if (process.env.E2E_DEBUG) {
-      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
-      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
-    }
+    // Page crashes and error toasts are always worth seeing when a step fails.
+    page.on('pageerror', (e) => console.log(`[${name} page error] ${e.stack}`));
+    page.on('console', (m) => (process.env.E2E_DEBUG || m.type() === 'error') && console.log(`[${name} console ${m.type()}] ${m.text()}`));
     await page.goto(`${WEB}/sign-in`);
     await page.fill('input[name=email]', u.email);
     await page.fill('input[name=password]', u.password);
@@ -163,11 +166,57 @@ async function chatFlow(browser, API, tag, step) {
   assert((await bubble(ana.page, 'sent while offline').count()) === 1, 'queued message arrives exactly once');
   step('offline device catches up in order; queued send delivered once after reconnect');
 
+  // A message typed offline survives the tab being closed, and goes out once when the chat is opened again.
+  await ana.ctx.setOffline(true);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Offline")');
+  await ana.page.fill('input[name=message]', 'kept through a closed tab');
+  await ana.page.press('input[name=message]', 'Enter');
+  await bubble(ana.page, 'kept through a closed tab').locator('[data-testid=ticks]:has-text("sending")').waitFor();
+  await ana.page.close();
+  await ana.ctx.setOffline(false);
+  ana.page = await ana.ctx.newPage();
+  await ana.page.goto(`${WEB}/chats`);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  await bubble(ben.page, 'kept through a closed tab').waitFor();
+  await ana.page.click(`[data-testid=conv-${ben.username}]`);
+  await bubble(ana.page, 'kept through a closed tab').locator('[data-testid=ticks]:not(:has-text("sending"))').waitFor();
+  assert((await bubble(ben.page, 'kept through a closed tab').count()) === 1, 'sent once after the tab was reopened');
+  assert((await ana.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('nexa.outbox.')))).length === 0, 'nothing left waiting');
+  step('a message typed offline survives closing the tab and is sent once when the chat opens again');
+
   const reactTarget = bubble(ben.page, 'hello from ana');
   await reactTarget.locator('.actions summary').click();
   await reactTarget.locator('button[aria-label="React 👍"]').click();
   await bubble(ana.page, 'hello from ana').locator('[data-testid=reactions]:has-text("👍")').waitFor();
   step('reaction shows up for the sender');
+
+  // Edit (a prompt asks for the new text), pin, and forward into another chat.
+  const actions = async (page, body) => {
+    const b = bubble(page, body);
+    await b.locator('.actions summary').click();
+    return b.locator('.actions-menu');
+  };
+  ana.page.once('dialog', (d) => d.accept('hello from ana, edited'));
+  await (await actions(ana.page, 'hello from ana')).locator('button:has-text("Edit")').click();
+  await bubble(ben.page, 'hello from ana, edited').locator('.meta:has-text("edited")').waitFor();
+  assert((await bubble(ben.page, 'hello from ana').count()) === 0, 'the old text is gone for the other person');
+  await (await actions(ben.page, 'hi ana')).locator('button:has-text("Pin")').click();
+  await ana.page.waitForSelector('[data-testid=pinned]:has-text("hi ana")');
+  step('edit shows for both with an "edited" mark; a pinned message shows in the other person’s pinned bar');
+
+  await ana.page.click('[data-testid=new-group]');
+  await ana.page.fill('input[name=groupTitle]', 'Ana and Ben');
+  await ana.page.fill('input[name=groupMembers]', ben.username);
+  await ana.page.click('[data-testid=new-group-form] button[type=submit]');
+  await ana.page.waitForSelector('[data-testid=peer-name]:has-text("Ana and Ben")');
+  await ana.page.click(`[data-testid=conv-${ben.username}]`);
+  await bubble(ana.page, 'missed one').waitFor();
+  await (await actions(ana.page, 'missed one')).locator('select[aria-label="Forward to"]').selectOption({ label: 'Ana and Ben' });
+  await ben.page.click('[data-testid=conv-group]');
+  await bubble(ben.page, 'missed one').locator('text=Forwarded').waitFor();
+  await ben.page.click(`[data-testid=conv-${ana.username}]`);
+  await bubble(ben.page, 'missed two').waitFor();
+  step('forwarded into a group: arrives there marked as forwarded');
 
   await ana.page.setInputFiles('[data-testid=file-input]', { name: 'dot.png', mimeType: 'image/png', buffer: PNG });
   const img = ben.page.locator('[data-testid=media-image]');
@@ -179,6 +228,84 @@ async function chatFlow(browser, API, tag, step) {
   await ben.page.press('input[name=q]', 'Enter');
   await ben.page.waitForSelector('[data-testid=search-results] >> text=missed one');
   step('message search');
+
+  // Poll: Ana asks, Ben votes, Ana sees the count.
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-poll]');
+  await ana.page.fill('input[name=pollQuestion]', 'Dinner on Friday?');
+  await ana.page.fill('input[name=pollOption0]', 'Pizza');
+  await ana.page.fill('input[name=pollOption1]', 'Dosa');
+  await ana.page.click('[data-testid=send-poll]');
+  // Sent and stored: the sender's own copy turns into a poll. If not, say why.
+  await bubble(ana.page, 'Dinner on Friday?').locator('[data-testid=poll-option]').first().waitFor({ timeout: 10000 }).catch(async (e) => {
+    const toast = await ana.page.locator('[role=alert]').allInnerTexts();
+    throw new Error(`poll not sent (${toast.join(' | ') || 'no error shown'}): ${e.message}`);
+  });
+  const benPoll = bubble(ben.page, 'Dinner on Friday?');
+  await benPoll.locator('[data-testid=poll-option]:has-text("Dosa")').click();
+  await bubble(ana.page, 'Dinner on Friday?').locator('[data-testid=poll-option]:has-text("Dosa") [data-testid=poll-count]:has-text("1")').waitFor();
+  await benPoll.locator('[data-testid=poll-option][aria-pressed=true]:has-text("Dosa")').waitFor();
+  step('poll: one person asks, another votes, and both see the count');
+
+  await (await actions(ben.page, 'hi ana')).locator('[data-testid=star]').click();
+  await bubble(ben.page, 'hi ana').locator('[data-testid=star-mark]').waitFor();
+  await ben.page.click('[data-testid=starred-toggle]');
+  await ben.page.waitForSelector('[data-testid=starred-item]:has-text("hi ana")');
+  assert((await bubble(ana.page, 'hi ana').locator('[data-testid=star-mark]').count()) === 0, 'stars are private');
+  await ben.page.click('[data-testid=starred-toggle]');
+  step('starred message marked and listed for the person who starred it only');
+
+  await ana.page.selectOption('[data-testid=disappearing]', '86400');
+  await ben.page.waitForSelector('[data-testid=system-note]:has-text("turned on disappearing messages")');
+  await ben.page.waitForSelector('[data-testid=disappearing-on]');
+  await ana.page.fill('input[name=message]', 'this one disappears');
+  await ana.page.press('input[name=message]', 'Enter');
+  await bubble(ben.page, 'this one disappears').locator('[aria-label="Disappearing message"]').waitFor();
+  await ana.page.selectOption('[data-testid=disappearing]', '');
+  await ben.page.waitForSelector('[data-testid=system-note]:has-text("turned off disappearing messages")');
+  step('disappearing messages turned on with a notice, new messages marked, then turned off');
+
+  await ana.page.setInputFiles('[data-testid=view-once-input]', { name: 'secret.png', mimeType: 'image/png', buffer: PNG });
+  const once = ben.page.locator('button[data-testid=view-once]');
+  await once.waitFor();
+  await once.click();
+  await ben.page.waitForFunction(() => document.querySelector('[data-testid=once-overlay] img')?.naturalWidth === 1);
+  await ben.page.click('[data-testid=once-overlay] button');
+  await ben.page.waitForSelector('button[data-testid=view-once]:has-text("Opened")');
+  await ana.page.waitForSelector('[data-testid=view-once]:has-text("Opened by Ben")');
+  step('view-once photo opened once by the other person; the sender sees it was opened');
+
+  await ana.ctx.grantPermissions(['geolocation'], { origin: WEB });
+  await ana.ctx.setGeolocation({ latitude: 23.1205, longitude: 72.0396 });
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-location]');
+  await ana.page.fill('input[name=placeName]', 'Hotel New Janpath');
+  await ana.page.click('[data-testid=location-form] button:has-text("Send my current location")');
+  await ben.page.waitForSelector('[data-testid=location]:has-text("Hotel New Janpath")');
+  await ben.page.waitForSelector('[data-testid=location] a[href*="mlat=23.1205"]');
+  await ana.page.click('[data-testid=extras]');
+  await ana.page.click('[data-testid=extra-contact]');
+  await ana.page.fill('input[name=contactUsername]', ben.username);
+  await ana.page.click('[data-testid=send-contact]');
+  await ben.page.waitForSelector(`[data-testid=contact-card]:has-text("@${ben.username}")`);
+  step('location and a contact card shared');
+
+  // My QR code: Ben finds Ana by her code, and a reset code stops working.
+  await ana.page.goto(`${WEB}/account`);
+  const anaCode = (await ana.page.locator('[data-testid=my-code]').innerText()).trim();
+  assert(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/.test(anaCode), `code shown as XXXXX-XXXXX: ${anaCode}`);
+  await ben.page.goto(`${WEB}/add/${anaCode}`);
+  await ben.page.waitForSelector('[data-testid=code-person]:has-text("Ana")');
+  await ben.page.click('[data-testid=message-person]');
+  await ben.page.waitForURL(/\/chats\?c=/);
+  await ben.page.waitForSelector('[data-testid="peer-name"]:has-text("Ana")');
+  await ana.page.click('[data-testid=reset-code]');
+  await ana.page.waitForFunction((old) => document.querySelector('[data-testid=my-code]')?.textContent?.trim() !== old, anaCode);
+  await ben.page.goto(`${WEB}/add/${anaCode}`);
+  await ben.page.waitForSelector('[data-testid=code-unknown]');
+  await ana.page.goto(`${WEB}/chats`);
+  await ana.page.waitForSelector('[data-testid=conn]:has-text("Connected")');
+  step('my QR code: found by code, opens the chat, and stops working once reset');
 
   const proxied = await ana.page.evaluate(async () => (await fetch('/api/chat/me/export')).status);
   assert(proxied === 404, 'chat proxy only exposes messaging endpoints');
@@ -250,6 +377,22 @@ async function notificationsFlow(ana, ben, step) {
     await new Promise((r) => setTimeout(r, 250));
   }
   step('service worker shows the notification and reports the message delivered');
+
+  // The test browser drops notifications after a few seconds, and the poll above can take
+  // longer, so show it again just before checking what a clear does to it.
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(payload) });
+  await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).some((n) => n.title === 'Ana'));
+
+  // Ben reads the chat on another device: the API sends a clear, and the notification goes.
+  const clear = { title: '', body: '', tag: conv.id, silent: true, badge: 0, data: { type: 'clear', conversationId: conv.id, seq: String(conv.lastMessage.seq - 1) } };
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
+  await new Promise((r) => setTimeout(r, 500));
+  const kept = await ben.page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).map((n) => ({ title: n.title, tag: n.tag, seq: n.data?.seq })));
+  assert(kept.length === 1, `an older read keeps a newer notification (showing: ${JSON.stringify(kept)})`);
+  clear.data.seq = String(conv.lastMessage.seq);
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin: `${WEB}/`, registrationId, data: JSON.stringify(clear) });
+  await ben.page.waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length === 0);
+  step('reading on another device clears the notification here');
 }
 
 /** Groups, follows, the feed, stories, private accounts and communities across two browsers. */
@@ -279,6 +422,13 @@ async function socialFlow(browser, API, tag, step) {
     Object.assign(people[name], { ctx, page });
   }
   const { cara, dev, eve } = people;
+
+  // Profile photo, chosen on the account page.
+  await cara.page.setInputFiles('[data-testid=avatar-input]', { name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  await cara.page.waitForFunction(() => document.querySelector('[data-testid=profile-photo] [data-testid=avatar-image]')?.naturalWidth === 1);
+  await cara.page.reload();
+  await cara.page.waitForSelector('[data-testid=avatar-remove]');
+  step('profile photo uploaded from the account page and kept after reload');
 
   // Group chat.
   await cara.page.goto(`${WEB}/chats`);
@@ -314,7 +464,22 @@ async function socialFlow(browser, API, tag, step) {
   await dev.page.click('[data-testid=follow-button]');
   await dev.page.waitForSelector('[data-testid=follow-button]:has-text("Following")');
   assert((await dev.page.textContent('[data-testid=follower-count]')) === '1', 'follower count goes up');
-  step('follow from a profile page');
+  await dev.page.waitForFunction(() => document.querySelector('.profile [data-testid=avatar-image]')?.naturalWidth === 1);
+  step('follow from a profile page, which shows their photo');
+
+  // Finding people by email: only once they've chosen to be found that way.
+  const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+  const confirm = new Pool({ connectionString: env.DATABASE_URL });
+  await confirm.query('UPDATE users SET email_verified_at = now() WHERE email = $1', [eve.email]);
+  await confirm.end();
+  await dev.page.goto(`${WEB}/account`);
+  await dev.page.fill('textarea[name=contacts]', `${eve.email}\nsomeone@example.test`);
+  await dev.page.click('[data-testid=find-people] button[type=submit]');
+  await dev.page.waitForSelector('[data-testid=find-people] p:has-text("No one found.")');
+  await fetch(`${API}/v1/me/privacy`, { method: 'PATCH', headers: { authorization: `Bearer ${eve.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ discoverableByEmail: true }) });
+  await dev.page.click('[data-testid=find-people] button[type=submit]');
+  await dev.page.waitForSelector(`[data-testid=found-person] a[href="/u/${eve.username}"]`);
+  step('find people by email address, only those who opted in');
 
   await cara.page.goto(`${WEB}/feed`);
   await cara.page.fill('textarea[name=postBody]', 'Hello followers');
@@ -422,10 +587,9 @@ async function callsFlow(browser, API, tag, step, turn) {
     const ctx = await browser.newContext();
     await ctx.grantPermissions(['camera', 'microphone'], { origin: WEB });
     const page = await ctx.newPage();
-    if (process.env.E2E_DEBUG) {
-      page.on('console', (m) => console.log(`[${name} console] ${m.text()}`));
-      page.on('pageerror', (e) => console.log(`[${name} error] ${e.stack}`));
-    }
+    // Page crashes and error toasts are always worth seeing when a step fails.
+    page.on('pageerror', (e) => console.log(`[${name} page error] ${e.stack}`));
+    page.on('console', (m) => (process.env.E2E_DEBUG || m.type() === 'error') && console.log(`[${name} console ${m.type()}] ${m.text()}`));
     await page.goto(`${WEB}/sign-in`);
     await page.fill('input[name=email]', u.email);
     await page.fill('input[name=password]', u.password);
@@ -625,6 +789,23 @@ async function businessFlow(browser, API, tag, step) {
   await gus.page.waitForSelector('[data-testid=hours-saved]');
   step('owner creates a business, turns on orders and bookings, adds items, a service and opening hours');
 
+  // Gus publishes a mini-program from the starter; Ivy finds it under Apps and sees the live menu.
+  await gus.page.click('role=tab[name="Mini-program"]');
+  await gus.page.waitForSelector('[data-testid=mini-editor] input[name=miniName]');
+  await gus.page.fill('[data-testid=mini-editor] input[name=miniName]', 'Sunrise Treats');
+  await gus.page.fill('[data-testid=mini-editor] input[name=miniIcon]', '🥐');
+  await gus.page.click('[data-testid=mini-publish]');
+  await gus.page.waitForSelector('[data-testid=mini-msg]:has-text("Published")');
+  await ivy.page.goto(`${WEB}/apps?q=Sunrise`);
+  await ivy.page.click('[data-testid=mini-list] a:has-text("Sunrise Treats")');
+  await ivy.page.waitForSelector('[data-testid=mini-view]:has-text("Welcome to Sunrise Bakery")');
+  await ivy.page.click('[data-testid=mini-view] button:has-text("See the menu")');
+  await ivy.page.waitForSelector('[data-testid=mini-items] li:has-text("Sourdough"):has-text("€4.50")');
+  assert((await ivy.page.getAttribute('[data-testid=mini-view] a:has-text("Order for pickup")', 'href')) === `/b/${handle}`, 'order button opens the business');
+  await ivy.page.goto(`${WEB}/apps`);
+  await ivy.page.waitForSelector('[data-testid=mini-recent] a:has-text("Sunrise Treats")');
+  step('owner publishes a mini-program; a customer finds it, sees the live menu, and it shows under recently used');
+
   // Hal is invited as staff and only gets the tabs staff may use.
   await gus.page.click('role=tab[name="Staff"]');
   await gus.page.fill('[data-testid=invite-staff] input[name=username]', hal.username);
@@ -734,7 +915,7 @@ async function businessFlow(browser, API, tag, step) {
   await jo.page.click(`[data-testid=admin-integration][data-slug="${slug}"] [data-testid=kill-switch]`);
   await jo.page.waitForSelector(`[data-testid=admin-integration][data-slug="${slug}"][data-state=disabled]`);
   await ivy.page.reload();
-  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("Paused by Nexa")');
+  await ivy.page.waitForSelector('[data-testid=connected-app]:has-text("Paused by SuperApp")');
   assert((await ivy.page.locator('[data-testid=catalogue-app]:has-text("City Tickets")').count()) === 0, 'switched-off integration leaves the catalogue');
   step('an admin publishes an integration, a person connects it with only the scopes they tick, and the kill switch pauses it');
 
@@ -766,6 +947,8 @@ async function paymentsFlow(browser, API, tag, step) {
   assert((await fetch(`${API}/v1/auth/mfa/confirm`, { method: 'POST', headers: maxAuth, body: JSON.stringify({ code: totp(secret, Date.now() - 30_000) }) })).status === 204, 'admin MFA on');
   const pool = new Pool({ connectionString: env.DATABASE_URL });
   await pool.query(`INSERT INTO platform_staff (user_id, role) SELECT id, 'admin' FROM users WHERE email = $1`, [max.email]);
+  // Payouts need a confirmed email (the confirmation link itself is tested in the account flow).
+  await pool.query('UPDATE users SET email_verified_at = now() WHERE email = $1', [people.kim.email]);
   await pool.end();
 
   // The owner's shop, set up through the API: the browser part of that is covered by the business flow.
@@ -833,6 +1016,45 @@ async function paymentsFlow(browser, API, tag, step) {
   await lee.page.waitForSelector('[data-testid=my-order][data-payment=partially_refunded]');
   step('owner refunds part of the order and the customer sees it partly refunded');
 
+  // Bookings with a deposit. Opening hours and bookings are switched on through the API.
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, opens: '09:00', closes: '12:00' }));
+  assert((await fetch(`${API}/v1/businesses/${b.id}/hours`, { method: 'PUT', headers: kimAuth, body: JSON.stringify({ hours: allWeek }) })).ok, 'hours set');
+  assert((await fetch(`${API}/v1/businesses/${b.id}`, { method: 'PATCH', headers: kimAuth, body: JSON.stringify({ bookingsEnabled: true }) })).ok, 'bookings on');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=services`);
+  await kim.page.fill('[data-testid=add-service] input[name=name]', 'Catering tasting');
+  await kim.page.fill('[data-testid=add-service] input[name=price]', '20.00');
+  await kim.page.fill('[data-testid=add-service] input[name=deposit]', '5.00');
+  await kim.page.click('[data-testid=add-service] button[type=submit]');
+  await kim.page.waitForSelector('[data-testid=service-deposit]:has-text("£5.00 deposit")');
+  await lee.page.goto(`${WEB}/b/${handle}`);
+  await lee.page.waitForSelector('[data-testid=deposit-note]:has-text("£5.00 deposit")');
+  // Three days ahead, so it is well before the 24-hour free cancellation time.
+  await lee.page.fill('[data-testid=booking] input[name=date]', new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10));
+  await lee.page.click('[data-testid=slot] >> nth=0');
+  await lee.page.waitForSelector('[data-testid=checkout-total]');
+  assert((await lee.page.textContent('[data-testid=checkout-total]')).includes('5.00'), 'the deposit is charged, not the full price');
+  await lee.page.click('[data-testid=checkout-pay]');
+  await lee.page.waitForURL(/\/orders\?booked=/);
+  await lee.page.waitForSelector('[data-testid=booking-result][data-status=confirmed]');
+  await lee.page.waitForSelector('[data-testid=my-booking][data-status=confirmed] [data-testid=my-booking-deposit]:has-text("paid online")');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=bookings`);
+  await kim.page.waitForSelector('[data-testid=business-booking][data-status=confirmed] [data-testid=booking-deposit]');
+  lee.page.once('dialog', (d) => d.accept());
+  await lee.page.click('[data-testid=my-booking][data-status=confirmed] [data-testid=cancel-booking]');
+  await lee.page.waitForSelector('[data-testid=my-booking][data-status=cancelled] [data-testid=my-booking-deposit]:has-text("refunded")');
+  step('customer pays a booking deposit on the hosted checkout, the business sees it paid, and cancelling in time refunds it');
+
+  // The customer's bank disputes the order payment; the owner answers from the payments tab.
+  const intent = [...stripe.intents.values()].find((pi) => pi.amount === 700);
+  await stripe.dispute(intent.id, { reason: 'product_not_received' });
+  await kim.page.goto(`${WEB}/business/${handle}?tab=payments`);
+  await kim.page.waitForSelector('[data-testid=dispute][data-status=needs_response]');
+  await kim.page.fill('[data-testid=dispute-response] textarea[name=text]', 'Lee collected both bagels at the counter at 9:15 and paid by card.');
+  kim.page.once('dialog', (d) => d.accept());
+  await kim.page.click('[data-testid=dispute-response] button[type=submit]');
+  await kim.page.waitForSelector('[data-testid=dispute][data-status=under_review]');
+  step('a disputed payment shows up for the owner, who sends their side to the bank');
+
   await max.page.goto(`${WEB}/admin`);
   await max.page.click('role=tab[name="Payments and plans"]');
   const code = `growth-${tag}`;
@@ -844,7 +1066,7 @@ async function paymentsFlow(browser, API, tag, step) {
   await max.page.click(`[data-testid=admin-plan][data-code="${code}"] button:has-text("Put on sale")`);
   await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${code}"][data-state=active]`);
 
-  await kim.page.click('role=tab[name="Payments and plan"]');
+  await kim.page.goto(`${WEB}/business/${handle}?tab=payments`);
   await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 10 staff")');
   await kim.page.click(`[data-testid=plan-option][data-code="${code}"] button:has-text("Choose")`);
   await kim.page.waitForSelector('[data-testid=checkout-pay]');
@@ -858,11 +1080,28 @@ async function paymentsFlow(browser, API, tag, step) {
   await kim.page.waitForSelector('[data-testid=limits]:has-text("Up to 100 staff")');
   step('admin creates a plan and puts it on sale; the owner subscribes through hosted checkout and gets the higher limits');
 
+  const bigger = `scale-${tag}`;
+  await max.page.fill('[data-testid=new-plan] input[name=code]', bigger);
+  await max.page.fill('[data-testid=new-plan] input[name=name]', 'Scale');
+  await max.page.fill('[data-testid=new-plan] input[name=price]', '45.00');
+  await max.page.click('[data-testid=new-plan] button[type=submit]');
+  await max.page.click(`[data-testid=admin-plan][data-code="${bigger}"] button:has-text("Put on sale")`);
+  await max.page.waitForSelector(`[data-testid=admin-plan][data-code="${bigger}"][data-state=active]`);
+  await kim.page.reload();
+  await kim.page.click(`[data-testid=switch-option][data-code="${bigger}"] button:has-text("See the cost")`);
+  await kim.page.waitForSelector('[data-testid=plan-preview]:has-text("today")');
+  await kim.page.click('[data-testid=confirm-switch]');
+  await kim.page.waitForSelector('[data-testid=current-plan]:has-text("Scale")');
+  step('the owner sees what switching plan costs today and switches in place');
+
   await max.page.reload();
   await max.page.click('role=tab[name="Payments and plans"]');
   await max.page.waitForSelector('[data-testid=ledger-check][data-ok=true]');
   assert((await max.page.locator('[data-testid=admin-payments] .row').count()) >= 1, 'admin sees the card payment');
-  step('the ledger balances and agrees with every payment, refund and subscription invoice');
+  await max.page.waitForSelector('[data-testid=admin-disputes] .row');
+  await max.page.click('[data-testid=run-reconciliation]');
+  await max.page.waitForSelector('[data-testid=reconciliation-result][data-ok=true]');
+  step('the ledger balances, agrees with every payment, refund, dispute and invoice, and matches the provider’s own records');
 
   for (const p of Object.values(people)) await p.ctx.close();
 }
@@ -987,9 +1226,10 @@ async function a11yFlow(browser, API, tag, step) {
       await audit(page, `${label} (${scheme})`);
     }
   }
-  for (const { ctx, page } of Object.values(contexts)) {
+  for (const [who, { ctx, page }] of Object.entries(contexts)) {
     if (page.cspViolations.length) failures.push(`CSP blocked something the app needs: ${page.cspViolations[0]}`);
-    await ctx.close();
+    // Amy stays signed in for the keyboard checks on the admin tabs (a two-step code can't be reused).
+    if (who !== 'amy') await ctx.close();
   }
   if (failures.length) throw new Error(`accessibility violations:\n  ${failures.join('\n  ')}`);
   step(`axe-core WCAG 2.2 AA: no violations on ${audited.length / 2} screens, in light and dark mode`);
@@ -1022,6 +1262,29 @@ async function a11yFlow(browser, API, tag, step) {
   assert(outlines.every((o) => o.visible), `every focused control shows a focus ring: ${JSON.stringify(outlines.filter((o) => !o.visible))}`);
   step(`keyboard: skip link first, focus ring on all ${outlines.length} controls of the feed`);
 
+  // Tabs: one Tab stop for the row; arrow keys, Home and End move between tabs and select them.
+  const { ctx: admin, page: ap } = contexts.amy;
+  await ap.emulateMedia({ colorScheme: 'light' });
+  await ap.goto(`${WEB}/admin`);
+  await ap.waitForSelector('[role=tablist]');
+  await ap.focus('role=tab[selected=true]');
+  const selectedTab = () => ap.evaluate(() => ({ focused: document.activeElement?.textContent, selected: document.querySelector('[role=tab][aria-selected=true]')?.textContent }));
+  const names = await ap.locator('role=tab').allTextContents();
+  await ap.keyboard.press('ArrowRight');
+  assert(JSON.stringify(await selectedTab()) === JSON.stringify({ focused: names[1], selected: names[1] }), `ArrowRight selects the next tab: ${JSON.stringify(await selectedTab())}`);
+  await ap.keyboard.press('End');
+  assert((await selectedTab()).selected === names.at(-1), 'End selects the last tab');
+  await ap.keyboard.press('ArrowRight');
+  assert((await selectedTab()).selected === names[0], 'ArrowRight wraps to the first tab');
+  await ap.keyboard.press('ArrowLeft');
+  await ap.keyboard.press('Home');
+  assert((await selectedTab()).selected === names[0], 'Home selects the first tab');
+  assert((await ap.locator('role=tab[selected=false] >> visible=true').evaluateAll((els) => els.map((e) => e.tabIndex))).every((t) => t === -1), 'only the selected tab is in the Tab order');
+  await ap.keyboard.press('Tab');
+  assert(await ap.evaluate(() => document.activeElement?.getAttribute('role') !== 'tab'), 'Tab leaves the row of tabs');
+  await admin.close();
+  step(`keyboard: arrow keys, Home and End move between the ${names.length} admin tabs; one Tab stop for the row`);
+
   // CSP: a nonce on each page, and a script injected without it never runs.
   const res = await page.goto(`${WEB}/feed`);
   const csp = res.headers()['content-security-policy'] ?? '';
@@ -1046,6 +1309,13 @@ await stripe.start();
 let browser;
 let failed = false;
 try {
+  // A fresh schema each run, as in CI: the provider check compares the ledger with this run's stand-in.
+  {
+    const { Pool } = createRequire(join(apiDir, 'package.json'))('pg');
+    const pool = new Pool({ connectionString: env.DATABASE_URL });
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    await pool.end();
+  }
   await exec('node', ['dist/src/database/migrate.cli.js'], { cwd: apiDir, env });
   // Start each run with empty rate-limit counters, as CI does.
   const Redis = createRequire(join(apiDir, 'package.json'))('ioredis');
@@ -1056,7 +1326,7 @@ try {
   run('node', ['dist/src/main.js'], { cwd: apiDir, env });
   run('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], {
     cwd: join(here, '..'),
-    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, CSP_MEDIA_ORIGINS: env.S3_ENDPOINT, NODE_ENV: 'production' },
+    env: { ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`, API_PUBLIC_WS_URL: `ws://127.0.0.1:${API_PORT}`, CSP_MEDIA_ORIGINS: env.S3_ENDPOINT, EMAIL_SIGNUP: env.EMAIL_SIGNUP, NODE_ENV: 'production' },
   });
   await waitFor(`http://127.0.0.1:${API_PORT}/health/ready`);
   await waitFor(`${WEB}/sign-in`);

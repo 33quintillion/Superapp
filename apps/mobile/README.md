@@ -1,4 +1,4 @@
-# Nexa mobile (Flutter)
+# SuperApp mobile (Flutter)
 
 Android and iOS client. Stage 2 covers sign-in, registration, two-step verification, profile and sign-out. The refresh token is kept in the platform keystore.
 

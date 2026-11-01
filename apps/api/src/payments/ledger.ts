@@ -4,13 +4,14 @@ import { DatabaseService, Queryable } from '../database/database.service';
 export type LedgerAccount = 'external:customers' | 'platform:fees' | 'platform:subscriptions' | `business:${string}:sales`;
 
 export interface LedgerPosting {
-  kind: 'payment' | 'refund' | 'subscription_invoice';
+  kind: 'payment' | 'refund' | 'subscription_invoice' | 'dispute' | 'dispute_reinstated';
   /** The provider object recorded (payment intent, refund or invoice id). One transaction each. */
   providerRef: string;
   currency: string;
   paymentId?: string;
   refundId?: string;
   subscriptionId?: string;
+  disputeId?: string;
   entries: [LedgerAccount, number][];
 }
 
@@ -30,9 +31,9 @@ export class LedgerService {
   async post(p: LedgerPosting, tx: Queryable): Promise<boolean> {
     const entries = p.entries.filter(([, amount]) => amount !== 0);
     const t = await this.db.one<{ id: string }>(
-      `INSERT INTO ledger_transactions (kind, provider_ref, payment_id, refund_id, subscription_id, currency) VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO ledger_transactions (kind, provider_ref, payment_id, refund_id, subscription_id, dispute_id, currency) VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (kind, provider_ref) DO NOTHING RETURNING id`,
-      [p.kind, p.providerRef, p.paymentId ?? null, p.refundId ?? null, p.subscriptionId ?? null, p.currency],
+      [p.kind, p.providerRef, p.paymentId ?? null, p.refundId ?? null, p.subscriptionId ?? null, p.disputeId ?? null, p.currency],
       tx,
     );
     if (!t) return false;
@@ -53,8 +54,8 @@ export class LedgerService {
 
   /**
    * Reconciles the ledger with the payment records: every transaction balances, every
-   * successful payment and refund is recorded exactly once with the right amounts, and
-   * nothing is recorded for money that never moved.
+   * successful payment, refund and dispute movement is recorded exactly once with the right
+   * amounts, and nothing is recorded for money that never moved.
    */
   async check() {
     const unbalanced = await this.db.query<{ id: string }>(
@@ -81,12 +82,30 @@ export class LedgerService {
     const overRefunded = await this.db.query<{ id: string }>(
       `SELECT p.id FROM payments p WHERE p.refunded_minor <> (SELECT coalesce(sum(amount_minor), 0) FROM refunds WHERE payment_id = p.id AND status <> 'failed')`,
     );
+    // Each dispute's money movements are recorded once each, for the disputed amount, and the
+    // payment's held-back total is what is withdrawn and not yet reinstated.
+    const disputes = await this.db.query<{ id: string; problem: string }>(
+      `SELECT d.id, x.problem FROM disputes d
+         CROSS JOIN LATERAL (VALUES ('dispute', d.funds_withdrawn_at IS NOT NULL), ('dispute_reinstated', d.funds_reinstated_at IS NOT NULL)) AS k(kind, happened)
+         LEFT JOIN ledger_transactions t ON t.kind = k.kind AND t.dispute_id = d.id
+         LEFT JOIN LATERAL (SELECT abs(sum(amount_minor)) AS moved FROM ledger_entries WHERE transaction_id = t.id AND account = 'external:customers') c ON true
+         CROSS JOIN LATERAL (SELECT CASE WHEN k.happened AND t.id IS NULL THEN k.kind || '_not_recorded'
+                                         WHEN NOT k.happened AND t.id IS NOT NULL THEN k.kind || '_recorded_but_not_moved'
+                                         WHEN t.id IS NOT NULL AND c.moved <> d.amount_minor THEN 'amount_mismatch' END AS problem) x
+        WHERE x.problem IS NOT NULL`,
+    );
+    const heldBack = await this.db.query<{ id: string }>(
+      `SELECT p.id FROM payments p
+        WHERE p.disputed_minor <> (SELECT coalesce(sum(amount_minor), 0) FROM disputes WHERE payment_id = p.id AND funds_withdrawn_at IS NOT NULL AND funds_reinstated_at IS NULL)`,
+    );
     const count = await this.db.one<{ n: string }>('SELECT count(*) AS n FROM ledger_transactions');
     const problems = [
       ...unbalanced.rows.map((r) => ({ type: 'transaction', id: r.id, problem: 'unbalanced' })),
       ...payments.rows.map((r) => ({ type: 'payment', id: r.id, problem: r.problem })),
       ...refunds.rows.map((r) => ({ type: 'refund', id: r.id, problem: r.problem })),
       ...overRefunded.rows.map((r) => ({ type: 'payment', id: r.id, problem: 'refund_total_mismatch' })),
+      ...disputes.rows.map((r) => ({ type: 'dispute', id: r.id, problem: r.problem })),
+      ...heldBack.rows.map((r) => ({ type: 'payment', id: r.id, problem: 'dispute_total_mismatch' })),
     ];
     return { ok: problems.length === 0, transactions: Number(count!.n), problems };
   }

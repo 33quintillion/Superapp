@@ -3,10 +3,33 @@ import { MAX_BODY } from './messaging.service';
 
 export const clientIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, 'clientId must be 8-64 letters, digits, - or _');
 
+const pollOption = z.string().trim().min(1, 'Options cannot be empty').max(100);
+
+export const PollInput = z
+  .object({
+    options: z
+      .array(pollOption)
+      .min(2, 'A poll needs at least 2 options')
+      .max(12, 'A poll can have at most 12 options')
+      .refine((o) => new Set(o.map((x) => x.toLowerCase())).size === o.length, 'Each option must be different'),
+    multiple: z.boolean().default(false),
+  })
+  .strict();
+
+export const LocationInput = z
+  .object({
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+    label: z.string().trim().max(200).default(''),
+    /** Share live for 15 minutes, 1 hour or 8 hours, as WhatsApp offers. */
+    liveMinutes: z.union([z.literal(15), z.literal(60), z.literal(480)]).optional(),
+  })
+  .strict();
+
 export const SendBody = z
   .object({
     clientId: clientIdSchema,
-    kind: z.enum(['text', 'image', 'video', 'audio', 'voice', 'file']).default('text'),
+    kind: z.enum(['text', 'image', 'video', 'audio', 'voice', 'file', 'poll', 'location', 'contact']).default('text'),
     body: z.string().max(MAX_BODY).default(''),
     mediaId: z.uuid().optional(),
     replyToId: z.uuid().optional(),
@@ -15,8 +38,29 @@ export const SendBody = z
       .max(50)
       .default([])
       .transform((m) => [...new Set(m)]),
+    viewOnce: z.boolean().default(false),
+    poll: PollInput.optional(),
+    location: LocationInput.optional(),
+    contactUserId: z.uuid().optional(),
   })
   .strict();
+
+export const VoteBody = z.object({ options: z.array(z.number().int().min(0).max(11)).max(12) }).strict();
+
+export const StarBody = z.object({ starred: z.boolean() }).strict();
+
+export const StarredQuery = z.object({
+  conversationId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().max(200).optional(),
+});
+
+/** Off, 24 hours, 7 days or 90 days. */
+export const DisappearingBody = z
+  .object({ seconds: z.union([z.literal(86400), z.literal(604800), z.literal(7776000)]).nullable() })
+  .strict();
+
+export const LiveLocationBody = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).strict();
 
 export const EditBody = z.object({ body: z.string().max(MAX_BODY) }).strict();
 

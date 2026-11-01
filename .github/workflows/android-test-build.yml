@@ -1,0 +1,63 @@
+# An installable Android build pointed at the test site, for trying the app on a real phone.
+# Published as the "android-test" pre-release, replacing the previous file each time. 64-bit
+# ARM only, which is every Android phone sold in recent years, to keep the download small.
+# The Firebase values are public by design (they're in every Android and web app); the API
+# checks every sign-in token itself.
+name: Android test build
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/project-thread-j47aas, main]
+    paths: ['apps/mobile/**', '.github/workflows/android-test-build.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-test-build
+  cancel-in-progress: true
+
+env:
+  API_BASE_URL: https://nexa-api-3l54.onrender.com
+  FIREBASE_PROJECT_ID: superapp-3a70e
+  FIREBASE_SENDER_ID: '325315341517'
+  FIREBASE_API_KEY: AIzaSyDp_DRJ348sfwUhvYmhNzbOpieXmGcVtsY
+  FIREBASE_APP_ID: '1:325315341517:android:4052f1d2078a7880c7cd84'
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - run: flutter pub get
+      - name: Build the APK
+        run: >
+          flutter build apk --release --target-platform android-arm64
+          --dart-define=API_BASE_URL=$API_BASE_URL
+          --dart-define=FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID
+          --dart-define=FIREBASE_SENDER_ID=$FIREBASE_SENDER_ID
+          --dart-define=FIREBASE_API_KEY=$FIREBASE_API_KEY
+          --dart-define=FIREBASE_APP_ID=$FIREBASE_APP_ID
+      - run: cp build/app/outputs/flutter-apk/app-release.apk SuperApp-test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperApp-test-apk
+          path: apps/mobile/SuperApp-test.apk
+      - name: Publish as the android-test pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view android-test >/dev/null 2>&1 || gh release create android-test --prerelease --title "SuperApp Android test build" --notes "For testing on a real phone. Points at the test site."
+          gh release upload android-test SuperApp-test.apk --clobber
+          gh release edit android-test --notes "Built from ${GITHUB_SHA::7} on $(date -u +'%Y-%m-%d %H:%M UTC'). Points at the test site. Install: open this file on an Android phone and allow installing from your browser."

@@ -1,36 +1,47 @@
 import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
+import 'phone_verifier.dart';
 import 'session_store.dart';
 
 class Profile {
-  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified});
+  Profile({this.id = '', required this.username, required this.displayName, required this.email, required this.emailVerified, this.avatarMediaId, this.phone});
   factory Profile.fromJson(Map<String, dynamic> j) => Profile(
         id: j['id'] as String? ?? '',
         username: j['username'] as String? ?? '',
         displayName: j['displayName'] as String? ?? '',
         email: j['email'] as String? ?? '',
         emailVerified: j['emailVerified'] as bool? ?? false,
+        avatarMediaId: j['avatarMediaId'] as String?,
+        phone: j['phone'] as String?,
       );
   final String id;
   final String username;
   final String displayName;
   final String email;
   final bool emailVerified;
+  final String? avatarMediaId;
+  /// Set for accounts made with a phone number; '' username and email mean none yet.
+  final String? phone;
 }
 
-enum AuthStatus { unknown, signedOut, mfaRequired, signedIn }
+/// needsName: the phone number is confirmed but has no account yet.
+enum AuthStatus { unknown, signedOut, mfaRequired, needsName, signedIn }
 
 /// Owns the signed-in state. Every transition is driven by a real API response.
 class AuthController extends ChangeNotifier {
-  AuthController(this.api, this.store);
+  AuthController(this.api, this.store, {this.phone = const UnavailablePhoneVerifier()});
   final ApiClient api;
   final SessionStore store;
+  final PhoneVerifier phone;
 
   AuthStatus status = AuthStatus.unknown;
   Profile? profile;
   String? _accessToken;
   String? _mfaToken;
+  String? _signupToken;
+  /// The confirmed number waiting for a name (AuthStatus.needsName).
+  String? signupPhone;
 
   Future<void> restore() async {
     final refresh = await store.readRefreshToken();
@@ -51,6 +62,81 @@ class AuthController extends ChangeNotifier {
       return _set(AuthStatus.mfaRequired);
     }
     await _adopt(TokenPair.fromJson(res));
+  }
+
+  /// Signs in with the ID token from a confirmed SMS code. A new number moves to
+  /// [AuthStatus.needsName]; an account with two-step on moves to the code step.
+  Future<void> phoneSignIn(String idToken) async {
+    final res = (await api.send('POST', '/v1/auth/phone', body: {'idToken': idToken, 'deviceName': _deviceName()}))!;
+    if (res['signupRequired'] == true) {
+      _signupToken = res['signupToken'] as String;
+      signupPhone = res['phone'] as String?;
+      return _set(AuthStatus.needsName);
+    }
+    if (res['mfaRequired'] == true) {
+      _mfaToken = res['mfaToken'] as String;
+      return _set(AuthStatus.mfaRequired);
+    }
+    await _adopt(TokenPair.fromJson(res));
+  }
+
+  /// Creates the account for the confirmed number. The username is optional.
+  Future<void> completePhoneSignUp({required String displayName, String? username}) async {
+    final res = await api.send('POST', '/v1/auth/phone/complete', body: {
+      'signupToken': _signupToken,
+      'displayName': displayName,
+      if (username != null && username.isNotEmpty) 'username': username.toLowerCase(),
+      'deviceName': _deviceName(),
+    });
+    _signupToken = null;
+    signupPhone = null;
+    await _adopt(TokenPair.fromJson(res!));
+  }
+
+  void cancelPhoneSignUp() {
+    _signupToken = null;
+    signupPhone = null;
+    _set(AuthStatus.signedOut);
+  }
+
+  /// Adds or changes the optional email (receipts, banking, payouts); a link confirms it.
+  Future<void> setEmail(String email) async {
+    await authed('PUT', '/v1/me/email', body: {'email': email});
+    await _reloadProfile();
+  }
+
+  /// What a link code from a computer's screen would link: {deviceName, browser}.
+  Future<Map<String, dynamic>> describeLink(String code) async => (await authed('GET', '/v1/auth/link/${Uri.encodeComponent(code)}'))!;
+
+  /// Signs the computer showing [code] in to this account.
+  Future<void> approveLink(String code) async {
+    await authed('POST', '/v1/auth/link/${Uri.encodeComponent(code)}/approve');
+  }
+
+  /// Signing in a computer the WhatsApp Web way: ask for a code to show as a QR code. The
+  /// phone that scans it approves; only this device holds [secret], so only it can collect.
+  Future<({String code, String secret, int expiresIn})> startDeviceLink() async {
+    final r = (await api.send('POST', '/v1/auth/link', body: {'deviceName': _deviceName()}))!;
+    return (code: r['code'] as String, secret: r['secret'] as String, expiresIn: (r['expiresIn'] as num).toInt());
+  }
+
+  /// Asks whether the phone has approved yet. True once signed in. Throws [ApiException]
+  /// (status 400 or 401) when the code has expired or was used.
+  Future<bool> collectDeviceLink(String code, String secret) async {
+    final r = (await api.send('POST', '/v1/auth/link/collect', body: {'code': code, 'secret': secret}))!;
+    if (r['status'] == 'pending') return false;
+    await _adopt(TokenPair.fromJson(r));
+    return true;
+  }
+
+  Future<void> removeEmail() async {
+    await authed('DELETE', '/v1/me/email');
+    await _reloadProfile();
+  }
+
+  Future<void> _reloadProfile() async {
+    profile = Profile.fromJson((await authed('GET', '/v1/me'))!);
+    notifyListeners();
   }
 
   Future<void> submitMfa(String code) async {
@@ -102,6 +188,13 @@ class AuthController extends ChangeNotifier {
         }
       }();
 
+  /// Makes an uploaded image the profile photo, or removes the photo with null.
+  Future<void> setAvatar(String? mediaId) async {
+    final me = mediaId == null ? await authed('DELETE', '/v1/me/avatar') : await authed('PUT', '/v1/me/avatar', body: {'mediaId': mediaId});
+    profile = Profile.fromJson(me!);
+    notifyListeners();
+  }
+
   Future<void> signOut() async {
     final token = _accessToken;
     _accessToken = null;
@@ -129,5 +222,14 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String _deviceName() => kIsWeb ? 'Web browser' : '${defaultTargetPlatform.name} app';
+  String _deviceName() => kIsWeb
+      ? 'Web browser'
+      : switch (defaultTargetPlatform) {
+          TargetPlatform.windows => 'SuperApp for Windows',
+          TargetPlatform.macOS => 'SuperApp for Mac',
+          TargetPlatform.linux => 'SuperApp for Linux',
+          TargetPlatform.iOS => 'iPhone app',
+          TargetPlatform.android => 'Android app',
+          _ => '${defaultTargetPlatform.name} app',
+        };
 }

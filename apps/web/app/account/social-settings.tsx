@@ -5,6 +5,7 @@ import { chatApi } from '@/lib/chat-client';
 import type { UserSummary } from '@/lib/social-client';
 
 interface Privacy {
+  discoverableByEmail: boolean;
   privateAccount: boolean;
   whoCanAddToGroups: 'everyone' | 'following' | 'nobody';
 }
@@ -43,6 +44,14 @@ export function SocialSettings() {
           <small className="muted">You approve each follower, and your posts and stories are for followers only.</small>
         </span>
         <input type="checkbox" name="privateAccount" checked={p.privateAccount} onChange={(e) => save({ privateAccount: e.target.checked })} />
+      </label>
+      <label className="row">
+        <span>
+          Let people who have my email address find me
+          <br />
+          <small className="muted">Off unless you turn it on. Only works once your email address is confirmed.</small>
+        </span>
+        <input type="checkbox" name="discoverableByEmail" checked={p.discoverableByEmail} onChange={(e) => save({ discoverableByEmail: e.target.checked })} />
       </label>
       <label className="row">
         <span>Who can add me to groups</span>

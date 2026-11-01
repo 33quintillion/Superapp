@@ -70,6 +70,7 @@ export interface Profile {
   displayName: string;
   bio: string;
   statusText: string;
+  avatarMediaId: string | null;
   privateAccount: boolean;
   followerCount: number;
   followingCount: number;
