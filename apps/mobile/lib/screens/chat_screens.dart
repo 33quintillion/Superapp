@@ -120,6 +120,9 @@ class ChatListScreen extends StatelessWidget {
   }
 }
 
+/// Small text in the navy top bar, in the bar's own (ivory) colour so it stays readable.
+TextStyle? _barLabel(BuildContext context) => Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).appBarTheme.foregroundColor);
+
 String _initial(String? name) => (name == null || name.isEmpty) ? '?' : name.characters.first.toUpperCase();
 
 class _StatusChip extends StatelessWidget {
@@ -136,7 +139,7 @@ class _StatusChip extends StatelessWidget {
               ConnectionStatus.offline => 'Offline',
             },
             key: const Key('connection'),
-            style: Theme.of(context).textTheme.labelSmall,
+            style: _barLabel(context),
           ),
         ),
       );
@@ -343,9 +346,9 @@ class _ChatScreenState extends State<ChatScreen> {
               title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(c?.titleFor(chat.me) ?? 'Chat'),
                 if (typing)
-                  Text('typing…', key: const Key('typing'), style: Theme.of(context).textTheme.labelSmall)
+                  Text('typing…', key: const Key('typing'), style: _barLabel(context))
                 else if (c?.isGroup ?? false)
-                  Text('${c!.members.length} members', style: Theme.of(context).textTheme.labelSmall),
+                  Text('${c!.members.length} members', style: _barLabel(context)),
               ]),
               actions: [
                 if (c != null) ...callActions(context, chat, c),
