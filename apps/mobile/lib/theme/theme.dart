@@ -28,6 +28,9 @@ ThemeData nexaTheme(Brightness brightness) {
     colorScheme: scheme,
     scaffoldBackgroundColor: p.bg,
     useMaterial3: true,
+    // Full-size tap targets on computers too (many Windows laptops have touch screens).
+    materialTapTargetSize: MaterialTapTargetSize.padded,
+    visualDensity: VisualDensity.standard,
     // Midnight navy with ivory text in both themes, as on the web: the brand's one constant.
     appBarTheme: const AppBarTheme(
       backgroundColor: Color(0xFF14213D),
