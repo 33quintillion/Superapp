@@ -68,6 +68,10 @@ export interface Service {
   currency: string;
   capacity: number;
   active: boolean;
+  /** Paid by card when booking; 0 means everything is paid in person. */
+  depositMinor: number;
+  /** The deposit is refunded if the customer cancels at least this many hours before. */
+  freeCancelHours: number;
 }
 
 export interface Slot {
@@ -83,9 +87,31 @@ export interface Booking {
   customer?: UserSummary | null;
   startsAt: string;
   endsAt: string;
-  status: 'confirmed' | 'cancelled' | 'completed' | 'no_show';
+  status: BookingStatus;
   cancelledBy: 'customer' | 'business' | null;
   note: string;
+  currency: string;
+  priceMinor: number;
+  deposit: { amountMinor: number; status: PaymentStatus | null; refundedMinor: number; freeCancelUntil: string | null; refundDue: boolean } | null;
+}
+
+export type BookingStatus = 'pending_payment' | 'confirmed' | 'cancelled' | 'completed' | 'no_show';
+
+export const BOOKING_STATUS_LABEL: Record<BookingStatus, string> = {
+  pending_payment: 'Waiting for the deposit',
+  confirmed: 'Confirmed',
+  cancelled: 'Cancelled',
+  completed: 'Came',
+  no_show: 'Didn’t come',
+};
+
+/** What happens to a paid deposit if the customer cancels now. */
+export function cancellationNote(k: Booking): string | null {
+  if (!k.deposit || k.deposit.status !== 'paid') return null;
+  const until = k.deposit.freeCancelUntil ? Date.parse(k.deposit.freeCancelUntil) : 0;
+  return until > Date.now()
+    ? `Cancel before ${localTime(k.deposit.freeCancelUntil!, k.business.timeZone, true)} to get your ${money(k.deposit.amountMinor, k.currency)} deposit back.`
+    : `The free cancellation time has passed: if you cancel, the business keeps your ${money(k.deposit.amountMinor, k.currency)} deposit.`;
 }
 
 export interface StaffMember {
@@ -162,17 +188,67 @@ export interface Refund {
 
 export interface Payment {
   id: string;
-  orderId: string;
+  orderId: string | null;
+  bookingId: string | null;
   status: PaymentStatus;
   amountMinor: number;
   refundedMinor: number;
+  /** Held back by the customer's bank while a dispute is open or after it was lost. */
+  disputedMinor: number;
   refundableMinor: number;
+  disputeStatus?: DisputeStatus | null;
   feeMinor: number;
   currency: string;
   createdAt: string;
   paidAt: string | null;
   refunds?: Refund[];
   business?: { id: string; handle: string; name: string };
+}
+
+export type DisputeStatus = 'warning_needs_response' | 'warning_under_review' | 'warning_closed' | 'needs_response' | 'under_review' | 'won' | 'lost';
+
+export const DISPUTE_STATUS_LABEL: Record<DisputeStatus, string> = {
+  warning_needs_response: 'Bank enquiry: please respond',
+  warning_under_review: 'Bank enquiry: response sent',
+  warning_closed: 'Bank enquiry closed',
+  needs_response: 'Disputed: please respond',
+  under_review: 'Disputed: the bank is deciding',
+  won: 'Dispute won',
+  lost: 'Dispute lost',
+};
+
+export interface Dispute {
+  id: string;
+  paymentId: string;
+  orderId: string | null;
+  bookingId: string | null;
+  amountMinor: number;
+  currency: string;
+  reason: string;
+  status: DisputeStatus;
+  open: boolean;
+  canRespond: boolean;
+  evidenceDueBy: string | null;
+  evidenceSubmittedAt: string | null;
+  createdAt: string;
+}
+
+export interface Payout {
+  id: string;
+  amountMinor: number;
+  currency: string;
+  status: 'pending' | 'in_transit' | 'paid' | 'failed' | 'canceled';
+  arrivalDate: string | null;
+  createdAt: string;
+}
+
+export interface PlanChangePreview {
+  plan: Plan;
+  from: Plan;
+  /** Charged now; below zero is credit towards later invoices. */
+  amountDueNowMinor: number;
+  currency: string;
+  intervalChanges: boolean;
 }
 
 export interface PayoutAccount {

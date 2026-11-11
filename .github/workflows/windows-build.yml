@@ -1,0 +1,66 @@
+# SuperApp for Windows, pointed at the test site: a zip to unpack and run (SuperApp.exe).
+# Published as the "windows-test" pre-release, replacing the previous file each time.
+# Not signed yet, so Windows SmartScreen asks before the first run. The Microsoft Store
+# version will be signed by the Store.
+name: Windows build
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/project-thread-j47aas, main]
+    paths: ['apps/mobile/**', '.github/workflows/windows-build.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+env:
+  API_BASE_URL: https://nexa-api-3l54.onrender.com
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - name: Add the Windows app shell and name it SuperApp
+        run: |
+          flutter config --enable-windows-desktop
+          if (!(Test-Path windows)) { flutter create --platforms=windows --org app.nexa --project-name nexa . }
+          (Get-Content windows/runner/main.cpp -Raw) -replace 'L"nexa"', 'L"SuperApp"' | Set-Content windows/runner/main.cpp -NoNewline
+          (Get-Content windows/CMakeLists.txt -Raw) -replace 'set\(BINARY_NAME "nexa"\)', 'set(BINARY_NAME "SuperApp")' | Set-Content windows/CMakeLists.txt -NoNewline
+          (Get-Content windows/runner/Runner.rc -Raw) -replace '"nexa\.exe"', '"SuperApp.exe"' -replace '"nexa"', '"SuperApp"' | Set-Content windows/runner/Runner.rc -NoNewline
+          Select-String -Path windows/runner/main.cpp -Pattern 'SuperApp'
+          Select-String -Path windows/CMakeLists.txt -Pattern 'BINARY_NAME'
+      - run: flutter pub get
+      - name: Build
+        run: flutter build windows --release --dart-define=API_BASE_URL=$env:API_BASE_URL
+      - name: Pack
+        run: |
+          Get-ChildItem build/windows/x64/runner/Release
+          if (!(Test-Path build/windows/x64/runner/Release/SuperApp.exe)) { throw 'SuperApp.exe missing' }
+          # Linker leftovers aren't needed to run the app.
+          Remove-Item build/windows/x64/runner/Release/*.lib, build/windows/x64/runner/Release/*.exp -ErrorAction SilentlyContinue
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath SuperApp-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperApp-Windows
+          path: apps/mobile/SuperApp-Windows.zip
+      - name: Publish as the windows-test pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view windows-test *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create windows-test --prerelease --title "SuperApp for Windows (test build)" --notes "For testing. Points at the test site." }
+          gh release upload windows-test SuperApp-Windows.zip --clobber
+          $sha = $env:GITHUB_SHA.Substring(0, 7)
+          gh release edit windows-test --notes "Built from $sha. Points at the test site. Unzip, then run SuperApp.exe. Windows may warn that the app isn't recognised yet: choose More info, then Run anyway."

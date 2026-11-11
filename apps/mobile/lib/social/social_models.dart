@@ -23,7 +23,7 @@ class Post {
     required this.commentCount,
     required this.liked,
     required this.createdAt,
-    required this.mediaCount,
+    this.mediaIds = const [],
     this.communityName,
     this.shared,
     this.sharedUnavailable = false,
@@ -41,7 +41,7 @@ class Post {
       commentCount: (j['commentCount'] as num).toInt(),
       liked: j['liked'] as bool,
       createdAt: DateTime.parse(j['createdAt'] as String),
-      mediaCount: (j['media'] as List? ?? const []).length,
+      mediaIds: [for (final m in j['media'] as List? ?? const []) (m as Map<String, dynamic>)['id'] as String],
       communityName: (j['community'] as Map<String, dynamic>?)?['name'] as String?,
       shared: shared == null || shared['unavailable'] == true ? null : Post.fromJson({...shared, 'shared': null}),
       sharedUnavailable: shared?['unavailable'] == true,
@@ -57,7 +57,9 @@ class Post {
   int commentCount;
   bool liked;
   final DateTime createdAt;
-  final int mediaCount;
+  /// Photos on the post, in order.
+  final List<String> mediaIds;
+  int get mediaCount => mediaIds.length;
   final String? communityName;
   final Post? shared;
   final bool sharedUnavailable;
@@ -66,7 +68,7 @@ class Post {
 }
 
 class Story {
-  Story({required this.id, required this.author, required this.kind, required this.body, required this.background, required this.viewed, this.viewCount});
+  Story({required this.id, required this.author, required this.kind, required this.body, required this.background, required this.viewed, this.viewCount, this.mediaId});
   factory Story.fromJson(Map<String, dynamic> j) => Story(
         id: j['id'] as String,
         author: UserSummary.fromJson(j['author'] as Map<String, dynamic>),
@@ -75,6 +77,7 @@ class Story {
         background: j['background'] as String? ?? '#3D5AFE',
         viewed: j['viewed'] as bool? ?? false,
         viewCount: (j['viewCount'] as num?)?.toInt(),
+        mediaId: (j['media'] as Map<String, dynamic>?)?['id'] as String?,
       );
   final String id;
   final UserSummary author;
@@ -83,6 +86,7 @@ class Story {
   final String background;
   final bool viewed;
   final int? viewCount;
+  final String? mediaId;
 }
 
 class StoryGroup {

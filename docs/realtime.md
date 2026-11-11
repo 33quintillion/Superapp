@@ -83,6 +83,7 @@ A frame that fails gets `{ type: "error", ref, error: { code, message, details? 
 | `call.signal` | `{ callId, from, signal }`, only to the one connection taking part on the receiving side |
 | `order.updated`, `booking.updated` | The order or booking, as REST returns it to the customer, when the business (or you, on another device) changes it |
 | `business.order.created`, `business.order.updated`, `business.booking.created`, `business.booking.updated` | The order or booking with its `customer`, to every active staff member of the business |
+| `business.dispute.updated` | A dispute on one of the business's payments (see [`payments.md`](payments.md#disputes)), to owners and managers |
 
 Events go to every device of every member, including the device that made the change. Clients deduplicate by message id.
 
@@ -99,4 +100,4 @@ Each user has a Redis pub/sub channel. A server subscribes only to the users who
 ## Not done yet
 - Push notifications reach browsers today. iPhone and Android need APNs and FCM credentials and app-side registration (see [`push.md`](push.md)).
 - Per-device delivery state. Receipts are per user, not per device.
-- Outboxes are kept in memory. A send that is still pending when the app is killed is lost and has to be typed again.
+- Outboxes survive a restart: the phone app keeps them in the keystore and the web in local storage (memory only if the browser blocks storage). Both re-send with the same `clientId`s when the chat opens again and wipe them on sign-out. A photo or voice note still uploading is not kept; once uploaded, its message is.

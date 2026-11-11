@@ -19,7 +19,8 @@ android {
         applicationId = "app.nexa.nexa"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Firebase Auth and the QR scanner need Android 6 (API 23) or later.
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
@@ -29,11 +30,22 @@ android {
         versionName = flutter.versionName
     }
 
+    // The test builds (pointed at the test site) are signed with a fixed, public test key kept
+    // in the repo, so each new build installs over the last one and Firebase can recognise the
+    // app by its fingerprint. It must never sign a Play Store release: that needs a real,
+    // private key.
+    signingConfigs {
+        create("test") {
+            storeFile = file("test-signing.jks")
+            storePassword = "superapp-test"
+            keyAlias = "superapp-test"
+            keyPassword = "superapp-test"
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("test")
         }
     }
 }

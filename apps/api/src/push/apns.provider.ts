@@ -36,7 +36,9 @@ export class ApnsProvider implements PushProvider {
 
   async send(device: PushDevice, message: PushMessage): Promise<PushResult> {
     const origin = this.opts.endpoint ?? HOSTS[device.apnsEnvironment ?? 'production'];
-    const payload = JSON.stringify({
+    // A clear is a background push: the app wakes briefly to remove delivered notifications.
+    const background = { aps: { 'content-available': 1, badge: message.badge }, ...message.data };
+    const payload = JSON.stringify(message.clear ? background : {
       aps: {
         alert: { title: message.title, body: message.body },
         badge: message.badge,
@@ -49,7 +51,7 @@ export class ApnsProvider implements PushProvider {
     });
     let res: { status: number; body: string; headers: http2.IncomingHttpHeaders };
     try {
-      res = await this.request(origin, device.token, payload, message.ttlSeconds);
+      res = await this.request(origin, device.token, payload, message.ttlSeconds, !!message.clear);
     } catch (err) {
       return networkFailure(err);
     }
@@ -105,7 +107,7 @@ export class ApnsProvider implements PushProvider {
     return s;
   }
 
-  private async request(origin: string, token: string, payload: string, ttlSeconds: number) {
+  private async request(origin: string, token: string, payload: string, ttlSeconds: number, background: boolean) {
     const auth = await this.providerToken();
     const session = this.session(origin);
     return new Promise<{ status: number; body: string; headers: http2.IncomingHttpHeaders }>((resolve, reject) => {
@@ -114,8 +116,9 @@ export class ApnsProvider implements PushProvider {
         ':path': `/3/device/${encodeURIComponent(token)}`,
         authorization: `bearer ${auth}`,
         'apns-topic': this.opts.bundleId,
-        'apns-push-type': 'alert',
-        'apns-priority': '10',
+        // Apple requires priority 5 for background pushes.
+        'apns-push-type': background ? 'background' : 'alert',
+        'apns-priority': background ? '5' : '10',
         'apns-expiration': String(Math.floor(Date.now() / 1000) + ttlSeconds),
         'content-type': 'application/json',
       });

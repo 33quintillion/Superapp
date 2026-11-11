@@ -13,8 +13,8 @@ export default {
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },
-      // Video calls happen on the chat screen, so only it may use the camera.
-      { source: '/chats', headers: [{ key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=()' }] },
+      // Video calls and sharing your location happen on the chat screen, so only it may use the camera and location.
+      { source: '/chats', headers: [{ key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(self)' }] },
     ];
   },
 };

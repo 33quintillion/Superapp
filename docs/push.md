@@ -18,6 +18,8 @@ Each provider is switched on by its environment variables and is independent of 
 4. **Last-moment checks.** Just before sending, the worker drops the job (state `dropped`, with the reason) if the message was read on another device, deleted, hidden, the chat was muted, either person blocked the other, the person left the chat, switched notifications off or was signed out, or the job is older than `PUSH_TTL_SECONDS`.
 5. **Results.** Success marks the job `sent`. A dead token (APNs `Unregistered`/`BadDeviceToken`, FCM `UNREGISTERED`, Web Push 404/410/403) disables the device and stops future jobs for it until the app registers again. Rate limits, outages and network errors are retried with exponential backoff (10 s doubling to a 30-minute cap, ±20% jitter, `Retry-After` honoured) up to `PUSH_MAX_ATTEMPTS` (8). Anything else fails the job without retrying. Finished jobs are deleted after 7 days.
 
+6. **Clearing after reading.** When someone reads a chat (`kind: "read"` receipt), each of their devices that was sent a notification for one of the messages just read gets a `clear` job. It shows nothing and carries no text: `{ type: "clear", conversationId, seq }` plus the new badge. The device removes that chat's notifications for messages up to `seq`. Quick successive reads merge into one waiting job per device and chat. Web Push sends it with the chat as its `Topic`, so a notification still waiting at the push service (device offline) is replaced rather than delivered late. APNs sends it as a background push (`apns-push-type: background`, priority 5) and FCM as a data-only message; the phone apps still have to handle these once push is set up there (see Still to do). Browsers expect every push to show something; Chrome tolerates the occasional one that doesn't, and a clear only goes to a browser that was actually shown a notification for that chat.
+
 Delivery receipts already exist from Stage 3: when a device receives a push it calls `POST /v1/conversations/:id/receipts` with `kind: "delivered"`, and the sender's ticks update. The web service worker does this. The native apps should do the same from their notification handlers.
 
 ## What a notification contains
@@ -26,7 +28,7 @@ Each person chooses in `PATCH /v1/me/notifications`:
 
 - `preview: "full"` (default): sender name and message text. Attachments show as "Photo", "Voice message" and so on, never file names.
 - `preview: "sender"`: sender name and "New message".
-- `preview: "none"`: "Nexa" and "New message".
+- `preview: "none"`: "SuperApp" and "New message".
 - `quietHours`: a daily window in the person's time zone. Notifications still arrive, without sound (APNs `interruption-level: passive`, Android channel `messages_quiet`, Web Push `silent`).
 
 Every payload also carries `{ type: "message", conversationId, messageId, seq }` so the app can open the chat and fetch the message. The badge is the unread count across unmuted chats.
@@ -75,7 +77,7 @@ The legacy FCM server-key API is shut down; this uses HTTP v1 with a short-lived
 ## Still to do
 
 - **iOS and Android apps:** request permission, get the token (APNs directly on iOS, FCM on Android), call `PUT /v1/push/devices/current`, handle taps, and send delivered receipts. This needs the Apple and Firebase projects above (`GoogleService-Info.plist` is not needed on iOS because APNs is used directly; `google-services.json` is needed on Android).
-- Clearing a notification on other devices when a chat is read on one (silent "read" pushes).
+- Handling `clear` pushes in the iOS and Android apps (remove the chat's delivered notifications, update the badge). The server and the browser already do this. Apple limits how often background pushes wake an app, so on iOS a clear can arrive late; test on real phones.
 - Group-chat notifications are formatted already ("Sender: text" under the group name) but groups arrive in Stage 5. Mentions do not yet bypass mute.
 - Per-device delivered state. Receipts are per person, as in Stage 3.
 - Metrics and alerting on queue depth and failure rates (Stage 10 monitoring).

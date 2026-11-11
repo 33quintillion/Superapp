@@ -7,8 +7,11 @@ import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/error.filter';
 import { AppConfig } from './config/config';
 
+/** Never written to logs, even if someone logs a whole request or body. */
+export const LOG_REDACT = ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.refreshToken', '*.token', '*.accessToken'];
+
 /** Builds the HTTP app. Shared by main.ts and the e2e tests so both run the same stack. */
-export async function createApp(config: AppConfig, opts: { logger?: boolean } = {}): Promise<NestFastifyApplication> {
+export async function createApp(config: AppConfig, opts: { logger?: boolean; logStream?: NodeJS.WritableStream } = {}): Promise<NestFastifyApplication> {
   const adapter = new FastifyAdapter({
     trustProxy: config.TRUST_PROXY,
     bodyLimit: 1024 * 1024,
@@ -22,7 +25,8 @@ export async function createApp(config: AppConfig, opts: { logger?: boolean } = 
         : {
             level: config.LOG_LEVEL,
             // Defence in depth: these must never reach logs even if someone logs a request.
-            redact: ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.refreshToken', '*.token', '*.accessToken'],
+            redact: LOG_REDACT,
+            ...(opts.logStream ? { stream: opts.logStream } : {}),
           },
   });
   const app = await NestFactory.create<NestFastifyApplication>(AppModule.forConfig(config), adapter, {

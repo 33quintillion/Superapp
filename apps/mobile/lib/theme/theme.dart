@@ -9,17 +9,34 @@ ThemeData nexaTheme(Brightness brightness) {
     primary: p.primary,
     onPrimary: p.onPrimary,
     secondary: p.accent,
-    onSecondary: p.onPrimary,
+    // Navy text on the gold accent in both modes: ivory on it would be too faint.
+    onSecondary: brightness == Brightness.dark ? p.onPrimary : p.text,
+    // Selected segments and tonal buttons; left to Material they come out gold with ivory text.
+    secondaryContainer: p.surfaceMuted,
+    onSecondaryContainer: p.text,
     error: p.danger,
     onError: p.onPrimary,
     surface: p.surface,
     onSurface: p.text,
+    // Chat bubbles: your own are burgundy with ivory text, other people's a warm ivory.
+    primaryContainer: p.bubbleOwn,
+    onPrimaryContainer: p.onBubbleOwn,
+    surfaceContainerHighest: p.bubbleOther,
   );
   final radius = BorderRadius.circular(NexaRadius.md);
   return ThemeData(
     colorScheme: scheme,
     scaffoldBackgroundColor: p.bg,
     useMaterial3: true,
+    // Full-size tap targets on computers too (many Windows laptops have touch screens).
+    materialTapTargetSize: MaterialTapTargetSize.padded,
+    visualDensity: VisualDensity.standard,
+    // Midnight navy with ivory text in both themes, as on the web: the brand's one constant.
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Color(0xFF14213D),
+      foregroundColor: Color(0xFFF6F0E1),
+      surfaceTintColor: Colors.transparent,
+    ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: p.surfaceMuted,

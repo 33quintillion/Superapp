@@ -51,7 +51,7 @@ interface SubscriptionRow {
 const SUBSCRIPTION_EVENTS = ['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'invoice.paid'];
 
 /**
- * Plans that businesses pay Nexa for, billed by the provider. Plans are sold to
+ * Plans that businesses pay SuperApp for, billed by the provider. Plans are sold to
  * businesses on the web, where store billing rules don't apply (ADR 0005); plans for
  * individuals would have to go through the App Store and Google Play and aren't built.
  *
@@ -201,7 +201,7 @@ export class SubscriptionsService implements OnModuleInit, BillingHooks {
     return { url: session.url as string };
   }
 
-  /** The business as a customer of Nexa at the provider, created once. */
+  /** The business as a customer of SuperApp at the provider, created once. */
   private async customer(businessId: string, name: string) {
     const stripe = this.payments.provider();
     const have = await this.db.one<{ provider_customer_id: string; livemode: boolean }>('SELECT provider_customer_id, livemode FROM business_billing WHERE business_id = $1', [businessId]);
@@ -227,6 +227,118 @@ export class SubscriptionsService implements OnModuleInit, BillingHooks {
     await this.db.query(`UPDATE subscriptions SET cancel_at_period_end = $2, updated_at = now() WHERE id = $1 AND status <> 'canceled'`, [s.id, !!sub.cancel_at_period_end]);
     await this.audit.record({ actorId: userId, action: cancel ? 'billing.subscription.cancelled' : 'billing.subscription.resumed', targetType: 'business', targetId: businessId });
     return this.forBusiness(userId, businessId);
+  }
+
+  // ---------------------------------------------------------------- changing plan
+
+  /** Checks a change to another plan and fetches what the provider needs to make it. */
+  private async changeTarget(userId: string, businessId: string, planCode: string) {
+    await this.businesses.requireStaff(userId, businessId, 'billing.manage');
+    const stripe = this.payments.provider();
+    const s = await this.live(businessId);
+    if (!s) throw Errors.notFound('Subscription');
+    if (s.status !== 'active' && s.status !== 'trialing') throw Errors.conflict('subscription_not_active', 'Bring the plan up to date (check the card on billing) before changing it');
+    if (s.cancel_at_period_end) throw Errors.conflict('subscription_ending', 'This plan is set to end; resume it before changing it');
+    const plan = await this.db.one<PlanRow>(`SELECT * FROM plans WHERE code = $1 AND state = 'active' AND livemode = $2`, [planCode, stripe.livemode]);
+    if (!plan) throw Errors.notFound('Plan');
+    if (plan.id === s.plan_id) throw Errors.conflict('same_plan', 'This business is already on that plan');
+    if (plan.currency !== s.plan.currency) throw Errors.conflict('currency_mismatch', 'That plan is billed in another currency; cancel this plan and subscribe to it instead');
+    const sub = await stripe.get(`/v1/subscriptions/${encodeURIComponent(s.provider_subscription_id)}`).catch(providerFailed);
+    const item = sub.items?.data?.[0];
+    if (!item?.id) throw Errors.conflict('payment_provider_refused', 'The payment provider returned a subscription without items');
+    const customer = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
+    return { s, plan, itemId: item.id as string, customer: customer as string };
+  }
+
+  /**
+   * What switching plan would cost today. The provider credits the unused part of the current
+   * plan and charges for the new one from now; the difference is billed straight away (a
+   * negative amount is a credit towards the next invoices).
+   */
+  async previewChange(userId: string, businessId: string, planCode: string) {
+    const t = await this.changeTarget(userId, businessId, planCode);
+    const preview = await this.payments
+      .provider()
+      .post(
+        '/v1/invoices/create_preview',
+        {
+          customer: t.customer,
+          subscription: t.s.provider_subscription_id,
+          subscription_details: { items: [{ id: t.itemId, price: t.plan.provider_price_id }], proration_behavior: 'always_invoice' },
+        },
+        `preview:${t.s.id}:${t.plan.id}:${randomUUID()}`,
+      )
+      .catch(providerFailed);
+    const total = Number(preview.total ?? preview.amount_due ?? 0);
+    return {
+      plan: this.planView(t.plan),
+      from: this.planView(t.s.plan),
+      // What is charged now; below zero is credit kept for later invoices.
+      amountDueNowMinor: total,
+      currency: String(preview.currency ?? t.plan.currency).toUpperCase(),
+      intervalChanges: t.plan.interval !== t.s.plan.interval,
+    };
+  }
+
+  /**
+   * Switches plan in place. The provider charges or credits the difference now; if an
+   * upgrade can't be paid, nothing changes. Limits follow the new plan at once; when they
+   * go down, nothing is removed, but adding more is refused (as when a plan lapses).
+   */
+  async changePlan(userId: string, businessId: string, planCode: string, clientId: string) {
+    const t = await this.changeTarget(userId, businessId, planCode);
+    await this.limits.consume({ name: 'billing:change', limit: 10, windowSeconds: 3600 }, userId);
+    const sub = await this.payments
+      .provider()
+      .post(
+        `/v1/subscriptions/${encodeURIComponent(t.s.provider_subscription_id)}`,
+        {
+          items: [{ id: t.itemId, price: t.plan.provider_price_id }],
+          proration_behavior: 'always_invoice',
+          // An upgrade whose charge fails is refused instead of leaving the plan half-paid.
+          payment_behavior: 'error_if_incomplete',
+          metadata: { business_id: businessId, plan_id: t.plan.id },
+        },
+        `change:${t.s.id}:${clientId}`,
+      )
+      .catch(providerFailed);
+    await this.db.tx(async (tx) => {
+      await this.applyCurrent(sub, tx);
+      await this.db.query('UPDATE subscriptions SET plan_changed_at = now() WHERE id = $1', [t.s.id], tx);
+    });
+    await this.audit.record({ actorId: userId, action: 'billing.subscription.changed', targetType: 'business', targetId: businessId, metadata: { from: t.s.plan.code, to: t.plan.code } });
+    return this.forBusiness(userId, businessId);
+  }
+
+  /**
+   * Applies the provider's current copy of a subscription (from an API answer, not an event).
+   * It is as new as anything we have, so it is stamped with the time it was read.
+   */
+  private async applyCurrent(sub: Record<string, any>, tx: Queryable) {
+    const s = await this.db.one<SubscriptionRow>('SELECT * FROM subscriptions WHERE provider_subscription_id = $1 FOR UPDATE', [sub.id], tx);
+    if (!s || s.status === 'canceled') return;
+    const planId = await this.planForPrice(sub, tx);
+    const periodEnd = sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end;
+    await this.db.query(
+      `UPDATE subscriptions SET plan_id = coalesce($2, plan_id), status = $3, cancel_at_period_end = $4, current_period_end = coalesce($5, current_period_end),
+              provider_updated_at = greatest(provider_updated_at, date_trunc('second', now())), updated_at = now() WHERE id = $1`,
+      [s.id, planId, normaliseStatus(sub.status), !!sub.cancel_at_period_end, periodEnd ? new Date(periodEnd * 1000) : null],
+      tx,
+    );
+  }
+
+  /** Our plan for the subscription's price, if we know it. */
+  private async planForPrice(sub: Record<string, any>, tx: Queryable) {
+    const price = sub.items?.data?.[0]?.price;
+    const priceId = typeof price === 'string' ? price : price?.id;
+    if (!priceId) return null;
+    return (await this.db.one<{ id: string }>('SELECT id FROM plans WHERE provider_price_id = $1', [priceId], tx))?.id ?? null;
+  }
+
+  /** Reads the subscription from the provider and applies it, when an event may have been out of date. */
+  private async refresh(providerSubscriptionId: string) {
+    const sub = await this.payments.provider().get(`/v1/subscriptions/${encodeURIComponent(providerSubscriptionId)}`);
+    await this.db.tx((tx) => this.applyCurrent(sub, tx));
   }
 
   /** The provider's billing page, where the owner changes card or downloads invoices. */
@@ -277,11 +389,14 @@ export class SubscriptionsService implements OnModuleInit, BillingHooks {
     const periodEnd = sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end;
     if (existing) {
       if (fromCheckout || existing.status === 'canceled' || at < existing.provider_updated_at) return;
+      const planId = await this.planForPrice(sub, tx);
       await this.db.query(
-        `UPDATE subscriptions SET status = $2, cancel_at_period_end = $3, current_period_end = $4, provider_updated_at = $5, updated_at = now() WHERE id = $1`,
-        [existing.id, status, !!sub.cancel_at_period_end, periodEnd ? new Date(periodEnd * 1000) : existing.current_period_end, at],
+        `UPDATE subscriptions SET plan_id = coalesce($6, plan_id), status = $2, cancel_at_period_end = $3, current_period_end = $4, provider_updated_at = $5, updated_at = now() WHERE id = $1`,
+        [existing.id, status, !!sub.cancel_at_period_end, periodEnd ? new Date(periodEnd * 1000) : existing.current_period_end, at, planId],
         tx,
       );
+      // An event from the same second as a plan change may predate it; ask the provider which is current.
+      if (planId && planId !== existing.plan_id && status !== 'canceled') after.push(() => this.refresh(sub.id));
       return;
     }
     const businessId = sub.metadata?.business_id;

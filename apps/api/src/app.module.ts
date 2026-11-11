@@ -9,14 +9,19 @@ import { IntegrationsController } from './integrations/integrations.controller';
 import { LedgerService } from './payments/ledger';
 import { PaymentsController } from './payments/payments.controller';
 import { PaymentsService } from './payments/payments.service';
+import { DisputesService } from './payments/disputes.service';
+import { ReconciliationService } from './payments/reconciliation.service';
 import { SubscriptionsService } from './payments/subscriptions.service';
 import { IntegrationsService } from './integrations/integrations.service';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
 import { IceService } from './calls/ice.service';
-import { AuthController, SessionsController } from './auth/auth.controller';
+import { AuthController, EmailController, LinkController, SessionsController } from './auth/auth.controller';
+import { LinkService } from './auth/link.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { BreachedPasswordsService } from './auth/breached-passwords.service';
+import { PhoneTokenService } from './auth/phone-token.service';
 import { TokenService } from './auth/token.service';
 import { AuditService } from './common/audit.service';
 import { RateLimitService } from './common/rate-limit.service';
@@ -33,10 +38,16 @@ import { MessagingController } from './messaging/messaging.controller';
 import { MessagingService } from './messaging/messaging.service';
 import { GroupsController } from './messaging/groups.controller';
 import { GroupsService } from './messaging/groups.service';
+import { AiController } from './ai/ai.controller';
+import { MiniProgramsController } from './mini/mini.controller';
+import { MiniProgramsService } from './mini/mini.service';
+import { AiService } from './ai/ai.service';
+import { ExpiryService } from './messaging/expiry.service';
 import { RealtimeBus } from './realtime/realtime-bus.service';
 import { RealtimeController, RealtimeGateway } from './realtime/realtime.gateway';
 import { PushController } from './push/push.controller';
 import { PushProviders } from './push/push.providers';
+import { RetentionService } from './retention/retention.service';
 import { PushService } from './push/push.service';
 import { PushWorker } from './push/push.worker';
 import { CommunitiesService } from './social/communities.service';
@@ -45,7 +56,8 @@ import { PostsService } from './social/posts.service';
 import { SocialController } from './social/social.controller';
 import { StoriesService } from './social/stories.service';
 import { StorageService } from './storage/storage.service';
-import { UsersController } from './users/users.controller';
+import { ContactCodeController, UsersController } from './users/users.controller';
+import { ContactCodeService } from './users/contact-code.service';
 import { UsersService } from './users/users.service';
 
 @Global()
@@ -57,8 +69,13 @@ export class AppModule {
       controllers: [
         HealthController,
         AuthController,
+        EmailController,
+        LinkController,
         SessionsController,
         UsersController,
+        ContactCodeController,
+        AiController,
+        MiniProgramsController,
         SafetyController,
         MessagingController,
         GroupsController,
@@ -82,7 +99,13 @@ export class AppModule {
         TokenService,
         AuthGuard,
         AuthService,
+        BreachedPasswordsService,
+        PhoneTokenService,
+        LinkService,
         UsersService,
+        ContactCodeService,
+        AiService,
+        MiniProgramsService,
         SafetyService,
         StorageService,
         MediaService,
@@ -92,6 +115,7 @@ export class AppModule {
         PushWorker,
         MessagingService,
         GroupsService,
+        ExpiryService,
         FollowsService,
         PostsService,
         StoriesService,
@@ -102,10 +126,13 @@ export class AppModule {
         LedgerService,
         PaymentsService,
         SubscriptionsService,
+        DisputesService,
+        ReconciliationService,
         OrdersService,
         BookingsService,
         IntegrationsService,
         AdminService,
+        RetentionService,
         RealtimeGateway,
       ],
       exports: [APP_CONFIG, DatabaseService, RedisService, RateLimitService, AuditService, SafetyService],

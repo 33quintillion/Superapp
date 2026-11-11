@@ -1,17 +1,11 @@
 import { submitMfa } from '../../actions';
+import { AuthShell } from '../../auth-shell';
 import { ActionForm } from '../../form-ui';
 
 export default function MfaPage() {
   return (
-    <main>
-      <h1>Two-step verification</h1>
-      <p className="muted">Enter the 6-digit code from your authenticator app.</p>
-      <ActionForm
-        action={submitMfa}
-        submit="Verify"
-        pending="Checking…"
-        fields={[{ name: 'code', label: 'Code', autoComplete: 'one-time-code' }]}
-      />
-    </main>
+    <AuthShell title="Two-step verification" lede="Enter the 6-digit code from your authenticator app.">
+      <ActionForm action={submitMfa} submit="Verify" pending="Checking…" fields={[{ name: 'code', label: 'Code', autoComplete: 'one-time-code' }]} />
+    </AuthShell>
   );
 }

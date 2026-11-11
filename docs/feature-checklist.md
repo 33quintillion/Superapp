@@ -4,7 +4,7 @@ Legend: ✅ implemented and covered by automated tests · 🟡 partly implemente
 
 Test locations: API `apps/api/test/*.spec.ts`; web browser e2e `apps/web/e2e/run.mjs`; Flutter `apps/mobile/test/`.
 
-Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 28 tests passed and `flutter analyze` clean.
+Last full run (2026-10-28, Stage 1–9 leftovers): API 343 tests passed; web e2e all 62 steps passed, including calls through a real coturn relay, the business and admin flow, card payments against the local Stripe stand-in, and the accessibility audit; Flutter 50 tests passed and `flutter analyze` clean.
 
 ## Stage 1: Foundation
 | Item | Status | Evidence |
@@ -14,7 +14,7 @@ Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps 
 | Postgres migrations (transactional, locked, checksummed) | ✅ | `migrations.spec.ts` |
 | Redis connection and readiness check | ✅ | `auth.e2e.spec.ts › health` |
 | Central error format with request ids | ✅ | `auth.e2e.spec.ts › health` |
-| Log redaction of secrets | 🟡 | Configured in `app.ts`, no automated assertion yet |
+| Log redaction of secrets | ✅ | `logging.e2e` runs the real logger at trace level through sign-up, login, refresh and an authorised request, and checks no password, token or cookie appears; also when code logs a whole request or body |
 | Design tokens → CSS and Dart, CI staleness check | ✅ | `packages/design-tokens` |
 | docker-compose for local dependencies | 🟡 | Written; not run here (no Docker daemon in this environment) |
 | CI pipeline | 🟡 | `.github/workflows/ci.yml` written; first run happens on the PR |
@@ -32,17 +32,18 @@ Last full run (2026-10-27, Stage 9): API 298 tests passed; web e2e all 54 steps 
 | Optional TOTP two-step, replay protection | ✅ | `auth.e2e › two-step verification`; RFC vectors in `unit.spec.ts` |
 | Rate limits (register, login per IP and account, reset, MFA, reports) | ✅ | `auth.e2e › rate limiting`, `registration rate limit` |
 | Profile: display name, bio, status, locale | ✅ | `users.e2e › profile` |
-| Profile photo upload | ⬜ | Object storage now exists (Stage 3); avatar endpoint not built yet |
+| Profile photo upload | ✅ | `media.e2e › profile photos`, web e2e `profile photo uploaded from the account page…`, Flutter `sets, shows and removes the profile photo…`. Counts as public media: same scanning blocker before public launch |
 | Privacy settings (discoverability, who can message, receipts, online) | ✅ | `users.e2e`; enforced in messaging by `messaging.e2e › permissions`, `› receipts` and `realtime.e2e › presence` |
 | Blocking (hides profiles in both directions) | ✅ | `users.e2e › blocking` |
 | Reporting | ✅ | `users.e2e` (user side); moderation queue in `admin.e2e › the report queue` (Stage 7) |
 | Data export | ✅ | `users.e2e › exports…` |
 | Deactivation (reversible by signing in) | ✅ | `users.e2e › deactivation…` |
 | Deletion (immediate PII scrub, tombstone) | ✅ | `users.e2e › deletion…` |
-| Scheduled purge of tombstones and backups | ⬜ | Needs backup infrastructure |
+| Scheduled clean-up of old data | ✅ | `retention.e2e`: ended sessions after 90 days, spent links after 7 days, unfinished uploads after a day. Tombstones of deleted accounts and messages are kept on purpose (they hold no personal data and keep chats consistent) |
+| Backup retention (deleted data leaves backups on schedule) | ⛔ | Needs the hosting account and its backups (Stage 10) |
 | Phone number sign-up and verification | ⛔ | Needs an SMS provider account and fraud controls |
-| Contacts discovery (opt-in) | ⬜ | Designed for Stage 3; uploading the address book will never be required |
-| Breached-password check | ⬜ | Planned |
+| Contacts discovery (opt-in) | ✅ (phone address-book reading untested on a real device) | `users.e2e › finding people you know…`, web e2e `find people by email address, only those who opted in`, Flutter `find people you know…`. Being findable is off by default; the address book is read only when the person taps the button, and nothing sent is stored. Phone numbers only match once phone sign-up exists |
+| Breached-password check: new passwords (sign-up, reset, change) refused if in Have I Been Pwned's Pwned Passwords, by k-anonymity (only a 5-character hash prefix leaves the server), plus a built-in list of the most common ones; allowed if the service is down | ✅ | `breached-passwords.e2e` (against a local stand-in for the service) |
 | Admin MFA enforcement | ✅ | `admin.e2e › requires two-step verification to be on`, `› requires the session itself to have been opened with a two-step code, recently` (Stage 7) |
 | Localisation framework | 🟡 | `locale` stored per user; UI strings not yet extracted |
 | Web: sign-in, register, two-step, verify, forgot and reset, devices, sign-out | ✅ | `apps/web/e2e/run.mjs` |
@@ -73,19 +74,19 @@ Chats are **not end-to-end encrypted** (see the E2EE row). API tests use real Po
 | Fan-out across API instances (Redis) | ✅ | `realtime.e2e › fans out across API instances…` |
 | Permissions: outsiders get 404 everywhere; blocks and "who can message" enforced | ✅ | `messaging.e2e › keeps outsiders out…`, `› permissions` |
 | Mute and archive (per person) | ✅ | `messaging.e2e › lists conversations…` |
-| Image, video, audio and file sharing via presigned uploads to object storage | ✅ (API, web) | `media.e2e`; web e2e uploads a photo. **Flutter can show photos but cannot pick or send files yet** |
-| Voice notes | ✅ API, 🟡 web | `media.e2e › sends a voice note…`. Web records with MediaRecorder, but the browser test does not exercise the microphone. Flutter recording not built |
+| Image, video, audio and file sharing via presigned uploads to object storage | ✅ (API, web), ✅ photos in Flutter | `media.e2e`; web e2e uploads a photo; Flutter `chat_test › sends a photo with a caption and records a voice note…` (photo library picker, re-encoded on the phone so location metadata isn't sent). Flutter can't send video or other files yet, and opens voice notes and files in the phone's own player |
+| Voice notes | ✅ API, 🟡 web, 🟡 Flutter | `media.e2e › sends a voice note…`. Web records with MediaRecorder and Flutter with the `record` package (AAC in M4A); both tests use a fake microphone, and neither has run on a real microphone here. Flutter `chat_test › …records a voice note…` covers record, cancel, send and a refused microphone |
 | Upload checks: type allow-list, size limits, file signature, uploader-only completion | ✅ | `media.e2e`, `unit.spec › media signatures` |
 | Media access only for uploader and chat members; file removed when no message uses it | ✅ | `media.e2e › uploads straight to storage…`, `› deletes the stored file…` |
 | Malware scanning and known-CSAM hash matching | ⛔ | Needs a scanning service and a child-safety partner. **Media must not be opened to the public before this** |
 | Thumbnails and video transcoding | ⬜ | Planned with the media pipeline |
 | Account deletion wipes sent messages and files; export includes sent messages | ✅ | `messaging.e2e › account deletion and export` |
-| Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ for the flows in the browser test; 🟡 for the rest | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, photo, search and proxy limits. Edit, pin, forward and voice are in the UI but not browser-tested |
+| Web chat screen (list, thread, ticks, typing, presence, reactions, edit, delete, pin, forward, search, attachments, voice) | ✅ except voice in the browser | `apps/web/e2e/run.mjs › chatFlow` covers chat open, typing, presence, live delivery, read ticks, reply, offline catch-up, reaction, edit, pin, forward into a group, photo, search and proxy limits. Voice recording is in the UI but the browser test has no microphone |
 | Web chat proxy limited to messaging; refuses cross-site writes | ✅ | web e2e |
 | Mobile chat screens (list, thread, ticks, typing, reactions, edit, delete, pin) | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/chat_test.dart` |
 | Message notifications | ✅ browsers, ⛔ iPhone and Android | See Stage 4 below |
 | End-to-end encryption (libsignal) | ⛔ | Blocked on legal review of libsignal's AGPL-3.0 licence (ADR 0004). Nothing is labelled E2EE |
-| Durable outbox (survives app restart) | ⬜ | Outboxes are in memory today |
+| Durable outbox (survives app restart) | ✅ | Flutter keeps unsent messages in the keystore, the web in the browser's local storage; both re-send them with their original ids when the chat opens again and wipe them on sign-out (`chat_test › a message left unsent when the app closed…`, `› unsent messages are wiped…`; web e2e "a message typed offline survives closing the tab…"). An upload still in progress isn't kept |
 | Load test of fan-out and presence | ✅ | `apps/api/load/run.mjs`, results in `docs/hardening.md` (one instance; multi-instance needs staging) |
 
 ## Stage 4: Push, offline and sync
@@ -110,8 +111,9 @@ Push services are exercised against local servers that speak the real protocols 
 | Export lists devices and settings (no tokens); deactivation and deletion remove them | ✅ | `push.e2e › account lifecycle` |
 | Web: notification settings, turn browser notifications on and off, service worker shows the notification, reports "delivered", opens the chat on click | ✅ settings and service worker, 🟡 subscribing and click | Web e2e `notificationsFlow` saves settings and hands the service worker a push (via Chrome DevTools Protocol), checking the notification and the delivered receipt. Subscribing needs a real browser push service, so the "Turn on" button and opening the chat from a click are not browser-tested; the API side of subscribing is |
 | iPhone and Android: permission prompt, token registration, tap handling | ⛔ | Needs the APNs key and Firebase project above, then Flutter work |
-| Clear notifications on other devices after reading | ⬜ | Planned |
-| Durable outbox (survives app restart) and background sync on mobile | ⬜ | Planned |
+| Clear notifications on other devices after reading | ✅ server and web, ⬜ phone apps | `push.e2e › clearing notifications…`, web e2e `reading on another device clears the notification here`; phone handling waits for APNs/FCM setup |
+| Durable outbox (survives app restart) on mobile | ✅ | See Stage 2 above |
+| Background sync on mobile (fetching while the app is closed) | ⛔ | Needs push (APNs/FCM) to wake the app |
 | Queue metrics and alerting | ⬜ | Stage 10 monitoring |
 
 ## Stage 5: Social
@@ -126,18 +128,18 @@ Who can see a post, story, comment, community or file is decided in Postgres by 
 | Role hierarchy for promote, demote and remove; ownership passes on when the owner leaves or deletes their account | ✅ | `groups.e2e › applies the role hierarchy…`, `› passes ownership on…`, `› removes a deleted account…` |
 | Group notices ("Ada added Ben") and live updates to members; removed people are told | ✅ | `groups.e2e › announces changes…`; web e2e; Flutter `social_test` |
 | Follow and unfollow; private accounts approve follow requests | ✅ | `social.e2e › follows`; web e2e approves a request from the account page |
-| Posts with audiences (everyone, followers, only me), photos, likes, comments, shares that never widen the original audience | ✅ | `social.e2e › posts and the feed`; web e2e (followers-only photo post, like, comment, non-follower can't see it); Flutter `social_test › feed` (text posts) |
+| Posts with audiences (everyone, followers, only me), photos, likes, comments, shares that never widen the original audience | ✅ | `social.e2e › posts and the feed`; web e2e (followers-only photo post, like, comment, non-follower can't see it); Flutter `social_test › feed`, `› photos` |
 | Retry-safe posting (clientId) | ✅ | `social.e2e › is idempotent on clientId…` |
 | Home feed (own posts, people you follow, communities you joined), newest first with stable paging | ✅ | `social.e2e › builds the feed…` |
-| Stories: text and photo, 24-hour expiry with a sweep that deletes files, followers-only option, view tracking visible only to the author | ✅ | `social.e2e › stories`; web e2e; Flutter `social_test › feed` (text stories, marked seen) |
+| Stories: text and photo, 24-hour expiry with a sweep that deletes files, followers-only option, view tracking visible only to the author | ✅ | `social.e2e › stories`; web e2e; Flutter `social_test › feed` (text stories, marked seen), `› photos` (photo stories) |
 | Communities and channels: public or private, join and request to join, approve, ban, roles, admins-only posting in channels, owner hand-over and deletion | ✅ | `social.e2e › communities and channels`; web e2e; Flutter `social_test › communities` |
 | Community moderation: remove posts and comments with a reason (audited), ban, rank checks | ✅ | `social.e2e › moderates…`; web e2e (moderator removes a post) |
 | Reports on posts, comments, stories and communities | ✅ (user side) | `social.e2e › accepts reports…`; Flutter reports a post. The review queue is the Stage 7 admin dashboard |
-| Spam protection: per-person rate limits on posts (30/h), comments (120/h), likes (600/h), stories (50/day), follows (200/day), community creation (5/day) and joins (100/day), group creation (20/h) | 🟡 | Limits are wired through the shared limiter, which `auth.e2e › rate limiting` tests; the social limits themselves have no dedicated test yet. No spam classifier |
+| Spam protection: per-person rate limits on posts (30/h), comments (120/h), likes (600/h), stories (50/day), follows (200/day), community creation (5/day) and joins (100/day), group creation (20/h) | ✅ limits, ⬜ spam classifier | `social-limits.e2e` checks each limit's size, that it is per person, and the `Retry-After` header. No spam classifier |
 | Export and account deletion include all social data; deactivated accounts' posts are hidden | ✅ | `social.e2e › exports social data…`, `› hides a deactivated account’s posts` |
 | Web: groups, feed, profiles with follow, stories, communities, privacy settings | ✅ for the flows in the browser test | `apps/web/e2e/run.mjs › socialFlow` |
 | Flutter: groups, feed, stories, comments, posting, communities | ✅ (widget tests with HTTP and socket faked) | `apps/mobile/test/social_test.dart` |
-| Flutter: attach photos to posts and photo stories | ⬜ | The app shows a photo count and text; picking photos needs the same file-picker work as chat attachments |
+| Flutter: photos on posts (up to 10, removable before posting, not re-uploaded on retry) and photo stories, shown in the feed and story viewer | ✅ | `social_test › photos: a post with several photos…`. Not run on a real phone's photo library here |
 | Notifications for follows, likes, comments and requests; live feed updates | ⬜ | Feed refreshes on pull; chat push is unaffected |
 | Moderation dashboard for reports | ✅ | Built in Stage 7: `admin.e2e › the report queue`; web e2e `businessFlow` |
 | Malware and CSAM scanning of post and story photos | ⛔ | Same blocker as chat media. **Do not open public posting to the internet before this** |
@@ -183,9 +185,9 @@ Business accounts with staff roles, a catalogue with pickup orders, bookings, th
 | Admin: verify, suspend and restore businesses; add and remove moderators; audit log of every admin action; overview counts; CLI to grant the first admin | ✅ | `admin.e2e › businesses, staff and the audit log` |
 | Integration catalogue: admin publishes, people connect with only the scopes they tick and can revoke, kill switch, re-review when scopes widen, grants trimmed when they narrow | ✅ | `admin.e2e › integration catalogue and the kill switch`; web e2e |
 | Flutter: browse businesses, order for pickup, book, my orders and bookings | ✅ | `business_test` |
-| Flutter back office for staff (catalogue, orders queue, bookings) | ⬜ | Staff use the web for now |
+| Flutter back office for staff: orders queue, bookings with came/no-show/cancel, item catalogue, tabs by role | ✅ | `back_office_test` |
 | Item photos and viewing reported media in the queue | ⛔ | Needs the media scanning provider (same blocker as chat media) |
-| Online payment for orders and bookings | ✅ / ⬜ | Orders: Stage 8 below. Bookings: not built |
+| Online payment for orders and booking deposits | ✅ | Stage 8 below |
 | Business verification checks (documents, company registry) | ⛔ | Needs a verification provider; admins mark businesses verified by hand today |
 | Partner API for integrations (OAuth, tokens, webhooks) | ⛔ | Needs a partner agreement and terms; the catalogue and grants are in place |
 | Escalation of child-safety reports to NCMEC or IWF | ⛔ | Needs legal and trust-and-safety sign-up |
@@ -214,11 +216,12 @@ Card payments for pickup orders, payouts to businesses, refunds, a double-entry 
 | Launch countries, seller and buyer terms, refund policy, consumer-law review | ⛔ | Needs legal review |
 | Plans or digital goods sold to individuals in the mobile apps | ⛔ | Needs App Store and Google Play billing; plans are sold to businesses only for now |
 | Razorpay or another regional provider | ⛔ | Needs a provider decision and an account |
-| Online payment for bookings, deposits and no-show fees | ⬜ | Bookings are paid in person |
-| Disputes and chargebacks | ⬜ | Visible in the Stripe dashboard only |
-| Changing plan in place (upgrade or downgrade with proration) | ⬜ | Cancel and subscribe again |
-| Payout reconciliation against Stripe's balance reports | ⬜ | The ledger check covers our own records |
-| Flutter back office for payouts, refunds and plans | ⬜ | On the web for now |
+| Booking deposits: optional per service, held as `pending_payment` until paid through hosted checkout, refunded when cancelled in time or by the business, kept after a late cancel or a no-show, managers can refund | ✅ | `payments-more.e2e › booking deposits`; web e2e `paymentsFlow` |
+| Disputes and chargebacks: the business's share is taken back while the bank decides and returned if the business wins, refunds refused meanwhile, the business sends its side from the payments tab, admin list | ✅ | `payments-more.e2e › disputes`; web e2e `paymentsFlow` |
+| Changing plan in place: preview of today's cost, upgrade charges the difference, downgrade gives credit, monthly to yearly, declined card keeps the old plan | ✅ | `payments-more.e2e › changing plan`; web e2e `paymentsFlow` |
+| Payouts list for the business, and reconciliation of the ledger against the provider's balance records (admin) | ✅ | `payments-more.e2e › payouts and reconciliation`; web e2e `paymentsFlow` |
+| No-show fees charged beyond the deposit | ⬜ | Needs saved cards (off-session charges); the deposit is kept instead |
+| Flutter back office for payouts, refunds, disputes and plans; booking deposits for customers | ✅ | `back_office_test` |
 
 ## Stage 9: Hardening
 Details and numbers in `hardening.md`.
@@ -234,8 +237,9 @@ Details and numbers in `hardening.md`.
 | Web accessibility: axe-core WCAG 2.2 AA on 17 screens, light and dark; skip link; focus rings | ✅ | Web e2e `a11yFlow` (`E2E_ONLY=a11y`) |
 | Independent penetration test | ⬜ | Needs staging (Stage 10) |
 | Multi-instance and soak load tests | ⬜ | Needs staging |
-| Flutter accessibility (TalkBack, VoiceOver) and a manual screen-reader pass on the web | ⬜ | Needs real devices and a person |
-| Arrow-key navigation for tabs | ⬜ | Tab and Enter work |
+| Flutter accessibility: automated checks (48×48 and 44×44 tap targets, labels on everything tappable, WCAG text contrast) on sign-in, home, chat, feed, calls, shopping and every back-office tab, in light and dark mode | ✅ | `a11y_test`, plus checks inside `chat_test`, `social_test`, `calls_test` |
+| Trying the phone app with TalkBack and VoiceOver, and a manual screen-reader pass on the web | ⛔ | Needs real devices and a person |
+| Arrow-key navigation for tabs (WAI-ARIA tabs: one Tab stop, arrows, Home and End) | ✅ | Web e2e `a11yFlow` › keyboard on the admin tabs; the same component runs the business back office |
 
 ## Stage 10
 Not started. See `plan.md`. The mini-app runtime is not implemented, and the apps say so.

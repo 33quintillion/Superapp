@@ -10,13 +10,28 @@ import {
   kindForFile,
   Media,
   Message,
+  MessageExtras,
   newClientId,
   RealtimeClient,
   SystemEvent,
   uploadMedia,
 } from '@/lib/chat-client';
 import { CallManager, CallView } from '@/lib/call-session';
+import { loadOutbox, OutboxEntry, saveOutbox } from '@/lib/outbox-store';
 import { CallHistory, CallScreen, describeCall } from './call-ui';
+import {
+  ContactView,
+  describeKind,
+  disappearLabel,
+  disappeared,
+  DisappearingPicker,
+  ExtrasMenu,
+  LocationView,
+  PollView,
+  StarredPanel,
+  useLiveLocation,
+  ViewOnceView,
+} from './chat-extras';
 
 interface Me {
   id: string;
@@ -24,6 +39,8 @@ interface Me {
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮'];
+/** What a message still being sent carries besides text and media, so "retry" can send it again. */
+const sendingExtras = new Map<string, MessageExtras>();
 const TYPING_TTL = 6000;
 
 function sortMessages(list: Message[]) {
@@ -64,6 +81,10 @@ export function describeSystem(e: SystemEvent, actorId: string, me: string, name
       return e.title !== undefined ? `${actor} renamed the group to “${e.title}”` : `${actor} changed the group settings`;
     case 'call':
       return describeCall(e, actorId, me);
+    case 'disappearing_changed':
+      return e.seconds
+        ? `${actor} turned on disappearing messages. New messages will disappear after ${disappearLabel(e.seconds)}.`
+        : `${actor} turned off disappearing messages.`;
   }
 }
 
@@ -82,6 +103,33 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const [callView, setCallView] = useState<CallView | null>(null);
   const [showCalls, setShowCalls] = useState(false);
   const [callsKey, setCallsKey] = useState(0);
+  const [starred, setStarred] = useState<Set<string>>(new Set());
+  const [showStarred, setShowStarred] = useState(false);
+  const [starVersion, setStarVersion] = useState(0);
+  const [ai, setAi] = useState<{ translate: boolean; transcribe: boolean; languages: Record<string, string> } | null>(null);
+  /** Translations and voice-note text this person asked for, by message id. */
+  const [extraText, setExtraText] = useState<Record<string, { label: string; text: string }>>({});
+  useEffect(() => {
+    chatApi<{ translate: boolean; transcribe: boolean; languages: Record<string, string> }>('GET', 'ai/features')
+      .then(setAi)
+      .catch(() => setAi(null));
+  }, []);
+  const translate = useCallback(async (m: Message, to: string) => {
+    try {
+      const r = await chatApi<{ text: string }>('POST', `messages/${m.id}/translate`, { to });
+      setExtraText((x) => ({ ...x, [m.id]: { label: `Translated to ${ai?.languages[to] ?? to}`, text: r.text } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t translate');
+    }
+  }, [ai]);
+  const transcribe = useCallback(async (m: Message) => {
+    try {
+      const r = await chatApi<{ text: string }>('POST', `messages/${m.id}/transcribe`);
+      setExtraText((x) => ({ ...x, [m.id]: { label: 'Voice note as text', text: r.text } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t turn it into text');
+    }
+  }, []);
   const calls = useRef<CallManager | null>(null);
   const convsRef = useRef(convs);
   convsRef.current = convs;
@@ -145,6 +193,9 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
       const page = await chatApi<{ messages: Message[]; hasMore: boolean }>('GET', `conversations/${cid}/messages?limit=50`);
       synced.current[cid] = c.lastSeq;
       upsert(cid, page.messages);
+      void chatApi<{ messages: Message[] }>('GET', `messages/starred?conversationId=${cid}&limit=100`)
+        .then((r) => setStarred((prev) => new Set([...prev, ...r.messages.map((x) => x.id)])))
+        .catch(() => undefined);
       setHasMore((h) => ({ ...h, [cid]: page.hasMore }));
       setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]));
       // Anything that changed between the two calls.
@@ -175,6 +226,15 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
           void refreshConversation(cid);
           break;
         }
+        case 'message.starred':
+          setStarred((prev) => {
+            const next = new Set(prev);
+            if (d.starred) next.add(d.id);
+            else next.delete(d.id);
+            return next;
+          });
+          setStarVersion((v) => v + 1);
+          break;
         case 'message.hidden':
           upsert(d.conversationId, [], [d.id]);
           synced.current[d.conversationId] = Math.max(synced.current[d.conversationId] ?? 0, d.changeSeq);
@@ -253,6 +313,17 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
   const active = convs.find((c) => c.id === activeId);
   const peer = peerOf(active, me.id);
   const activeMsgs = useMemo(() => (activeId ? (msgs[activeId] ?? []) : []), [activeId, msgs]);
+  const allMsgs = useMemo(() => Object.values(msgs).flat(), [msgs]);
+  useLiveLocation(allMsgs, me.id, now);
+  const openDirect = useCallback(async (userId: string) => {
+    try {
+      const c = await chatApi<Conversation>('POST', 'conversations/direct', { userId });
+      setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]));
+      setActiveId(c.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t open the chat');
+    }
+  }, []);
 
   useEffect(() => {
     if (!activeId) return;
@@ -275,19 +346,20 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
     rt.current?.frame({ type: 'receipt', conversationId: activeId, kind: 'read', seq: lastFromOthers.seq });
   }, [activeId, lastFromOthers?.seq, myRead, conn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = useCallback(
-    async (cid: string, content: { kind: Message['kind']; body?: string; mediaId?: string; replyToId?: string; media?: Media | null }) => {
-      const clientId = newClientId();
+  /** Shows a message as sending and hands it to the connection, which re-sends it after each reconnect. */
+  const deliver = useCallback(
+    async (e: OutboxEntry) => {
       const local: Message = {
-        id: `local-${clientId}`,
-        conversationId: cid,
+        id: `local-${e.clientId}`,
+        conversationId: e.conversationId,
         seq: 0,
         changeSeq: 0,
         senderId: me.id,
-        clientId,
-        kind: content.kind,
-        body: content.body ?? '',
-        media: content.media ?? null,
+        clientId: e.clientId,
+        kind: e.kind,
+        body: e.body,
+        media: e.media ?? null,
+        viewOnce: e.extras?.viewOnce ?? false,
         replyTo: null,
         forwarded: false,
         mentions: [],
@@ -296,20 +368,51 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
         editedAt: null,
         deletedAt: null,
         pinnedAt: null,
-        createdAt: new Date().toISOString(),
+        createdAt: e.createdAt,
         pending: 'sending',
       };
-      upsert(cid, [local]);
+      if (e.extras) sendingExtras.set(e.clientId, e.extras);
+      upsert(e.conversationId, [local]);
       try {
-        const ack = await rt.current!.send(cid, { clientId, kind: content.kind, body: content.body ?? '', mediaId: content.mediaId, replyToId: content.replyToId });
-        upsert(cid, [ack.message]);
-      } catch (e) {
-        upsert(cid, [{ ...local, pending: 'failed' }]);
-        setError(e instanceof Error ? e.message : 'Not sent');
+        const ack = await rt.current!.send(e.conversationId, { clientId: e.clientId, kind: e.kind, body: e.body, mediaId: e.mediaId, replyToId: e.replyToId, ...(e.extras ?? {}) });
+        upsert(e.conversationId, [ack.message]);
+      } catch (err) {
+        upsert(e.conversationId, [{ ...local, pending: 'failed' }]);
+        setError(err instanceof Error ? err.message : 'Not sent');
       }
+      saveOutbox(me.id, loadOutbox(me.id).filter((x) => x.clientId !== e.clientId));
     },
     [me.id, upsert],
   );
+
+  const send = useCallback(
+    async (cid: string, content: { kind: Message['kind']; body?: string; mediaId?: string; replyToId?: string; media?: Media | null; extras?: MessageExtras }) => {
+      const e: OutboxEntry = {
+        conversationId: cid,
+        clientId: newClientId(),
+        kind: content.kind,
+        body: content.body ?? '',
+        mediaId: content.mediaId,
+        replyToId: content.replyToId,
+        media: content.media ?? null,
+        extras: content.extras,
+        createdAt: new Date().toISOString(),
+      };
+      // Saved first, so closing the tab before the server answers doesn't lose it.
+      saveOutbox(me.id, [...loadOutbox(me.id), e]);
+      await deliver(e);
+    },
+    [me.id, deliver],
+  );
+
+  // Messages left unsent when this browser last closed go out again with their original ids,
+  // once per connection client.
+  const resentFor = useRef<RealtimeClient | null>(null);
+  useEffect(() => {
+    if (!rt.current || resentFor.current === rt.current) return;
+    resentFor.current = rt.current;
+    for (const e of loadOutbox(me.id)) void deliver(e);
+  }, [deliver, me.id]);
 
   const act = useCallback(
     async (fn: () => Promise<Message | unknown>) => {
@@ -443,6 +546,10 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
                     {showInfo ? 'Close info' : 'Group info'}
                   </button>
                 )}
+                <DisappearingPicker c={active} act={act} onChanged={(c) => setConvs((prev) => sortConversations([...prev.filter((x) => x.id !== c.id), c]))} />
+                <button className="btn quiet small" data-testid="starred-toggle" aria-expanded={showStarred} onClick={() => setShowStarred((v) => !v)}>
+                  ★ Starred
+                </button>
                 <button
                   className="btn quiet small"
                   onClick={() =>
@@ -473,6 +580,19 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
                 onError={setError}
               />
             )}
+            {showStarred && (
+              <StarredPanel
+                conversationId={active.id}
+                names={Object.fromEntries(active.members.map((m) => [m.userId, m.displayName]))}
+                version={starVersion}
+                onClose={() => setShowStarred(false)}
+              />
+            )}
+            {active.disappearSeconds ? (
+              <p className="pinned small" data-testid="disappearing-on">
+                ⏱ Disappearing messages are on: new messages go after {disappearLabel(active.disappearSeconds)}.
+              </p>
+            ) : null}
             <PinnedBar messages={activeMsgs.filter((m) => m.pinnedAt && !m.deletedAt)} />
             <Thread
               me={me.id}
@@ -484,10 +604,17 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
               act={act}
               onRetry={(m) => {
                 upsert(active.id, [], [m.id]);
-                void send(active.id, { kind: m.kind, body: m.body ?? '', mediaId: m.media?.id, media: m.media });
+                void send(active.id, { kind: m.kind, body: m.body ?? '', mediaId: m.media?.id, media: m.media, extras: sendingExtras.get(m.clientId) });
               }}
               onReply={(m) => setReplyTo(m)}
               onHide={(m) => act(() => chatApi('POST', `messages/${m.id}/hide`).then(() => upsert(active.id, [], [m.id])))}
+              now={now}
+              starred={starred}
+              onMessagePerson={openDirect}
+              ai={ai}
+              extraText={extraText}
+              onTranslate={translate}
+              onTranscribe={transcribe}
             />
             {active.group?.sendPolicy === 'admins' && active.group.myRole === 'member' ? (
               <p className="composer muted small" data-testid="admins-only">
@@ -521,11 +648,11 @@ export function ChatApp({ me, initial, wsBase, initialActiveId }: { me: Me; init
 
 function preview(m: Message | null, c?: Conversation, me = '') {
   if (!m) return 'No messages yet';
-  if (m.deletedAt) return 'Message deleted';
+  if (m.deletedAt) return m.expiresAt ? '⏱ Message disappeared' : 'Message deleted';
   if (m.kind === 'system') return m.system && c ? describeSystem(m.system, m.senderId, me, Object.fromEntries(c.members.map((x) => [x.userId, x.displayName]))) : 'Group updated';
   if (m.kind === 'text') return c?.kind === 'group' && m.senderId !== me ? `${c.members.find((x) => x.userId === m.senderId)?.displayName ?? 'Someone'}: ${m.body ?? ''}` : (m.body ?? '');
-  const label = { image: '📷 Photo', video: '🎬 Video', audio: '🎵 Audio', voice: '🎤 Voice note', file: '📄 File' }[m.kind];
-  const text = label + (m.body ? ` ${m.body}` : '');
+  const label = describeKind(m);
+  const text = m.kind === 'poll' ? label : label + (m.body ? ` ${m.body}` : '');
   if (c?.kind === 'group' && m.senderId !== me) return `${c.members.find((x) => x.userId === m.senderId)?.displayName ?? 'Someone'}: ${text}`;
   return text;
 }
@@ -626,6 +753,13 @@ function Thread({
   onRetry,
   onReply,
   onHide,
+  now,
+  starred,
+  onMessagePerson,
+  ai,
+  extraText,
+  onTranslate,
+  onTranscribe,
 }: {
   me: string;
   messages: Message[];
@@ -637,6 +771,13 @@ function Thread({
   onRetry: (m: Message) => void;
   onReply: (m: Message) => void;
   onHide: (m: Message) => void;
+  now: number;
+  starred: Set<string>;
+  onMessagePerson: (userId: string) => void;
+  ai: { translate: boolean; transcribe: boolean; languages: Record<string, string> } | null;
+  extraText: Record<string, { label: string; text: string }>;
+  onTranslate: (m: Message, to: string) => void;
+  onTranscribe: (m: Message) => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
@@ -660,6 +801,8 @@ function Thread({
         </button>
       )}
       {messages.map((m, i) => {
+        // Disappearing messages just go, as in WhatsApp: no "deleted" placeholder.
+        if (disappeared(m, now)) return null;
         if (m.kind === 'system') {
           return (
             <div key={m.id} className="system-note small muted" data-testid="system-note">
@@ -684,11 +827,35 @@ function Thread({
                 <em className="muted">This message was deleted</em>
               ) : (
                 <>
-                  {m.media && <MediaView media={m.media} pending={!!m.pending} />}
-                  {m.body && <span className="body">{m.body}</span>}
+                  {m.viewOnce && m.media ? (
+                    m.pending ? <span className="muted small">① Sending view-once {m.media.kind === 'video' ? 'video' : 'photo'}…</span> : <ViewOnceView m={m} me={me} mine={mine} names={names} />
+                  ) : (
+                    m.media && <MediaView media={m.media} pending={!!m.pending} />
+                  )}
+                  {m.kind === 'poll' && m.poll ? (
+                    <PollView m={m} me={me} names={names} act={act} />
+                  ) : m.kind === 'location' && m.location ? (
+                    <LocationView m={m} mine={mine} now={now} act={act} />
+                  ) : m.kind === 'contact' && m.contact ? (
+                    <ContactView m={m} me={me} onMessage={onMessagePerson} />
+                  ) : m.kind === 'poll' || m.kind === 'location' || m.kind === 'contact' ? (
+                    <span className="muted small">{describeKind(m)}…</span>
+                  ) : (
+                    m.body && <span className="body">{m.body}</span>
+                  )}
                 </>
               )}
               <div className="meta small">
+                {starred.has(m.id) && (
+                  <span title="Starred" data-testid="star-mark">
+                    ★{' '}
+                  </span>
+                )}
+                {m.expiresAt && !m.deletedAt && (
+                  <span title={`Disappears ${new Date(m.expiresAt).toLocaleString()}`} aria-label="Disappearing message">
+                    ⏱{' '}
+                  </span>
+                )}
                 {m.editedAt && !m.deletedAt && <span>edited · </span>}
                 {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 {m.pending === 'sending' && <span data-testid="ticks"> · sending…</span>}
@@ -705,6 +872,16 @@ function Thread({
                   </span>
                 )}
               </div>
+              {extraText[m.id] && !m.deletedAt && (
+                <div className="quote small" data-testid="extra-text">
+                  <strong>{extraText[m.id].label}:</strong> {extraText[m.id].text}
+                </div>
+              )}
+              {ai?.transcribe && !m.pending && !m.deletedAt && m.kind === 'voice' && !extraText[m.id] && (
+                <button type="button" className="link-btn small" data-testid="transcribe" onClick={() => onTranscribe(m)}>
+                  Show as text
+                </button>
+              )}
               {m.reactions.length > 0 && (
                 <div className="reactions" data-testid="reactions">
                   {m.reactions.map((r) => (
@@ -720,6 +897,9 @@ function Thread({
                 m={m}
                 mine={mine}
                 myReaction={m.reactions.find((r) => r.userId === me)?.emoji}
+                starred={starred.has(m.id)}
+                languages={ai?.translate && m.body && m.kind !== 'contact' && m.kind !== 'location' ? ai.languages : null}
+                onTranslate={(to) => onTranslate(m, to)}
                 others={conversations.filter((c) => c.id !== conversation.id)}
                 me={me}
                 act={act}
@@ -739,6 +919,9 @@ function MessageActions({
   m,
   mine,
   myReaction,
+  starred,
+  languages,
+  onTranslate,
   others,
   me,
   act,
@@ -748,6 +931,9 @@ function MessageActions({
   m: Message;
   mine: boolean;
   myReaction?: string;
+  starred: boolean;
+  languages: Record<string, string> | null;
+  onTranslate: (to: string) => void;
   others: Conversation[];
   me: string;
   act: (fn: () => Promise<unknown>) => void;
@@ -777,7 +963,29 @@ function MessageActions({
           </button>
         )}
         <button onClick={() => act(() => chatApi('PUT', `messages/${m.id}/pin`, { pinned: !m.pinnedAt }))}>{m.pinnedAt ? 'Unpin' : 'Pin'}</button>
-        {others.length > 0 && (
+        {languages && (
+          <select
+            aria-label="Translate to"
+            data-testid="translate"
+            defaultValue=""
+            onChange={(e) => {
+              const to = e.target.value;
+              e.target.value = '';
+              if (to) onTranslate(to);
+            }}
+          >
+            <option value="">Translate to…</option>
+            {Object.entries(languages).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
+        <button data-testid="star" onClick={() => act(() => chatApi('PUT', `messages/${m.id}/star`, { starred: !starred }))}>
+          {starred ? 'Unstar' : 'Star'}
+        </button>
+        {others.length > 0 && !m.viewOnce && m.kind !== 'poll' && (
           <select
             aria-label="Forward to"
             defaultValue=""
@@ -845,9 +1053,10 @@ function Composer({
   replyTo: Message | null;
   onCancelReply: () => void;
   onTyping: (typing: boolean) => void;
-  onSend: (c: { kind: Message['kind']; body?: string; mediaId?: string; media?: Media }) => Promise<void>;
+  onSend: (c: { kind: Message['kind']; body?: string; mediaId?: string; media?: Media; extras?: MessageExtras }) => Promise<void>;
   onError: (e: string) => void;
 }) {
+  const onceRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState<{ rec: MediaRecorder; started: number } | null>(null);
@@ -861,12 +1070,12 @@ function Composer({
     idle.current = setTimeout(() => onTyping(false), 3000);
   };
 
-  const sendFile = async (file: Blob, meta: { kind: Media['kind']; fileName: string; durationMs?: number }) => {
+  const sendFile = async (file: Blob, meta: { kind: Media['kind']; fileName: string; durationMs?: number }, viewOnce = false) => {
     setBusy(true);
     try {
       const media = await uploadMedia(file, meta);
-      await onSend({ kind: meta.kind, mediaId: media.id, media, body: meta.kind === 'voice' ? '' : text.trim() });
-      if (meta.kind !== 'voice') setText('');
+      await onSend({ kind: meta.kind, mediaId: media.id, media, body: meta.kind === 'voice' || viewOnce ? '' : text.trim(), extras: viewOnce ? { viewOnce: true } : undefined });
+      if (meta.kind !== 'voice' && !viewOnce) setText('');
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Upload failed');
     } finally {
@@ -932,6 +1141,22 @@ function Composer({
             const f = e.target.files?.[0];
             e.target.value = '';
             if (f) void sendFile(f, { kind: kindForFile(f.type), fileName: f.name });
+          }}
+        />
+        <ExtrasMenu disabled={busy} onSend={(c) => onSend(c)} onViewOnce={() => onceRef.current?.click()} onError={onError} />
+        <input
+          ref={onceRef}
+          type="file"
+          hidden
+          accept="image/*,video/*"
+          data-testid="view-once-input"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (!f) return;
+            const kind = kindForFile(f.type);
+            if (kind !== 'image' && kind !== 'video') return onError('View once is for photos and videos.');
+            void sendFile(f, { kind, fileName: f.name }, true);
           }}
         />
         <input name="message" placeholder="Message" value={text} onChange={(e) => typed(e.target.value)} autoComplete="off" aria-label="Message" maxLength={4000} />
